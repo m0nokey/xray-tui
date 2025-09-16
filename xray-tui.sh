@@ -375,7 +375,7 @@ base_install_prepare_local() {
     }
     configure_docker_compose_updater() {
         [ ! -d /root/.tools ] && mkdir /root/.tools
-        cat <<-'EOL' | indent - 4 > /root/.tools/dokcer_compose_updater
+        cat <<-'EOL' | indent - 4 > /root/.tools/docker_compose_updater
         #!/bin/bash
         set -e
         tmp_folder=$(mktemp -d)
@@ -398,10 +398,10 @@ base_install_prepare_local() {
         fi
         rm -rf "$tmp_folder"
     EOL
-        chmod +x /root/.tools/dokcer_compose_updater
+        chmod +x /root/.tools/docker_compose_updater
         local tmp_cron=$(mktemp)
         crontab -l -u root 2>/dev/null > "$tmp_cron"
-        echo '30 3 * * * /bin/bash /root/.tools/dokcer_compose_updater' >> "$tmp_cron"
+        echo '30 3 * * * /bin/bash /root/.tools/docker_compose_updater' >> "$tmp_cron"
         crontab -u root "$tmp_cron"
         rm "$tmp_cron"
     }
