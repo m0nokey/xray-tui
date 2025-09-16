@@ -1,15 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
-workdir="$(mktemp -d -t xtls)"
+workdir="$(mktemp -d -t xray.XXXXXX 2>/dev/null || mktemp -d -t xray)"
+build_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || date +%s%N)"
+builder="xray.${build_id}"
 
 cleanup() {
-    docker rmi -f xray-admin >/dev/null 2>&1 || true
-    docker image prune -f >/dev/null 2>&1 || true
-    docker builder prune -f >/dev/null 2>&1 || true
+    docker ps -aq --filter "ancestor=xray-admin:${build_id}" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    docker images -q "xray-admin:${build_id}" | xargs -r docker rmi -f >/dev/null 2>&1 || true
+    docker buildx rm -f "$builder" >/dev/null 2>&1 || true
+    docker ps -aq -f "name=buildx_buildkit_" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 'moby/buildkit'); do
+        if [ -z "$(docker ps -aq --filter ancestor="$img" 2>/dev/null)" ]; then
+            docker image rm -f "$img" >/dev/null 2>&1 || true
+        fi
+    done
     rm -rf "$workdir"
+    clear; printf '\e[3J'
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 cat <<'EOF' > "${workdir}/Dockerfile"
 FROM debian:trixie-slim
@@ -145,22 +154,31 @@ jq_docker(){ jq "$@"; }
 
 # ───────────────────────── key & id utilities ─────────────────────────
 
-uuid()     { cat /proc/sys/kernel/random/uuid; }
-short_id() { openssl rand -hex 8; }
+uuid() { cat /proc/sys/kernel/random/uuid; }
+
+# shortId derived deterministically from UUID (first 16 hex of sha256(uuid-without-dashes))
+short_id_from_uuid() {
+    local u="$1"
+    u="${u//-/}"
+    printf '%s' "$u" | openssl dgst -sha256 -binary | od -An -tx1 | tr -d ' \n' | cut -c1-16
+}
 
 xray_keys() {
     local out
-    out="$(python3 - <<'EOL'
-import base64
-from nacl.public import PrivateKey
-def b64url(b: bytes) -> str:
-    return base64.urlsafe_b64encode(b).decode().rstrip("=")
-sk = PrivateKey.generate()
-pk = sk.public_key
-print(b64url(sk.encode()))
-print(b64url(pk.encode()))
+    out="$(
+        cat <<'EOL' | indent - 4 | python3 -
+    import base64
+    from nacl.public import PrivateKey
+
+    def b64url(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+    sk = PrivateKey.generate()
+    pk = sk.public_key
+    print(b64url(sk.encode()))
+    print(b64url(pk.encode()))
 EOL
-)"
+    )"
     priv_key="$(printf '%s\n' "$out" | sed -n '1p')"
     pub_key="$(printf '%s\n' "$out" | sed -n '2p')"
 }
@@ -168,16 +186,48 @@ EOL
 derive_pbk() {
     local priv="$1"
     [[ -z "$priv" ]] && { echo ""; return; }
-    python3 - "$priv" 2>/dev/null <<'EOL'
-import sys, base64
-from nacl.public import PrivateKey
-p = sys.argv[1].strip()
-pad = '=' * ((4 - len(p) % 4) % 4)
-raw = base64.urlsafe_b64decode(p + pad)
-sk = PrivateKey(raw)
-pk = sk.public_key.encode()
-print(base64.urlsafe_b64encode(pk).decode().rstrip('='))
+    cat <<'EOL' | indent - 4 | python3 - "$priv"
+    import sys, base64
+    from nacl.public import PrivateKey
+
+    p = sys.argv[1].strip()
+    pad = '=' * ((4 - len(p) % 4) % 4)
+    raw = base64.urlsafe_b64decode(p + pad)
+    sk  = PrivateKey(raw)
+    pk  = sk.public_key.encode()
+    print(base64.urlsafe_b64encode(pk).decode().rstrip('='))
 EOL
+}
+
+# Update shortIds to match clients deterministically (stdin json → stdout json)
+# For each client UUID, compute shortId = short_id_from_uuid(UUID).
+# Deduplicate, keep order as in clients, and never keep empty strings.
+sync_shortids_with_clients() {
+    local json; json="$(cat)"
+
+    # extract client UUIDs as bash array
+    mapfile -t _uuids < <(printf '%s' "$json" \
+        | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[].id')
+
+    # build SIDs from UUIDs
+    local _sids=() u
+    for u in "${_uuids[@]}"; do
+        _sids+=( "$(short_id_from_uuid "$u")" )
+    done
+
+    # make a unique JSON array preserving order
+    # (jq 'unique' loses order, so we do it in jq with an order-preserving fold)
+    local sids_json
+    sids_json="$(printf '%s\n' "${_sids[@]}" | jq -R . | jq -s '
+        reduce .[] as $x ([]; if index($x) then . else . + [$x] end)
+    ')"
+
+    printf '%s' "$json" | jq --argjson sids "$sids_json" '
+        .inbounds |= (
+            map(if .protocol=="vless"
+                then (.streamSettings.realitySettings.shortIds = $sids)
+                else . end)
+        )'
 }
 
 # ────────────────────────────── base vps ──────────────────────────────
@@ -464,32 +514,27 @@ send_config_and_restart() {
 
 # ─────────────────────────────── ui screens ───────────────────────────────
 
+# Build VLESS links; SID is derived per-client via short_id_from_uuid(UUID).
 build_links_array() {
     local json="$1"
-    local vless_sni vless_port sid priv_key pbk spx
 
+    local vless_sni vless_port priv_key pbk
     vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
     vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
-    sid="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.shortIds[0] // empty' | head -n1)"
     priv_key="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey // empty' | head -n1)"
-
-    if [[ -z "$vless_sni" || -z "$vless_port" || -z "$priv_key" ]]; then
-        echo "(none)"
-        return
-    fi
+    [[ -z "$vless_sni" || -z "$vless_port" || -z "$priv_key" ]] && { echo "(none)"; return; }
 
     pbk="$(derive_pbk "$priv_key")"
-    spx="${vless_spider_x_default:-/}"
+    [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
 
-    mapfile -t ids < <(printf '%s' "$json" | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
-    if ((${#ids[@]} == 0)); then
-        echo "(none)"
-        return
-    fi
+    mapfile -t ids < <(printf '%s' "$json" \
+        | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
+    ((${#ids[@]}==0)) && { echo "(none)"; return; }
 
-    local u
+    local u sid
     for u in "${ids[@]}"; do
-        echo "vless://${u}@${host}:${vless_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&spx=${spx}#vless-vision-reality"
+        sid="$(short_id_from_uuid "$u")"
+        echo "vless://${u}@${host}:${vless_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
     done
 }
 
@@ -644,6 +689,9 @@ keys_list_screen() {
     header "xray › access › list"
     ui_lock "loading..."
     local json; json="$(get_remote_json_or_empty)"
+    # keep shortIds in sync with current clients
+    json="$(printf '%s' "$json" | sync_shortids_with_clients)"
+    # show links
     local links=()
     mapfile -t links < <(build_links_array "$json" || true)
     ui_unlock
@@ -652,6 +700,7 @@ keys_list_screen() {
         echo "none"
         echo
     else
+        local l
         for l in "${links[@]}"; do
             printf '%s\n\n' "$l"
         done
@@ -673,12 +722,11 @@ keys_add_screen() {
     echo
     printf 'b.   back\nx.   exit\n?:   '
     read -r ans
-
     case "$ans" in
         b|B) return 0 ;;
         x|X) echo "Bye."; exit 0 ;;
     esac
-    if ! [[ "$ans" =~ ^[0-9]+$ ]] || (( ans<1 || ans>100 )); then
+    if ! [[ "$ans" =~ ^[0-9]+$ ]] || (( ans < 1 || ans > 100 )); then
         return 0
     fi
 
@@ -687,12 +735,12 @@ keys_add_screen() {
     ui_lock "preparing..."
     local json; json="$(get_remote_json_or_empty)"
     if [[ "$json" == '{}' ]]; then
+        # fresh server bootstrap
         ensure_docker_remote
         xray_keys
         local sni="$vless_sni_default"
-        local spx="$vless_spider_x_default"
         local port_in="$vless_port_default"
-        local sid_init; sid_init="$(short_id)"
+        local sid_boot="$(short_id_from_uuid "$(uuid)")"   # placeholder SID; will be replaced by sync
         json="$(cat <<'EOL'
         {
             "log": { "loglevel": "none" },
@@ -721,46 +769,45 @@ EOL
         json="${json/__PORT__/$port_in}"
         json="${json//__SNI__/$sni}"
         json="${json/__PRIV__/$priv_key}"
-        json="${json/__SID__/$sid_init}"
+        json="${json/__SID__/$sid_boot}"
         write_remote_dc_with_port "$port_in"
     fi
 
-    local vless_sni vless_port priv_key pbk spx
-    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
-    vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
-    priv_key="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey // empty' | head -n1)"
-    pbk="$(derive_pbk "$priv_key")"
-    [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
-    spx="${vless_spider_x_default:-/}"
-
+    # add N clients
     declare -a new_uuids=()
-    declare -a new_sids=()
     local i
     for i in $(seq 1 "$count"); do
-        new_uuids+=("$(uuid)")
-        new_sids+=("$(short_id)")
+        new_uuids+=( "$(uuid)" )
     done
-
+    local u
     for u in "${new_uuids[@]}"; do
-        json="$(printf '%s' "$json" | jq --arg uuid "$u" \
-            '(.inbounds[]|select(.protocol=="vless")|.settings.clients)+=[{"id":$uuid,"flow":"xtls-rprx-vision"}]')"
+        json="$(printf '%s' "$json" | jq --arg uuid "$u" '
+            (.inbounds[]|select(.protocol=="vless")|.settings.clients) += [{"id":$uuid,"flow":"xtls-rprx-vision"}]
+        ')"
     done
 
-    json="$(printf '%s' "$json" | jq --argjson sids "$(printf '%s\n' "${new_sids[@]}" | jq -R . | jq -s .)" \
-        '(.inbounds[]|select(.protocol=="vless")|.streamSettings.realitySettings.shortIds)+=$sids')"
+    # sync shortIds to match clients
+    json="$(printf '%s' "$json" | sync_shortids_with_clients)"
 
+    # persist & restart
     printf '%s' "$json" > config.json
     ui_unlock
-
     ui_lock "applying..."
     send_config_and_restart
     ui_unlock
 
+    # show generated links
     header "xray › access › add"
-    for i in "${!new_uuids[@]}"; do
-        local u="${new_uuids[$i]}"
-        local sid="${new_sids[$i]}"
-        echo "vless://${u}@${host}:${vless_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&spx=${spx}#vless-vision-reality"
+    local vless_sni vless_port priv_key pbk
+    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0]' | head -n1)"
+    vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port' | head -n1)"
+    priv_key="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey' | head -n1)"
+    pbk="$(derive_pbk "$priv_key")"
+    [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
+
+    for u in "${new_uuids[@]}"; do
+        sid="$(short_id_from_uuid "$u")"
+        echo "vless://${u}@${host}:${vless_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
         echo
     done
 
@@ -803,15 +850,26 @@ keys_remove_all() {
         y|Y)
             ui_lock "removing..."
             local json; json="$(get_remote_json_or_empty)"
-            if [[ "$json" != '{}' ]]; then
-                json="$(printf '%s' "$json" | jq '(.inbounds[]|select(.protocol=="vless")|.settings.clients)=[]')"
-                printf '%s' "$json" > config.json
-                send_config_and_restart
-            fi
+
+            json="$(
+                jq '
+                  .inbounds |= map(
+                    if .protocol=="vless"
+                    then (.settings.clients = []
+                          | .streamSettings.realitySettings.shortIds = [])
+                    else .
+                    end
+                  )
+                ' <<< "$json"
+            )"
+
+            printf '%s' "$json" > config.json
+            send_config_and_restart
             ui_unlock
             ;;
         *) return 0 ;;
     esac
+
     header "xray › access › remove › all"
     echo "none"
     echo
@@ -824,7 +882,8 @@ keys_remove_one() {
         header "xray › access › remove › one"
         ui_lock "loading..."
         local json; json="$(get_remote_json_or_empty)"
-        mapfile -t uuids < <(printf '%s' "$json" | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
+        mapfile -t uuids < <(printf '%s' "$json" \
+            | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
         ui_unlock
 
         if ((${#uuids[@]}==0)); then
@@ -866,7 +925,14 @@ keys_remove_one() {
             y|Y)
                 ui_lock "removing..."
                 local json2; json2="$(get_remote_json_or_empty)"
-                json2="$(printf '%s' "$json2" | jq --arg uuid "$target" '(.inbounds[]|select(.protocol=="vless")|.settings.clients) |= map(select(.id != $uuid))')"
+                # remove client
+                json2="$(printf '%s' "$json2" \
+                    | jq --arg uuid "$target" '
+                        (.inbounds[]|select(.protocol=="vless")|.settings.clients)
+                        |= map(select(.id != $uuid))
+                    ')"
+                # resync shortIds to remaining clients
+                json2="$(printf '%s' "$json2" | sync_shortids_with_clients)"
                 printf '%s' "$json2" > config.json
                 send_config_and_restart
                 ui_unlock
@@ -948,5 +1014,7 @@ RUN chmod +x /usr/local/bin/xray.sh
 ENTRYPOINT ["/usr/local/bin/xray.sh"]
 EOF
 
-docker build --pull --no-cache -t xray-admin "$workdir"
-docker run --rm -it xray-admin
+docker buildx rm -f "$builder" >/dev/null 2>&1 || true
+docker buildx create --name "$builder" --use --driver docker-container --driver-opt image=moby/buildkit:latest --bootstrap >/dev/null
+docker buildx build --builder "$builder" --load --pull --label "temp.build.id=${build_id}" -t "xray-admin:${build_id}" -t xray-admin "$workdir"
+docker run --rm -it "xray-admin:${build_id}"
