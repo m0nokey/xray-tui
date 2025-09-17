@@ -1014,7 +1014,6 @@ RUN chmod +x /usr/local/bin/xray.sh
 ENTRYPOINT ["/usr/local/bin/xray.sh"]
 EOF
 
-docker buildx rm -f "$builder" >/dev/null 2>&1 || true
 docker buildx create --name "$builder" --use --driver docker-container --driver-opt image=moby/buildkit:latest --bootstrap >/dev/null
 docker buildx build --builder "$builder" --load --pull --label "temp.build.id=${build_id}" -t "xray-admin:${build_id}" -t xray-admin "$workdir"
 docker run --rm -it "xray-admin:${build_id}"
