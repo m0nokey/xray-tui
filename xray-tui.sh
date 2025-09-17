@@ -29,9 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 RUN printf '%s\n' '#!/bin/sh' \
-    'if [ "$1" = "-p" ] || [ "$1" = "-P" ]; then exec /usr/bin/sshpass "$@"; fi' \
-    'pass="$1"; shift' \
-    'exec /usr/bin/sshpass -p "$pass" "$@"' > /usr/local/bin/sshpass \
+ 'case "$1" in -p|-P|-e|-f|-d) exec /usr/bin/sshpass "$@";; esac' \
+ 'pass="$1"; shift' \
+ 'SSHPASS="$pass" exec /usr/bin/sshpass -e "$@"' \
+ > /usr/local/bin/sshpass \
  && chmod +x /usr/local/bin/sshpass
 
 RUN cat <<'EOW' > /usr/local/bin/xray.sh
@@ -317,15 +318,14 @@ base_install_prepare_local() {
     }
     configure_locales() {
         echo -e "LANGUAGE=en_US.UTF-8\nLANG=en_US.UTF-8\nLC_ALL=en_US.UTF-8" > /etc/default/locale
-        locale-gen en_US.UTF-8 >/dev/null 2>&1
+        grep -q "^en_US\.UTF-8 UTF-8" /etc/locale.gen || { grep -q "^# *en_US\.UTF-8 UTF-8" /etc/locale.gen && sed -i 's/^# *\(en_US\.UTF-8 UTF-8\)/\1/' /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen; }
+        locale-gen >/dev/null 2>&1
+        update-locale LANG=en_US.UTF-8 LANGUAGE=en_US.UTF-8 LC_ALL=en_US.UTF-8 >/dev/null 2>&1
         source /root/.bashrc >/dev/null 2>&1
         source /etc/default/locale >/dev/null 2>&1  
     }
     setup_security_update() {
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update >/dev/null 2>&1
-        apt-get install --no-install-recommends -y unattended-upgrades >/dev/null 2>&1
-    
+        apt-get update >/dev/null 2>&1; apt-get install --no-install-recommends -y unattended-upgrades apt-listchanges >/dev/null 2>&1
         cat <<'EOL' | indent - 4 > /etc/apt/apt.conf.d/50unattended-upgrades
         Unattended-Upgrade::Origins-Pattern {
             "origin=Debian,codename=${distro_codename},label=Debian-Security";
@@ -415,7 +415,9 @@ base_install_prepare_local() {
         #/usr/local/bin/docker-compose -f $compose_file build --no-cache
         /usr/local/bin/docker-compose -f $compose_file down
         /usr/local/bin/docker-compose -f $compose_file up -d --force-recreate
-        /usr/bin/docker system prune -a -f
+        /usr/bin/docker image prune -f
+        /usr/bin/docker builder prune -f
+
     EOL
         chmod +x /root/.tools/docker_updater
         local tmp_cron=$(mktemp)
@@ -601,7 +603,7 @@ server_create_interactive() {
     ui_set "creating server..."
 
     xray_keys
-    local sid; sid="$(short_id)"
+    local sid; sid="$(short_id_from_uuid)"
     local json
     json="$(cat <<'EOL'
     {
