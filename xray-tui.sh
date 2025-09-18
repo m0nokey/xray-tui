@@ -940,55 +940,98 @@ render_server_remove_none() {
     echo "none"
     echo
 }
+
 render_server_remove_done() {
     header "xray › server › remove"
     echo "done"
     echo
 }
-server_remove() {
+
+render_server_remove_confirm() {
     header "xray › server › remove"
-    ui_lock "checking..."
-    local exists=1; if server_exists_cached; then exists=0; fi
+    ui_lock "loading..."
+    local json; json="$(get_remote_json_cached)"
     ui_unlock
 
-    if (( exists != 0 )); then
+    if [[ "$json" == '{}' ]]; then
+        echo "none"
+        echo
+        return 1
+    fi
+
+    local vless_sni vless_port
+    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
+    vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
+
+    printf '%-12s %s\n' "Protocol:"    "xtls-rprx-vision"
+    printf '%-12s %s\n' "Server Name:" "${vless_sni}:${vless_port}"
+    echo
+    echo "Do you want to remove this Xray server (y/n)?"
+    echo
+    return 0
+}
+
+server_remove() {
+    if ! server_exists_cached; then
         render_server_remove_none
         nav_print
         nav_wait_bx_redraw render_server_remove_none
         return
     fi
 
-    ui_lock "removing..."
-    ssh_run "(docker compose -f '${remote_dc}' down -v --remove-orphans || docker-compose -f '${remote_dc}' down -v) >/dev/null 2>&1" || true
-    ssh_run '
-        for unit in os-updater docker-compose-updater docker-updater; do
-            systemctl disable --now "${unit}.timer" >/dev/null 2>&1 || true
-            systemctl disable --now "${unit}.service" >/dev/null 2>&1 || true
-        done
-        systemctl daemon-reload >/dev/null 2>&1 || true
-    ' || true
+    while :; do
+        if ! render_server_remove_confirm; then
+            nav_print
+            nav_wait_bx_redraw render_server_remove_none
+            return
+        fi
+        nav_print
+        read -r ans
+        case "$(first_token_lower "$ans")" in
+            b) return 0 ;;
+            x) echo "Bye."; exit 0 ;;
+            y)
+                ui_lock "removing..."
+                ssh_run "(docker compose -f '${remote_dc}' down -v --remove-orphans || docker-compose -f '${remote_dc}' down -v) >/dev/null 2>&1" || true
+                ssh_run '
+                    for unit in os-updater docker-compose-updater docker-updater; do
+                        systemctl disable --now "${unit}.timer"   >/dev/null 2>&1 || true
+                        systemctl disable --now "${unit}.service" >/dev/null 2>&1 || true
+                    done
+                    systemctl daemon-reload >/dev/null 2>&1 || true
+                ' || true
 
-    ssh_run '
-        rm -f /etc/systemd/system/os-updater.service \
-              /etc/systemd/system/os-updater.timer \
-              /etc/systemd/system/docker-compose-updater.service \
-              /etc/systemd/system/docker-compose-updater.timer \
-              /etc/systemd/system/docker-updater.service \
-              /etc/systemd/system/docker-updater.timer
-        rm -f /usr/local/sbin/os-updater \
-              /usr/local/sbin/docker-compose-updater \
-              /usr/local/sbin/docker-updater \
-              /var/log/apt-auto-upgrade.log
-        systemctl daemon-reload >/dev/null 2>&1 || true
-    ' || true
+                ssh_run '
+                    rm -f /etc/systemd/system/os-updater.service \
+                          /etc/systemd/system/os-updater.timer \
+                          /etc/systemd/system/docker-compose-updater.service \
+                          /etc/systemd/system/docker-compose-updater.timer \
+                          /etc/systemd/system/docker-updater.service \
+                          /etc/systemd/system/docker-updater.timer
+                    rm -f /usr/local/sbin/os-updater \
+                          /usr/local/sbin/docker-compose-updater \
+                          /usr/local/sbin/docker-updater \
+                          /var/log/apt-auto-upgrade.log
+                    systemctl daemon-reload >/dev/null 2>&1 || true
+                ' || true
 
-    ssh_run "rm -f '${remote_cfg}' '${remote_dc}'" || true
-    ssh_run "rm -rf '${remote_dir}'" || true
-    ui_unlock
-    cache_set_json '{}'
-    render_server_remove_done
-    nav_print
-    nav_wait_bx_redraw render_server_remove_done
+                ssh_run "rm -f '${remote_cfg}' '${remote_dc}'" || true
+                ssh_run "rm -rf '${remote_dir}'" || true
+                ui_unlock
+                cache_set_json '{}'
+                render_server_remove_done
+                nav_print
+                nav_wait_bx_redraw render_server_remove_done
+                return
+                ;;
+            n)
+                return 0
+                ;;
+            *)
+                nav_invalid_inline
+                ;;
+        esac
+    done
 }
 
 # ── keys list ──
