@@ -37,7 +37,7 @@ RUN printf '%s\n' '#!/bin/sh' \
 
 RUN cat <<'EOW' > /usr/local/bin/xray.sh
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 
 # ─────────────────────────────── helpers ───────────────────────────────
 
@@ -53,7 +53,7 @@ indent() {
 }
 
 cls() { clear; printf '\e[3J'; }
-hr()  { printf '%s\n' "____________________"; }
+hr() { printf '%s\n' "____________________"; }
 header() { cls; echo "$1"; hr; }
 
 ui_lock() {
@@ -67,13 +67,18 @@ ui_lock() {
         stty -echo -icanon -isig 2>/dev/null || true
         printf '\e[?25l' 2>/dev/null || true
 
-        { while [[ "${_ui_lock_active:-}" = "1" ]]; do
-              read -r -t 0.05 -n 10000 _junk || true
+        { 
+          while [[ "${_ui_lock_active:-}" = "1" ]]; do
+              read -r -t "${UI_DRAIN_INTERVAL:-0.05}" -n 10000 _junk || true
           done
         } &
         _ui_drain_pid=$!
 
-        { i=0; frames='|/-\'; while [[ "${_ui_lock_active:-}" = "1" ]]; do
+        { 
+          # quiet spinner
+          set +x
+          i=0; frames='|/-\'
+          while [[ "${_ui_lock_active:-}" = "1" ]]; do
               printf "\r%s %s" "$_ui_msg" "${frames:i++%4:1}"
               sleep 0.1
           done
@@ -89,7 +94,6 @@ ui_lock() {
 }
 
 ui_set() {
-    # update message while locked
     local msg="${*:-working...}"
     [[ "${_ui_depth:-0}" -gt 0 ]] && _ui_msg="$msg"
 }
@@ -100,7 +104,6 @@ ui_unlock() {
 
     _ui_depth=$((_ui_depth - 1))
     if (( _ui_depth > 0 )); then
-        # restore previous message if any
         local n=${#_ui_msg_stack[@]}
         if (( n > 0 )); then
             _ui_msg="${_ui_msg_stack[$((n-1))]}"
@@ -122,6 +125,47 @@ ui_unlock() {
 }
 trap 'ui_unlock >/dev/null 2>&1 || true' EXIT
 
+drain() { read -r -t 0 -n 10000 _junk 2>/dev/null || true; }
+
+first_token_lower() {
+    local s="$1"
+    # trim leading spaces
+    s="${s#"${s%%[!$' \t\r\n']*}"}"
+    # take first token
+    s="${s%%[ $'\t\r\n']*}"
+    # to lower (bash 4+)
+    printf '%s' "${s,,}"
+}
+
+nav_print() {
+    drain
+    printf 'b.   back\n'
+    printf 'x.   exit\n'
+    printf '?:   '
+}
+
+nav_invalid_inline() {
+    printf '\033[1A\r\033[K?:   no valid entry!'
+    sleep 0.5
+    printf '\r\033[K?:   '
+}
+
+nav_wait_bx_redraw() {
+    local render_fn="$1"; shift
+    while :; do
+        IFS= read -r _nav_ans
+        local key; key="$(first_token_lower "$_nav_ans")"
+        case "$key" in
+            b) return 0 ;;
+            x) echo "Bye."; exit 0 ;;
+            *) nav_invalid_inline
+               "$render_fn" "$@"
+               nav_print
+               ;;
+        esac
+    done
+}
+
 actions_block() {
     printf "b.   back\n"
     printf "x.   exit\n"
@@ -133,31 +177,29 @@ actions_block() {
 remote_dir="/root/xray"
 remote_cfg="${remote_dir}/config.json"
 remote_dc="${remote_dir}/docker-compose.yaml"
-
 vless_sni_default="api.github.com"
 vless_spider_x_default="/"
 vless_port_default="443"
-
-ssh_opts='-o LogLevel=error -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-
+ssh_opts='-o LogLevel=error -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new'
 base_mark="/tmp/.base_install_done"
 
 # ───────────────────────────── ssh helpers ─────────────────────────────
 
-test_login() {
-    local host="$1" port="$2" password="$3"
+test_login() { 
+    local host="$1" 
+    local port="$2"
+    local password="$3" 
     sshpass "$password" ssh -p "$port" $ssh_opts "root@${host}" 'exit' 2>/dev/null
 }
-ssh_run()  { sshpass "$password" ssh -p "$port" $ssh_opts "root@${host}" "$1" </dev/null 2>/dev/null || return $?; }
+ssh_run() { sshpass "$password" ssh -p "$port" $ssh_opts "root@${host}" "$1" </dev/null 2>/dev/null || return $?; }
 ssh_pipe() { cat | sshpass "$password" ssh -p "$port" $ssh_opts "root@${host}" "$1" 2>/dev/null; }
-ssh_cat()  { ssh_run "cat '$1'"; }
-jq_docker(){ jq "$@"; }
+ssh_cat() { ssh_run "cat '$1'"; }
+jq_docker() { jq "$@"; }
 
 # ───────────────────────── key & id utilities ─────────────────────────
 
 uuid() { cat /proc/sys/kernel/random/uuid; }
 
-# shortId derived deterministically from UUID (first 16 hex of sha256(uuid-without-dashes))
 short_id_from_uuid() {
     local u="$1"
     u="${u//-/}"
@@ -201,28 +243,16 @@ EOL
 }
 
 # Update shortIds to match clients deterministically (stdin json → stdout json)
-# For each client UUID, compute shortId = short_id_from_uuid(UUID).
-# Deduplicate, keep order as in clients, and never keep empty strings.
 sync_shortids_with_clients() {
     local json; json="$(cat)"
-
-    # extract client UUIDs as bash array
     mapfile -t _uuids < <(printf '%s' "$json" \
         | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[].id')
-
-    # build SIDs from UUIDs
     local _sids=() u
-    for u in "${_uuids[@]}"; do
-        _sids+=( "$(short_id_from_uuid "$u")" )
-    done
-
-    # make a unique JSON array preserving order
-    # (jq 'unique' loses order, so we do it in jq with an order-preserving fold)
+    for u in "${_uuids[@]}"; do _sids+=( "$(short_id_from_uuid "$u")" ); done
     local sids_json
     sids_json="$(printf '%s\n' "${_sids[@]}" | jq -R . | jq -s '
         reduce .[] as $x ([]; if index($x) then . else . + [$x] end)
     ')"
-
     printf '%s' "$json" | jq --argjson sids "$sids_json" '
         .inbounds |= (
             map(if .protocol=="vless"
@@ -269,7 +299,7 @@ base_install_prepare_local() {
     configure_repo() {
         local codename="$(codename)"
         rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
-        cat <<EOL | indent - 4 > /etc/apt/sources.list.d/debian.sources
+        cat <<-EOL | indent - 4 > /etc/apt/sources.list.d/debian.sources
         Types: deb deb-src
         URIs: https://deb.debian.org/debian
         Suites: ${codename} ${codename}-updates
@@ -287,7 +317,7 @@ base_install_prepare_local() {
         export DEBIAN_FRONTEND=noninteractive
         rm -rf /var/lib/apt/lists/*
         apt-get update >/dev/null 2>&1 && apt-get -o Dpkg::Options::="--force-confold" upgrade -y --allow-downgrades --allow-remove-essential --allow-change-held-packages >/dev/null 2>&1
-        local packages=("lsb-release" "apt-transport-https" "ca-certificates" "gnupg2" "cron" "curl")
+        local packages=("lsb-release" "apt-transport-https" "ca-certificates" "gnupg2" "curl")
         for pkg in "${packages[@]}"; do apt-get install --no-install-recommends -y $pkg >/dev/null 2>&1; done
     }
     install_docker() {
@@ -302,7 +332,7 @@ base_install_prepare_local() {
     }
     install_docker_compose() {
         local ver=$(curl -sf --tlsv1.3 --proto '=https' https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-        curl -sfLC - --tlsv1.3 --proto '=https' -o /usr/local/bin/docker-compose "https://github.com/docker/compose/releases/download/${ver}/docker-compose-$(uname -s)-$(uname -m)"
+        curl -sfLS --tlsv1.3 --proto '=https' -o /usr/local/bin/docker-compose "https://github.com/docker/compose/releases/download/${ver}/docker-compose-$(uname -s)-$(uname -m)"
         chmod +x /usr/local/bin/docker-compose
     }
     install_xray() {
@@ -326,7 +356,7 @@ base_install_prepare_local() {
     }
     setup_security_update() {
         apt-get update >/dev/null 2>&1; apt-get install --no-install-recommends -y unattended-upgrades apt-listchanges >/dev/null 2>&1
-        cat <<'EOL' | indent - 4 > /etc/apt/apt.conf.d/50unattended-upgrades
+        cat <<-'EOL' | indent - 4 > /etc/apt/apt.conf.d/50unattended-upgrades
         Unattended-Upgrade::Origins-Pattern {
             "origin=Debian,codename=${distro_codename},label=Debian-Security";
             "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
@@ -337,7 +367,7 @@ base_install_prepare_local() {
             "--force-confold";
         };
     EOL
-        cat <<'EOL' | indent 0 > /etc/apt/apt.conf.d/20auto-upgrades
+        cat <<-'EOL' | indent 0 > /etc/apt/apt.conf.d/20auto-upgrades
         APT::Periodic::Update-Package-Lists "1";
         APT::Periodic::Download-Upgradeable-Packages "1";
         APT::Periodic::AutocleanInterval "7";
@@ -345,86 +375,281 @@ base_install_prepare_local() {
     EOL
     }
     configure_os_updater() {
-        [ ! -d /root/.tools ] && mkdir /root/.tools
-        cat <<-'EOL' | indent - 4 > /root/.tools/os_updater
+        cat <<-'EOL' | indent - 4 > /usr/local/sbin/os-updater
         #!/bin/bash
-        set -e
+        set -Eeuo pipefail
+    
         export DEBIAN_FRONTEND=noninteractive
         export APT_LISTCHANGES_FRONTEND=none
-        curl -sSfL --tlsv1.3 --http2 --proto '=https' "https://download.docker.com/linux/debian/gpg" | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
-        /usr/bin/apt-get clean
-        /usr/bin/rm -rf /var/lib/apt/lists/*
-        /usr/bin/apt update
-        if [ $? -eq 0 ]; then
-            /usr/bin/apt-get -o Dpkg::Options::="--force-confold" upgrade -y
-            kernel=$(apt list --upgradable 2>/dev/null | grep -E 'linux-(headers|image|modules)-[0-9]+')
-            /usr/bin/apt-get -o Dpkg::Options::="--force-confold" dist-upgrade -y
-            /usr/bin/apt-get autoremove --purge -y
-            /usr/bin/apt-get clean
-            if [ ! -z "$kernel" ]; then
-                /sbin/reboot
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        LOG=/var/log/apt-auto-upgrade.log
+        exec > >(tee -a "$LOG") 2>&1
+    
+        exec 9>/run/apt-maint.lock
+        if ! flock -n 9; then
+            echo "[INFO] another apt run in progress, exiting"
+            exit 0
+        fi
+    
+        trap 'echo "[ERROR] failed at line $LINENO (exit=$?)"' ERR
+    
+        retry() {
+            local attempts="$1" 
+            local pause="$2" 
+            shift 2
+            local n=1
+            until "$@"; do
+                if (( n >= attempts )); then
+                    echo "[ERROR] after ${attempts} attempts: $*"
+                    return 1
+                fi
+                echo "[WARN] attempt $n failed; retrying in ${pause}s: $*"
+                sleep "$pause"
+                ((n++))
+            done
+        }
+    
+        echo "[INFO] === $(date -Is) start ==="
+    
+        apt-get clean
+        rm -rf /var/lib/apt/lists/*
+    
+        install -m0755 -d /etc/apt/keyrings || true
+        curl -fsSL --tlsv1.3 --http2 --proto '=https' "https://download.docker.com/linux/debian/gpg" | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg || true
+    
+        retry 5 10 apt-get -qq -o Acquire::Retries=3 update
+        retry 3 20 apt-get -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -o DPkg::Lock::Timeout=600 -y dist-upgrade
+    
+        apt-get -y autoremove --purge || true
+        apt-get clean || true
+    
+        need_reboot=false
+        reason=""
+    
+        current_kernel="$(uname -r || true)"
+        latest_installed_kernel="$(ls -1 /lib/modules 2>/dev/null | sort -V | tail -1 || true)"
+        if [ -n "$latest_installed_kernel" ] && [ "$current_kernel" != "$latest_installed_kernel" ]; then
+            need_reboot=true
+            reason="kernel $current_kernel -> $latest_installed_kernel"
+        fi
+    
+        if [ -f /run/reboot-required ] || [ -f /var/run/reboot-required ]; then
+            need_reboot=true
+            if [ -z "$reason" ]; then
+                reason="reboot-required flag"
+            else
+                reason="$reason + reboot-required flag"
             fi
         fi
+    
+        if $need_reboot; then
+            echo "[INFO] rebooting: $reason"
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl reboot || /sbin/reboot
+            else
+                /sbin/reboot
+            fi
+        else
+            echo "[INFO] reboot not required"
+        fi
+    
+        echo "[INFO] === $(date -Is) end ==="
     EOL
-        chmod +x /root/.tools/os_updater
-        local tmp_cron=$(mktemp)
-        crontab -l -u root 2>/dev/null > "$tmp_cron"
-        echo '0 3 * * * /bin/bash /root/.tools/os_updater' >> "$tmp_cron"
-        crontab -u root "$tmp_cron"
-        rm "$tmp_cron"
+    
+        chmod 0755 /usr/local/sbin/os-updater
+        chown root:root /usr/local/sbin/os-updater
+    
+        cat <<-'EOL' | indent - 4 > /etc/systemd/system/os-updater.service
+        [Unit]
+        Description=Safe unattended apt dist-upgrade (kernel-aware)
+        Documentation=man:apt-get(8)
+        After=network-online.target
+        Wants=network-online.target
+    
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/bash /usr/local/sbin/os-updater
+        Nice=10
+        TimeoutStartSec=2h
+        Environment=DEBIAN_FRONTEND=noninteractive
+        Environment=APT_LISTCHANGES_FRONTEND=none
+    
+        [Install]
+        WantedBy=multi-user.target
+    EOL
+    
+        cat <<-'EOL' | indent - 4 > /etc/systemd/system/os-updater.timer
+        [Unit]
+        Description=Run os_updater nightly
+    
+        [Timer]
+        OnCalendar=*-*-* 01:00
+        RandomizedDelaySec=13m
+        Persistent=true
+        AccuracySec=1h
+    
+        [Install]
+        WantedBy=timers.target
+    EOL
+    
+        cat <<-'EOL' | indent - 4 > /etc/logrotate.d/os_updater
+        /var/log/apt-auto-upgrade.log {
+          daily
+          rotate 8
+          size 512k
+          compress
+          delaycompress
+          dateext
+          missingok
+          notifempty
+          create 0640 root adm
+          su root adm
+        }
+    EOL
+    
+        systemctl daemon-reload
+        systemctl enable --now os-updater.timer
     }
     configure_docker_compose_updater() {
-        [ ! -d /root/.tools ] && mkdir /root/.tools
-        cat <<-'EOL' | indent - 4 > /root/.tools/docker_compose_updater
+        cat <<-'EOL' | indent - 4 > /usr/local/sbin/docker-compose-updater
         #!/bin/bash
-        set -e
-        tmp_folder=$(mktemp -d)
+        set -Eeuo pipefail
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    
         compose_file="/root/xray/docker-compose.yaml"
-        latest_version=$(curl -sSfL --tlsv1.3 --http2 --proto '=https' "https://api.github.com/repos/docker/compose/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-        current_version=$(/usr/local/bin/docker-compose -v | grep -o 'v[0-9]*\.[0-9]*\.[0-9]*')
-        
-        if [[ "$current_version" != "$latest_version" ]]; then
-            /usr/local/bin/docker-compose -f $compose_file down
-            attempt=0
-            max_attempts=3
-            until curl --tlsv1.3 --http2 --proto '=https' -sfLC - -o "$tmp_folder/docker-compose" "https://github.com/docker/compose/releases/download/${latest_version}/docker-compose-$(uname -s)-$(uname -m)"; do
-                ((attempt++))
-                [[ $attempt -ge $max_attempts ]] && exit 1
-                sleep 2
-            done
-            chmod +x "${tmp_folder}/docker-compose"
-            mv "${tmp_folder}/docker-compose" /usr/local/bin/docker-compose
-            /usr/local/bin/docker-compose -f $compose_file up
-        fi
-        rm -rf "$tmp_folder"
+        attempt=0
+        max_attempts=3
+        tmp_folder="$(mktemp -d)"
+        binary_name="docker-compose-linux-$(uname -m)"
+        tmp_compose="$tmp_folder/$binary_name"
+        current_version=$(/usr/local/bin/docker-compose -v | grep -o 'v[0-9]*\.[0-9]*\.[0-9]*' || true)
+    
+        trap "rm -rf \"$tmp_folder\"" EXIT
+    
+        latest_version=""
+        until [[ "$latest_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ $((++attempt)) -ge $max_attempts ]]; do
+            latest_version=$(curl -sSfL --tlsv1.3 --http2 --proto '=https' "https://api.github.com/repos/docker/compose/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+            [[ "$latest_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || sleep 5
+        done
+    
+        [[ "$latest_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 0
+        [[ "$current_version" == "$latest_version" ]] && exit 0
+    
+        download_url="https://github.com/docker/compose/releases/download/${latest_version}"
+    
+        attempt=0
+        until curl --tlsv1.3 --http2 --proto '=https' -sfLC - -o "$tmp_compose" "${download_url}/${binary_name}"; do
+            [[ $((attempt++)) -ge $max_attempts ]] && exit 1
+            sleep 5
+        done
+    
+        attempt=0
+        until curl --tlsv1.3 --http2 --proto '=https' -sfLC - -o "$tmp_folder/checksum" "${download_url}/${binary_name}.sha256"; do
+            [[ $((attempt++)) -ge $max_attempts ]] && exit 1
+            sleep 5
+        done
+    
+        (cd "${tmp_folder}" && echo "$(cat checksum)" | sha256sum -c --status) || { echo "Checksum verification failed"; exit 1; }
+        chmod +x "$tmp_compose"
+    
+        /usr/local/bin/docker-compose -f "$compose_file" down || true
+        mv "$tmp_compose" "/usr/local/bin/docker-compose"
+        /usr/local/bin/docker-compose -f "$compose_file" up -d
     EOL
-        chmod +x /root/.tools/docker_compose_updater
-        local tmp_cron=$(mktemp)
-        crontab -l -u root 2>/dev/null > "$tmp_cron"
-        echo '30 3 * * * /bin/bash /root/.tools/docker_compose_updater' >> "$tmp_cron"
-        crontab -u root "$tmp_cron"
-        rm "$tmp_cron"
+    
+        chmod 0755 /usr/local/sbin/docker-compose-updater
+        chown root:root /usr/local/sbin/docker-compose-updater
+    
+        cat <<-'EOL' | indent - 4 > /etc/systemd/system/docker-compose-updater.service
+        [Unit]
+        Description=Update docker-compose binary and restart stack
+        After=network-online.target docker.service
+        Wants=network-online.target docker.service
+        ConditionPathExists=/root/xray/docker-compose.yaml
+    
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/bash /usr/local/sbin/docker-compose-updater
+        Nice=10
+        TimeoutStartSec=30m
+    
+        [Install]
+        WantedBy=multi-user.target
+    EOL
+    
+        cat <<-'EOL' | indent - 4 > /etc/systemd/system/docker-compose-updater.timer
+        [Unit]
+        Description=Run docker-compose updater nightly at 01:45
+    
+        [Timer]
+        OnCalendar=*-*-* 01:45
+        Persistent=true
+        AccuracySec=1min
+    
+        [Install]
+        WantedBy=timers.target
+    EOL
+    
+        systemctl daemon-reload
+        systemctl enable --now docker-compose-updater.timer
     }
     configure_docker_updater() {
-        [ ! -d /root/.tools ] && mkdir /root/.tools
-        cat <<-'EOL' | indent 0 > /root/.tools/docker_updater
+        cat <<-'EOL' | indent - 4 > /usr/local/sbin/docker-updater
         #!/bin/bash
-        set -e
+        set -Eeuo pipefail
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         compose_file="/root/xray/docker-compose.yaml"
-        /usr/bin/docker pull ghcr.io/xtls/xray-core:latest
-        #/usr/local/bin/docker-compose -f $compose_file build --no-cache
-        /usr/local/bin/docker-compose -f $compose_file down
-        /usr/local/bin/docker-compose -f $compose_file up -d --force-recreate
-        /usr/bin/docker image prune -f
-        /usr/bin/docker builder prune -f
 
+        exec 9>/run/docker-updater.lock
+        if ! flock -n 9; then
+            echo "[INFO] another docker_updater run is in progress, exiting"
+            exit 0
+        fi
+    
+        docker pull ghcr.io/xtls/xray-core:latest
+        #docker-compose -f "$compose_file" build --no-cache
+        docker-compose -f "$compose_file" down
+        docker-compose -f "$compose_file" up -d --force-recreate
+    
+        docker image prune -f || true
+        docker builder prune -f || true
     EOL
-        chmod +x /root/.tools/docker_updater
-        local tmp_cron=$(mktemp)
-        crontab -l -u root 2>/dev/null > "$tmp_cron"
-        echo '45 3 * * * /bin/bash /root/.tools/docker_updater' >> "$tmp_cron"
-        crontab -u root "$tmp_cron"
-        rm "$tmp_cron"
+    
+        chmod 0755 /usr/local/sbin/docker-updater
+        chown root:root /usr/local/sbin/docker-updater
+    
+        cat <<-'EOL' | indent - 4 > /etc/systemd/system/docker-updater.service
+        [Unit]
+        Description=Update xray-core image and restart docker stack
+        After=network-online.target docker.service
+        Wants=network-online.target docker.service
+        ConditionPathExists=/root/xray/docker-compose.yaml
+    
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/bash /usr/local/sbin/docker-updater
+        TimeoutStartSec=30m
+        Nice=10
+    
+        [Install]
+        WantedBy=multi-user.target
+    EOL
+    
+        cat <<-'EOL' | indent - 4 > /etc/systemd/system/docker-updater.timer
+        [Unit]
+        Description=Run docker_updater nightly at 01:30
+    
+        [Timer]
+        OnCalendar=*-*-* 02:00
+        Persistent=true
+        AccuracySec=1min
+    
+        [Install]
+        WantedBy=timers.target
+    EOL
+    
+        systemctl daemon-reload
+        systemctl enable --now docker-updater.timer
     }
     
     configure_repo
@@ -444,7 +669,7 @@ EOS
 }
 
 base_install_push_and_start() {
-    cat "${install_file}" | sshpass "$password" ssh -p "$port" -o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${host}" \
+    cat "${install_file}" | sshpass "$password" ssh -p "$port" -o LogLevel=error "root@${host}" \
         'cat > /tmp/install.sh; sleep 3; nohup bash /tmp/install.sh >/dev/null 2>&1 & echo $! > /tmp/install.pid; sleep 3; ps -p $(cat /tmp/install.pid) >/dev/null'
 }
 
@@ -462,17 +687,30 @@ wait_for_base_install() {
     return 1
 }
 
-ensure_docker_remote() {
-    if ssh_run 'command -v docker >/dev/null 2>&1'; then
-        if ssh_run 'docker compose version >/dev/null 2>&1 || docker-compose -v >/dev/null 2>&1'; then
-            return 0
+ensure_bootstrap_remote() {
+    local need_bootstrap=1
+    ssh_run '
+        ok=0
+        # 1) Docker + compose
+        if command -v docker >/dev/null 2>&1 && ( docker compose version >/dev/null 2>&1 || docker-compose -v >/dev/null 2>&1 ); then
+            if [ -d "/root/xray" ]; then
+                if systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx os-updater.timer \
+                   && systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx docker-updater.timer \
+                   && systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx docker-compose-updater.timer; then
+                    ok=1
+                fi
+            fi
         fi
+        exit $(( ok ? 0 : 1 ))
+    ' && need_bootstrap=0 || need_bootstrap=1
+
+    if (( need_bootstrap )); then
+        base_install_prepare_local
+        ui_lock "/ installing..."
+        base_install_push_and_start || true
+        wait_for_base_install || true
+        ui_unlock
     fi
-    base_install_prepare_local
-    ui_lock "/ installing..."
-    base_install_push_and_start || true
-    wait_for_base_install || true
-    ui_unlock
 }
 
 # ─────────────────────────── remote file writers ───────────────────────────
@@ -514,25 +752,55 @@ send_config_and_restart() {
     set -e
 }
 
+# ─────────────────────────────── cache (in-mem) ───────────────────────────────
+_json_cache=''
+_json_cache_valid=0
+
+cache_set_json() {
+    _json_cache="$1"
+    _json_cache_valid=1
+}
+
+cache_invalidate() {
+    _json_cache=''
+    _json_cache_valid=0
+}
+
+get_remote_json_cached() {
+    if (( _json_cache_valid )); then
+        printf '%s' "$_json_cache"
+    else
+        local j; j="$(get_remote_json_or_empty)"
+        _json_cache="$j"
+        _json_cache_valid=1
+        printf '%s' "$j"
+    fi
+}
+
+server_exists() { ssh_run "test -f '${remote_cfg}'"; }
+server_exists_cached() {
+    if (( _json_cache_valid )); then
+        [[ "$_json_cache" != '{}' ]]
+        return
+    fi
+    server_exists
+}
+
 # ─────────────────────────────── ui screens ───────────────────────────────
 
 # Build VLESS links; SID is derived per-client via short_id_from_uuid(UUID).
 build_links_array() {
     local json="$1"
-
     local vless_sni vless_port priv_key pbk
     vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
     vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
     priv_key="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey // empty' | head -n1)"
     [[ -z "$vless_sni" || -z "$vless_port" || -z "$priv_key" ]] && { echo "(none)"; return; }
-
     pbk="$(derive_pbk "$priv_key")"
     [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
-
     mapfile -t ids < <(printf '%s' "$json" \
         | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
     ((${#ids[@]}==0)) && { echo "(none)"; return; }
-
     local u sid
     for u in "${ids[@]}"; do
         sid="$(short_id_from_uuid "$u")"
@@ -540,43 +808,38 @@ build_links_array() {
     done
 }
 
-server_exists() { ssh_run "test -f '${remote_cfg}'"; }
-
-print_server_info_screen() {
+# ── server info ──
+render_server_info_screen() {
     header "xray › server › info"
     ui_lock "loading..."
-    local json; json="$(get_remote_json_or_empty)"
+    local json; json="$(get_remote_json_cached)"
     ui_unlock
-
     if [[ "$json" == '{}' ]]; then
         echo "none"
         echo
-        printf 'b.   back\nx.   exit\n?:   '
-        read -r ans
-        [[ "$ans" =~ ^[xX]$ ]] && { echo "Bye."; exit 0; }
         return 0
     fi
-
     local vless_sni vless_port
     vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
     vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
-
     printf '%-12s %s\n' "Protocol:"    "xtls-rprx-vision"
     printf '%-12s %s\n' "Server Name:" "${vless_sni}:${vless_port}"
     echo
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r ans
-    [[ "$ans" =~ ^[xX]$ ]] && { echo "Bye."; exit 0; }
-    return 0
+}
+print_server_info_screen() {
+    render_server_info_screen
+    nav_print
+    nav_wait_bx_redraw render_server_info_screen
 }
 
+# ── server create ──
 server_create_interactive() {
     header "xray › server › create"
 
-    local exists=1; if server_exists; then exists=0; fi
+    local exists=1; if server_exists_cached; then exists=0; fi
     if (( exists == 0 )); then
         ui_lock "loading..."
-        local json; json="$(get_remote_json_or_empty)"
+        local json; json="$(get_remote_json_cached)"
         ui_unlock
 
         local vless_sni vless_port
@@ -588,9 +851,8 @@ server_create_interactive() {
         echo
         echo "You already have an Xray Server created."
         echo
-        printf 'b.   back\nx.   exit\n?:   '
-        read -r ans
-        case "$ans" in x|X) echo "Bye."; exit 0 ;; *) return 0 ;; esac
+        nav_print
+        nav_wait_bx_redraw server_create_interactive
         return 0
     fi
 
@@ -599,11 +861,11 @@ server_create_interactive() {
     printf "Enter listen port (default %s): " "$vless_port_default"; read -r port_in; [[ -z "${port_in:-}" ]] && port_in="$vless_port_default"
 
     ui_lock "creating server..."
-    ensure_docker_remote
+    ensure_bootstrap_remote
     ui_set "creating server..."
 
     xray_keys
-    local sid; sid="$(short_id_from_uuid)"
+    local sid; sid="$(short_id_from_uuid "$(uuid)")"
     local json
     json="$(cat <<'EOL'
     {
@@ -637,19 +899,29 @@ EOL
 
     write_remote_dc_with_port "$port_in"
     printf '%s' "$json" > config.json
+    cache_set_json "$json"
 
     ui_set "applying..."
     send_config_and_restart
     ui_unlock
 
-    header "xray › server › create"
-    printf '%-12s %s\n' "Protocol:"    "xtls-rprx-vision"
-    printf '%-12s %s\n' "Server Name:" "${sni}:${port_in}"
-    echo
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r _
+    render_server_create_result() {
+        header "xray › server › create"
+        printf '%-12s %s\n' "Protocol:"    "xtls-rprx-vision"
+        printf '%-12s %s\n' "Server Name:" "${sni}:${port_in}"
+        echo
+    }
+    render_server_create_result
+    nav_print
+    nav_wait_bx_redraw render_server_create_result
 }
 
+# ── server restart ──
+render_server_restart_done() {
+    header "xray › server › restart"
+    echo "done"
+    echo
+}
 server_restart() {
     header "xray › server › restart"
     ui_lock "restarting..."
@@ -657,43 +929,74 @@ server_restart() {
     ssh_run "(docker compose -f '${remote_dc}' restart xray || docker-compose -f '${remote_dc}' restart) >/dev/null 2>&1" || true
     set -e
     ui_unlock
-    echo "done"
-    echo
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r _
+    render_server_restart_done
+    nav_print
+    nav_wait_bx_redraw render_server_restart_done
 }
 
+# ── server remove ──
+render_server_remove_none() {
+    header "xray › server › remove"
+    echo "none"
+    echo
+}
+render_server_remove_done() {
+    header "xray › server › remove"
+    echo "done"
+    echo
+}
 server_remove() {
     header "xray › server › remove"
     ui_lock "checking..."
-    local exists=1; if server_exists; then exists=0; fi
+    local exists=1; if server_exists_cached; then exists=0; fi
     ui_unlock
 
     if (( exists != 0 )); then
-        echo "none"
-        echo
-        printf 'b.   back\nx.   exit\n?:   '
-        read -r _
+        render_server_remove_none
+        nav_print
+        nav_wait_bx_redraw render_server_remove_none
         return
     fi
 
     ui_lock "removing..."
-    ssh_run "(docker compose -f '${remote_dc}' down || docker-compose -f '${remote_dc}' down) >/dev/null 2>&1" || true
-    ssh_run "rm -f '${remote_cfg}'" || true
+    ssh_run "(docker compose -f '${remote_dc}' down -v --remove-orphans || docker-compose -f '${remote_dc}' down -v) >/dev/null 2>&1" || true
+    ssh_run '
+        for unit in os-updater docker-compose-updater docker-updater; do
+            systemctl disable --now "${unit}.timer" >/dev/null 2>&1 || true
+            systemctl disable --now "${unit}.service" >/dev/null 2>&1 || true
+        done
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    ' || true
+
+    ssh_run '
+        rm -f /etc/systemd/system/os-updater.service \
+              /etc/systemd/system/os-updater.timer \
+              /etc/systemd/system/docker-compose-updater.service \
+              /etc/systemd/system/docker-compose-updater.timer \
+              /etc/systemd/system/docker-updater.service \
+              /etc/systemd/system/docker-updater.timer
+        rm -f /usr/local/sbin/os-updater \
+              /usr/local/sbin/docker-compose-updater \
+              /usr/local/sbin/docker-updater \
+              /var/log/apt-auto-upgrade.log
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    ' || true
+
+    ssh_run "rm -f '${remote_cfg}' '${remote_dc}'" || true
+    ssh_run "rm -rf '${remote_dir}'" || true
     ui_unlock
-    echo "done"
-    echo
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r _
+    cache_set_json '{}'
+    render_server_remove_done
+    nav_print
+    nav_wait_bx_redraw render_server_remove_done
 }
 
-keys_list_screen() {
+# ── keys list ──
+render_keys_list_screen() {
     header "xray › access › list"
     ui_lock "loading..."
-    local json; json="$(get_remote_json_or_empty)"
-    # keep shortIds in sync with current clients
+    local json; json="$(get_remote_json_cached)"
     json="$(printf '%s' "$json" | sync_shortids_with_clients)"
-    # show links
     local links=()
     mapfile -t links < <(build_links_array "$json" || true)
     ui_unlock
@@ -707,43 +1010,47 @@ keys_list_screen() {
             printf '%s\n\n' "$l"
         done
     fi
-
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r ans
-    case "$ans" in
-        b|B) return 0 ;;
-        x|X) echo "Bye."; exit 0 ;;
-        *)   return 0 ;;
-    esac
+}
+keys_list_screen() {
+    render_keys_list_screen
+    nav_print
+    nav_wait_bx_redraw render_keys_list_screen
 }
 
-keys_add_screen() {
+# ── keys add ──
+render_keys_add_prompt() {
     header "xray › access › add"
     echo "How many access links do you need?"
     echo "Enter a number (e.g., 1–100)."
     echo
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r ans
-    case "$ans" in
-        b|B) return 0 ;;
-        x|X) echo "Bye."; exit 0 ;;
-    esac
-    if ! [[ "$ans" =~ ^[0-9]+$ ]] || (( ans < 1 || ans > 100 )); then
-        return 0
-    fi
-
-    local count="$ans"
+}
+keys_add_screen() {
+    local count
+    while :; do
+        render_keys_add_prompt
+        nav_print
+        IFS= read -r ans
+        # allow whitespace around number
+        if [[ "$(first_token_lower "$ans")" == "b" ]]; then return 0; fi
+        if [[ "$(first_token_lower "$ans")" == "x" ]]; then echo "Bye."; exit 0; fi
+        if [[ "$ans" =~ ^[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
+            count="${BASH_REMATCH[1]}"
+            if (( count >= 1 && count <= 100 )); then
+                break
+            fi
+        fi
+        nav_invalid_inline
+    done
 
     ui_lock "preparing..."
-    local json; json="$(get_remote_json_or_empty)"
+    local json; json="$(get_remote_json_cached)"
     if [[ "$json" == '{}' ]]; then
-        # fresh server bootstrap
-        ensure_docker_remote
+        ensure_bootstrap_remote
         xray_keys
         local sni="$vless_sni_default"
         local port_in="$vless_port_default"
-        local sid_boot="$(short_id_from_uuid "$(uuid)")"   # placeholder SID; will be replaced by sync
-        json="$(cat <<'EOL'
+        local sid_boot="$(short_id_from_uuid "$(uuid)")"
+        json="$(cat <<'EOL' | indent - 4
         {
             "log": { "loglevel": "none" },
             "inbounds": [
@@ -775,12 +1082,9 @@ EOL
         write_remote_dc_with_port "$port_in"
     fi
 
-    # add N clients
     declare -a new_uuids=()
     local i
-    for i in $(seq 1 "$count"); do
-        new_uuids+=( "$(uuid)" )
-    done
+    for i in $(seq 1 "$count"); do new_uuids+=( "$(uuid)" ); done
     local u
     for u in "${new_uuids[@]}"; do
         json="$(printf '%s' "$json" | jq --arg uuid "$u" '
@@ -788,193 +1092,224 @@ EOL
         ')"
     done
 
-    # sync shortIds to match clients
     json="$(printf '%s' "$json" | sync_shortids_with_clients)"
 
-    # persist & restart
     printf '%s' "$json" > config.json
+    cache_set_json "$json"
     ui_unlock
     ui_lock "applying..."
     send_config_and_restart
     ui_unlock
 
-    # show generated links
-    header "xray › access › add"
-    local vless_sni vless_port priv_key pbk
-    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0]' | head -n1)"
-    vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port' | head -n1)"
-    priv_key="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey' | head -n1)"
-    pbk="$(derive_pbk "$priv_key")"
-    [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
-
-    for u in "${new_uuids[@]}"; do
-        sid="$(short_id_from_uuid "$u")"
-        echo "vless://${u}@${host}:${vless_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
-        echo
-    done
-
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r ans2
-    case "$ans2" in
-        b|B) return 0 ;;
-        x|X) echo "Bye."; exit 0 ;;
-        *)   return 0 ;;
-    esac
+    render_keys_add_result() {
+        header "xray › access › add"
+        local vless_sni vless_port priv_key_local pbk
+        vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0]' | head -n1)"
+        vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port' | head -n1)"
+        priv_key_local="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey' | head -n1)"
+        pbk="$(derive_pbk "$priv_key_local")"
+        [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
+        local uu
+        for uu in "${new_uuids[@]}"; do
+            sid="$(short_id_from_uuid "$uu")"
+            echo "vless://${uu}@${host}:${vless_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
+            echo
+        done
+    }
+    render_keys_add_result
+    nav_print
+    nav_wait_bx_redraw render_keys_add_result
 }
 
+# ── keys remove menu ──
+render_keys_remove_menu() {
+    header "xray › access › remove"
+    echo "1.   Remove all access links"
+    echo "2.   Remove a single access link"
+    echo
+}
 keys_remove_menu() {
     while :; do
-        header "xray › access › remove"
-        echo "1.   Remove all access links"
-        echo "2.   Remove a single access link"
-        echo
-        printf 'b.   back\nx.   exit\n?:   '
+        render_keys_remove_menu
+        nav_print
         read -r ans
-        case "$ans" in
+        case "$(first_token_lower "$ans")" in
             1) keys_remove_all ;;
             2) keys_remove_one ;;
-            b|B) return 0 ;;
-            x|X) echo "Bye."; exit 0 ;;
-            *) ;;
+            b) return 0 ;;
+            x) echo "Bye."; exit 0 ;;
+            *) nav_invalid_inline ;;
         esac
     done
 }
 
-keys_remove_all() {
+# ── keys remove all ──
+render_keys_remove_all_confirm() {
     header "xray › access › remove › all"
     echo "Do you want to remove all access links (y/n)?"
     echo
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r ans
-    case "$ans" in
-        b|B) return 0 ;;
-        x|X) echo "Bye."; exit 0 ;;
-        y|Y)
-            ui_lock "removing..."
-            local json; json="$(get_remote_json_or_empty)"
-
-            json="$(
-                jq '
-                  .inbounds |= map(
-                    if .protocol=="vless"
-                    then (.settings.clients = []
-                          | .streamSettings.realitySettings.shortIds = [])
-                    else .
-                    end
-                  )
-                ' <<< "$json"
-            )"
-
-            printf '%s' "$json" > config.json
-            send_config_and_restart
-            ui_unlock
-            ;;
-        *) return 0 ;;
-    esac
-
-    header "xray › access › remove › all"
-    echo "none"
-    echo
-    printf 'b.   back\nx.   exit\n?:   '
-    read -r _
 }
-
-keys_remove_one() {
+keys_remove_all() {
     while :; do
-        header "xray › access › remove › one"
-        ui_lock "loading..."
-        local json; json="$(get_remote_json_or_empty)"
-        mapfile -t uuids < <(printf '%s' "$json" \
-            | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
-        ui_unlock
-
-        if ((${#uuids[@]}==0)); then
-            echo "none"
-            echo
-            printf 'b.   back\nx.   exit\n?:   '
-            read -r ans
-            [[ "$ans" =~ ^[xX]$ ]] && { echo "Bye."; exit 0; }
-            return 0
-        fi
-
-        local i
-        for i in "${!uuids[@]}"; do
-            printf '%d.   %s\n' "$((i+1))" "${uuids[$i]}"
-        done
-        echo
-        printf 'b.   back\nx.   exit\n?:   '
-        read -r pick
-        case "$pick" in
-            b|B) return 0 ;;
-            x|X) echo "Bye."; exit 0 ;;
-        esac
-        if ! [[ "$pick" =~ ^[0-9]+$ ]]; then
-            continue
-        fi
-        local idx=$((pick-1))
-        (( idx<0 || idx>=${#uuids[@]} )) && continue
-        local target="${uuids[$idx]}"
-
-        header "xray › access › remove › one"
-        echo "$target"
-        echo "Do you want to remove this access link (y/n)?"
-        echo
-        printf 'b.   back\nx.   exit\n?:   '
-        read -r yn
-        case "$yn" in
-            b|B) continue ;;
-            x|X) echo "Bye."; exit 0 ;;
-            y|Y)
+        render_keys_remove_all_confirm
+        nav_print
+        read -r ans
+        case "$(first_token_lower "$ans")" in
+            b) return 0 ;;
+            x) echo "Bye."; exit 0 ;;
+            y)
                 ui_lock "removing..."
-                local json2; json2="$(get_remote_json_or_empty)"
-                # remove client
-                json2="$(printf '%s' "$json2" \
-                    | jq --arg uuid "$target" '
-                        (.inbounds[]|select(.protocol=="vless")|.settings.clients)
-                        |= map(select(.id != $uuid))
-                    ')"
-                # resync shortIds to remaining clients
-                json2="$(printf '%s' "$json2" | sync_shortids_with_clients)"
-                printf '%s' "$json2" > config.json
+                local json; json="$(get_remote_json_cached)"
+                json="$(
+                    jq '
+                      .inbounds |= map(
+                        if .protocol=="vless"
+                        then (.settings.clients = []
+                              | .streamSettings.realitySettings.shortIds = [])
+                        else .
+                        end
+                      )
+                    ' <<< "$json"
+                )"
+                printf '%s' "$json" > config.json
+                cache_set_json "$json"
                 send_config_and_restart
                 ui_unlock
+
+                header "xray › access › remove › all"
+                echo "none"
+                echo
+                nav_print
+                nav_wait_bx_redraw render_keys_remove_all_confirm
+                return 0
                 ;;
-            *) continue ;;
+            n) return 0 ;;
+            *) nav_invalid_inline ;;
         esac
+    done
+}
+
+# ── keys remove one ──
+render_keys_remove_one_pick() {
+    header "xray › access › remove › one"
+    ui_lock "loading..."
+    local json; json="$(get_remote_json_cached)"
+    mapfile -t uuids < <(printf '%s' "$json" \
+        | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
+    ui_unlock
+
+    if ((${#uuids[@]}==0)); then
+        echo "none"
+        echo
+        return 1
+    fi
+
+    local i
+    for i in "${!uuids[@]}"; do
+        printf '%d.   %s\n' "$((i+1))" "${uuids[$i]}"
+    done
+    echo
+    return 0
+}
+keys_remove_one() {
+    while :; do
+        if render_keys_remove_one_pick; then
+            nav_print
+            read -r pick_raw
+            local pick="$(first_token_lower "$pick_raw")"
+            case "$pick" in
+                b) return 0 ;;
+                x) echo "Bye."; exit 0 ;;
+                *)
+                    if [[ "$pick_raw" =~ ^[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
+                        local idx=$((BASH_REMATCH[1]-1))
+                        ui_lock "loading..."
+                        local json; json="$(get_remote_json_cached)"
+                        mapfile -t uuids < <(printf '%s' "$json" \
+                            | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
+                        ui_unlock
+                        (( idx<0 || idx>=${#uuids[@]} )) && { nav_invalid_inline; continue; }
+                        local target="${uuids[$idx]}"
+
+                        render_keys_remove_one_confirm() {
+                            header "xray › access › remove › one"
+                            echo "$target"
+                            echo "Do you want to remove this access link (y/n)?"
+                            echo
+                        }
+                        while :; do
+                            render_keys_remove_one_confirm
+                            nav_print
+                            read -r yn
+                            case "$(first_token_lower "$yn")" in
+                                b) break ;;
+                                x) echo "Bye."; exit 0 ;;
+                                y)
+                                    ui_lock "removing..."
+                                    local json2; json2="$(get_remote_json_cached)"
+                                    json2="$(printf '%s' "$json2" \
+                                        | jq --arg uuid "$target" '
+                                            (.inbounds[]|select(.protocol=="vless")|.settings.clients)
+                                            |= map(select(.id != $uuid))
+                                        ')"
+                                    json2="$(printf '%s' "$json2" | sync_shortids_with_clients)"
+                                    printf '%s' "$json2" > config.json
+                                    cache_set_json "$json2"
+                                    send_config_and_restart
+                                    ui_unlock
+                                    break
+                                    ;;
+                                n) break ;;
+                                *) nav_invalid_inline ;;
+                            esac
+                        done
+                    else
+                        nav_invalid_inline
+                        continue
+                    fi
+                    ;;
+            esac
+        else
+            nav_print
+            nav_wait_bx_redraw render_keys_remove_one_pick
+            return 0
+        fi
     done
 }
 
 # ─────────────────────────────── menus ───────────────────────────────
 
+render_home() {
+    header "xray › home"
+
+    echo "Server"
+    echo "1.   Show installed Xray (what’s installed and running)"
+    echo "2.   Install / Reinstall Xray (deploy from scratch)"
+    echo "3.   Restart Xray (soft restart of container)"
+    echo "4.   Remove Xray (container and config)"
+    echo
+    echo "Access"
+    echo "5.   Show access links (all active xray keys)"
+    echo "6.   Issue new access links (create N new keys)"
+    echo "7.   Remove access links (all or one keys)"
+    echo
+}
 menu_xray() {
     while :; do
-        header "xray › home"
-
-        echo "Server"
-        echo "1.   Show installed Xray (what’s installed and running)"
-        echo "2.   Install / Reinstall Xray (deploy from scratch)"
-        echo "3.   Restart Xray (soft restart of container)"
-        echo "4.   Remove Xray (container and config)"
-        echo
-        echo "Access"
-        echo "5.   Show access links (all active xray keys)"
-        echo "6.   Issue new access links (create N new links)"
-        echo "7.   Remove access links (all or one)"
-        echo
-        printf 'b.   back\nx.   exit\n?:   '
+        render_home
+        nav_print
         read -r ans
-
-        case "$ans" in
-            1) print_server_info_screen ;;   # xray › server › info
-            2) server_create_interactive ;;  # xray › server › create
-            3) server_restart ;;             # xray › server › restart
-            4) server_remove ;;              # xray › server › remove
-            5) keys_list_screen ;;           # xray › access › list
-            6) keys_add_screen ;;            # xray › access › add
-            7) keys_remove_menu ;;           # xray › access › remove
-            b|B) : ;;
-            x|X) echo "Bye."; exit 0 ;;
-            *)  : ;;
+        case "$(first_token_lower "$ans")" in
+            1) print_server_info_screen ;;
+            2) server_create_interactive ;;
+            3) server_restart ;;
+            4) server_remove ;;
+            5) keys_list_screen ;;
+            6) keys_add_screen ;;
+            7) keys_remove_menu ;;
+            b) : ;;
+            x) echo "Bye."; exit 0 ;;
+            *) nav_invalid_inline ;;
         esac
     done
 }
