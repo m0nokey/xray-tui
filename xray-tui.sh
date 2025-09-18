@@ -24,16 +24,17 @@ cat <<'EOF' > "${workdir}/Dockerfile"
 FROM debian:trixie-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
+ARG APP_UID=10000
+ARG APP_GID=10000
+RUN groupadd -g $APP_GID app \
+ && useradd -u $APP_UID -g $APP_GID -M -s /usr/sbin/nologin app 
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash ca-certificates jq openssh-client sshpass python3 python3-nacl \
  && rm -rf /var/lib/apt/lists/*
 
-RUN printf '%s\n' '#!/bin/sh' \
- 'case "$1" in -p|-P|-e|-f|-d) exec /usr/bin/sshpass "$@";; esac' \
- 'pass="$1"; shift' \
- 'SSHPASS="$pass" exec /usr/bin/sshpass -e "$@"' \
- > /usr/local/bin/sshpass \
- && chmod +x /usr/local/bin/sshpass
+RUN passwd -l root \
+ && usermod -s /usr/sbin/nologin root
 
 RUN cat <<'EOW' > /usr/local/bin/xray.sh
 #!/bin/bash
@@ -180,19 +181,36 @@ remote_dc="${remote_dir}/docker-compose.yaml"
 vless_sni_default="api.github.com"
 vless_spider_x_default="/"
 vless_port_default="443"
-ssh_opts='-o LogLevel=error -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new'
+ssh_opts='-o LogLevel=error -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o UserKnownHostsFile=/tmp/known_hosts -o StrictHostKeyChecking=accept-new'
 base_mark="/tmp/.base_install_done"
 
 # ───────────────────────────── ssh helpers ─────────────────────────────
 
-test_login() { 
-    local host="$1" 
-    local port="$2"
-    local password="$3" 
-    sshpass "$password" ssh -p "$port" $ssh_opts "root@${host}" 'exit' 2>/dev/null
+test_login() {
+  local host="$1" port="$2" password="$3"
+  ( set +x
+    printf '%s' "$password" | /usr/bin/sshpass -d 0 \
+      ssh -p "$port" $ssh_opts "root@${host}" exit
+  ) >/dev/null 2>&1
 }
-ssh_run() { sshpass "$password" ssh -p "$port" $ssh_opts "root@${host}" "$1" </dev/null 2>/dev/null || return $?; }
-ssh_pipe() { cat | sshpass "$password" ssh -p "$port" $ssh_opts "root@${host}" "$1" 2>/dev/null; }
+
+ssh_run() {
+  local cmd="$1"
+  ( set +x
+    printf '%s' "$password" | /usr/bin/sshpass -d 0 \
+      ssh -p "$port" $ssh_opts "root@${host}" "$cmd"
+  ) </dev/null 2>/dev/null || return $?
+}
+
+ssh_pipe() {
+  local cmd="$1"
+  ( set +x
+    exec 9<<<"$password"
+    cat | /usr/bin/sshpass -d 9 \
+      ssh -p "$port" $ssh_opts "root@${host}" "$cmd"
+    exec 9<&-
+  ) 2>/dev/null
+}
 ssh_cat() { ssh_run "cat '$1'"; }
 jq_docker() { jq "$@"; }
 
@@ -720,19 +738,29 @@ write_remote_dc_with_port() {
     ssh_run "mkdir -p '${remote_dir}'"
     cat <<'EOL' | indent - 4 | ssh_pipe "cat > '${remote_dc}'"
     services:
-        xray:
-            image: ghcr.io/xtls/xray-core:latest
-            container_name: xray
-            cap_add:
-                - NET_BIND_SERVICE
-            volumes:
-                - ./config.json:/etc/xray/config.json:ro
-            command: ["run", "-c", "/etc/xray/config.json"]
-            restart: unless-stopped
-            ports:
-                - "__PORT__:__PORT__/tcp"
-            logging:
-                driver: none
+      xray:
+        image: ghcr.io/xtls/xray-core:latest
+        container_name: xray
+        sysctls:
+          net.ipv4.ip_unprivileged_port_start: __PORT__
+        cap_drop: [ "ALL" ]
+        security_opt:
+          - no-new-privileges:true
+        read_only: true
+        tmpfs:
+          - /tmp:rw,nosuid,nodev,noexec,mode=1777
+        pids_limit: 512
+        mem_limit: 512m
+        ulimits:
+          nofile: 262144
+        volumes:
+          - ./config.json:/etc/xray/config.json:ro
+        command: ["run", "-c", "/etc/xray/config.json"]
+        restart: unless-stopped
+        ports:
+          - "__PORT__:__PORT__/tcp"
+        logging:
+          driver: none
 EOL
     ssh_run "sed -i 's/__PORT__/${p}/g' '${remote_dc}'"
 }
@@ -995,7 +1023,7 @@ server_remove() {
                 ssh_run "(docker compose -f '${remote_dc}' down -v --remove-orphans || docker-compose -f '${remote_dc}' down -v) >/dev/null 2>&1" || true
                 ssh_run '
                     for unit in os-updater docker-compose-updater docker-updater; do
-                        systemctl disable --now "${unit}.timer"   >/dev/null 2>&1 || true
+                        systemctl disable --now "${unit}.timer" >/dev/null 2>&1 || true
                         systemctl disable --now "${unit}.service" >/dev/null 2>&1 || true
                     done
                     systemctl daemon-reload >/dev/null 2>&1 || true
@@ -1387,13 +1415,15 @@ for i in {1..3}; do
     fi
     [[ $i -eq 3 ]] && { printf "The maximum number of attempts has been reached.\nPlease try again later\n" >&2; exit 1; }
 done
-
+mkdir -p /tmp && : > /tmp/known_hosts
 menu_xray
 EOW
 RUN chmod +x /usr/local/bin/xray.sh
+WORKDIR /app
+USER $APP_UID:$APP_GID
 ENTRYPOINT ["/usr/local/bin/xray.sh"]
 EOF
 
 docker buildx create --name "$builder" --use --driver docker-container --driver-opt image=moby/buildkit:latest --bootstrap >/dev/null
 docker buildx build --builder "$builder" --load --pull --label "temp.build.id=${build_id}" -t "xray-admin:${build_id}" -t xray-admin "$workdir"
-docker run --rm -it "xray-admin:${build_id}"
+docker run --rm -it --user 10000:10000 --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 --cap-drop=ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m --cpus 1 xray-admin:${build_id}
