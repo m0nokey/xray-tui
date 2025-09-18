@@ -43,8 +43,16 @@ set -Eeuo pipefail
 # ─────────────────────────────── helpers ───────────────────────────────
 
 indent() {
-    local mode="$1"
-    local num="$2"
+    local arg="${1:-}"
+    local mode
+    local num
+    if [[ "$arg" =~ ^([+-])([0-9]+)$ ]]; then
+        mode="${BASH_REMATCH[1]}"
+        num="${BASH_REMATCH[2]}"
+    else
+        mode="$arg"
+        num="${2:-0}"
+    fi
     case "$mode" in
         +) sed "s/^/$(printf '%*s' "$num")/";;
         -) sed -E "s/^ {0,$num}//";;
@@ -227,7 +235,7 @@ short_id_from_uuid() {
 xray_keys() {
     local out
     out="$(
-        cat <<'EOL' | indent - 4 | python3 -
+        cat <<'EOL' | indent -4 | python3 -
     import base64
     from nacl.public import PrivateKey
 
@@ -247,7 +255,7 @@ EOL
 derive_pbk() {
     local priv="$1"
     [[ -z "$priv" ]] && { echo ""; return; }
-    cat <<'EOL' | indent - 4 | python3 - "$priv"
+    cat <<'EOL' | indent -4 | python3 - "$priv"
     import sys, base64
     from nacl.public import PrivateKey
 
@@ -283,12 +291,20 @@ sync_shortids_with_clients() {
 
 base_install_prepare_local() {
     install_file="$(mktemp)"
-    cat <<-'EOS' | indent - 4 > $install_file
+    cat <<-'EOS' | indent -4 > $install_file
     #!/bin/bash 
 
     indent() {
-        local mode="$1"
-        local num="$2"
+        local arg="${1:-}"
+        local mode
+        local num
+        if [[ "$arg" =~ ^([+-])([0-9]+)$ ]]; then
+            mode="${BASH_REMATCH[1]}"
+            num="${BASH_REMATCH[2]}"
+        else
+            mode="$arg"
+            num="${2:-0}"
+        fi
         case "$mode" in
             +) sed "s/^/$(printf '%*s' "$num")/";;
             -) sed -E "s/^ {0,$num}//";;
@@ -317,7 +333,7 @@ base_install_prepare_local() {
     configure_repo() {
         local codename="$(codename)"
         rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
-        cat <<-EOL | indent - 4 > /etc/apt/sources.list.d/debian.sources
+        cat <<-EOL | indent -4 > /etc/apt/sources.list.d/debian.sources
         Types: deb deb-src
         URIs: https://deb.debian.org/debian
         Suites: ${codename} ${codename}-updates
@@ -374,7 +390,7 @@ base_install_prepare_local() {
     }
     setup_security_update() {
         apt-get update >/dev/null 2>&1; apt-get install --no-install-recommends -y unattended-upgrades apt-listchanges >/dev/null 2>&1
-        cat <<-'EOL' | indent - 4 > /etc/apt/apt.conf.d/50unattended-upgrades
+        cat <<-'EOL' | indent -4 > /etc/apt/apt.conf.d/50unattended-upgrades
         Unattended-Upgrade::Origins-Pattern {
             "origin=Debian,codename=${distro_codename},label=Debian-Security";
             "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
@@ -393,7 +409,7 @@ base_install_prepare_local() {
     EOL
     }
     configure_os_updater() {
-        cat <<-'EOL' | indent - 4 > /usr/local/sbin/os-updater
+        cat <<-'EOL' | indent -4 > /usr/local/sbin/os-updater
         #!/bin/bash
         set -Eeuo pipefail
     
@@ -477,7 +493,7 @@ base_install_prepare_local() {
         chmod 0755 /usr/local/sbin/os-updater
         chown root:root /usr/local/sbin/os-updater
     
-        cat <<-'EOL' | indent - 4 > /etc/systemd/system/os-updater.service
+        cat <<-'EOL' | indent -4 > /etc/systemd/system/os-updater.service
         [Unit]
         Description=Safe unattended apt dist-upgrade (kernel-aware)
         Documentation=man:apt-get(8)
@@ -496,7 +512,7 @@ base_install_prepare_local() {
         WantedBy=multi-user.target
     EOL
     
-        cat <<-'EOL' | indent - 4 > /etc/systemd/system/os-updater.timer
+        cat <<-'EOL' | indent -4 > /etc/systemd/system/os-updater.timer
         [Unit]
         Description=Run os_updater nightly
     
@@ -510,7 +526,7 @@ base_install_prepare_local() {
         WantedBy=timers.target
     EOL
     
-        cat <<-'EOL' | indent - 4 > /etc/logrotate.d/os_updater
+        cat <<-'EOL' | indent -4 > /etc/logrotate.d/os_updater
         /var/log/apt-auto-upgrade.log {
           daily
           rotate 8
@@ -529,7 +545,7 @@ base_install_prepare_local() {
         systemctl enable --now os-updater.timer
     }
     configure_docker_compose_updater() {
-        cat <<-'EOL' | indent - 4 > /usr/local/sbin/docker-compose-updater
+        cat <<-'EOL' | indent -4 > /usr/local/sbin/docker-compose-updater
         #!/bin/bash
         set -Eeuo pipefail
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -578,7 +594,7 @@ base_install_prepare_local() {
         chmod 0755 /usr/local/sbin/docker-compose-updater
         chown root:root /usr/local/sbin/docker-compose-updater
     
-        cat <<-'EOL' | indent - 4 > /etc/systemd/system/docker-compose-updater.service
+        cat <<-'EOL' | indent -4 > /etc/systemd/system/docker-compose-updater.service
         [Unit]
         Description=Update docker-compose binary and restart stack
         After=network-online.target docker.service
@@ -595,7 +611,7 @@ base_install_prepare_local() {
         WantedBy=multi-user.target
     EOL
     
-        cat <<-'EOL' | indent - 4 > /etc/systemd/system/docker-compose-updater.timer
+        cat <<-'EOL' | indent -4 > /etc/systemd/system/docker-compose-updater.timer
         [Unit]
         Description=Run docker-compose updater nightly at 01:45
     
@@ -612,7 +628,7 @@ base_install_prepare_local() {
         systemctl enable --now docker-compose-updater.timer
     }
     configure_docker_updater() {
-        cat <<-'EOL' | indent - 4 > /usr/local/sbin/docker-updater
+        cat <<-'EOL' | indent -4 > /usr/local/sbin/docker-updater
         #!/bin/bash
         set -Eeuo pipefail
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -636,7 +652,7 @@ base_install_prepare_local() {
         chmod 0755 /usr/local/sbin/docker-updater
         chown root:root /usr/local/sbin/docker-updater
     
-        cat <<-'EOL' | indent - 4 > /etc/systemd/system/docker-updater.service
+        cat <<-'EOL' | indent -4 > /etc/systemd/system/docker-updater.service
         [Unit]
         Description=Update xray-core image and restart docker stack
         After=network-online.target docker.service
@@ -653,7 +669,7 @@ base_install_prepare_local() {
         WantedBy=multi-user.target
     EOL
     
-        cat <<-'EOL' | indent - 4 > /etc/systemd/system/docker-updater.timer
+        cat <<-'EOL' | indent -4 > /etc/systemd/system/docker-updater.timer
         [Unit]
         Description=Run docker_updater nightly at 01:30
     
@@ -736,7 +752,7 @@ ensure_bootstrap_remote() {
 write_remote_dc_with_port() {
     local p="$1"
     ssh_run "mkdir -p '${remote_dir}'"
-    cat <<'EOL' | indent - 4 | ssh_pipe "cat > '${remote_dc}'"
+    cat <<'EOL' | indent -4 | ssh_pipe "cat > '${remote_dc}'"
     services:
       xray:
         image: ghcr.io/xtls/xray-core:latest
@@ -1121,7 +1137,7 @@ keys_add_screen() {
         local sni="$vless_sni_default"
         local port_in="$vless_port_default"
         local sid_boot="$(short_id_from_uuid "$(uuid)")"
-        json="$(cat <<'EOL' | indent - 4
+        json="$(cat <<'EOL' | indent -4
         {
             "log": { "loglevel": "none" },
             "inbounds": [
