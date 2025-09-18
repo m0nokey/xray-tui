@@ -1389,6 +1389,8 @@ menu_xray() {
 
 print_attempt() { header "[Check VPS]"; }
 
+mkdir -p /tmp && : > /tmp/known_hosts
+
 for i in {1..3}; do
     print_attempt "$i"
     while :; do
@@ -1415,7 +1417,7 @@ for i in {1..3}; do
     fi
     [[ $i -eq 3 ]] && { printf "The maximum number of attempts has been reached.\nPlease try again later\n" >&2; exit 1; }
 done
-mkdir -p /tmp && : > /tmp/known_hosts
+
 menu_xray
 EOW
 RUN chmod +x /usr/local/bin/xray.sh
