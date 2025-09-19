@@ -1444,4 +1444,4 @@ EOF
 
 docker buildx create --name "$builder" --use --driver docker-container --driver-opt image=moby/buildkit:latest --bootstrap >/dev/null
 docker buildx build --builder "$builder" --load --pull --label "temp.build.id=${build_id}" -t "xray-admin:${build_id}" -t xray-admin "$workdir"
-docker run --rm -it --user 10000:10000 --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 --cap-drop=ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m --cpus 1 xray-admin:${build_id}
+docker run --rm -it --user 10000:10000 --read-only --workdir /tmp --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 --cap-drop=ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m --cpus 1 xray-admin:${build_id}
