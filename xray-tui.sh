@@ -703,8 +703,8 @@ EOS
 }
 
 base_install_push_and_start() {
-    cat "${install_file}" | sshpass "$password" ssh -p "$port" -o LogLevel=error "root@${host}" \
-        'cat > /tmp/install.sh; sleep 3; nohup bash /tmp/install.sh >/dev/null 2>&1 & echo $! > /tmp/install.pid; sleep 3; ps -p $(cat /tmp/install.pid) >/dev/null'
+    cat "${install_file}" | ssh_pipe \
+      'cat > /tmp/install.sh; sleep 3; nohup bash /tmp/install.sh >/dev/null 2>&1 & echo $! > /tmp/install.pid; sleep 3; ps -p $(cat /tmp/install.pid) >/dev/null'
 }
 
 wait_for_base_install() {
