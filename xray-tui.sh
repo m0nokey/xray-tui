@@ -183,7 +183,7 @@ actions_block() {
 
 # ─────────────────────────────── config ───────────────────────────────
 
-remote_dir="/root/xray"
+remote_dir="/opt/xray"
 remote_cfg="${remote_dir}/config.json"
 remote_dc="${remote_dir}/docker-compose.yaml"
 vless_sni_default="api.github.com"
@@ -370,7 +370,7 @@ base_install_prepare_local() {
         chmod +x /usr/local/bin/docker-compose
     }
     install_xray() {
-        mkdir -p /root/xray/
+        mkdir -p /opt/xray/
         /usr/bin/docker pull ghcr.io/xtls/xray-core:latest
     }
     configure_timezone() {
@@ -550,7 +550,7 @@ base_install_prepare_local() {
         set -Eeuo pipefail
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     
-        compose_file="/root/xray/docker-compose.yaml"
+        compose_file="/opt/xray/docker-compose.yaml"
         attempt=0
         max_attempts=3
         tmp_folder="$(mktemp -d)"
@@ -599,7 +599,7 @@ base_install_prepare_local() {
         Description=Update docker-compose binary and restart stack
         After=network-online.target docker.service
         Wants=network-online.target docker.service
-        ConditionPathExists=/root/xray/docker-compose.yaml
+        ConditionPathExists=/opt/xray/docker-compose.yaml
     
         [Service]
         Type=oneshot
@@ -632,7 +632,7 @@ base_install_prepare_local() {
         #!/bin/bash
         set -Eeuo pipefail
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        compose_file="/root/xray/docker-compose.yaml"
+        compose_file="/opt/xray/docker-compose.yaml"
 
         exec 9>/run/docker-updater.lock
         if ! flock -n 9; then
@@ -657,7 +657,7 @@ base_install_prepare_local() {
         Description=Update xray-core image and restart docker stack
         After=network-online.target docker.service
         Wants=network-online.target docker.service
-        ConditionPathExists=/root/xray/docker-compose.yaml
+        ConditionPathExists=/opt/xray/docker-compose.yaml
     
         [Service]
         Type=oneshot
@@ -727,7 +727,7 @@ ensure_bootstrap_remote() {
         ok=0
         # 1) Docker + compose
         if command -v docker >/dev/null 2>&1 && ( docker compose version >/dev/null 2>&1 || docker-compose -v >/dev/null 2>&1 ); then
-            if [ -d "/root/xray" ]; then
+            if [ -d "/opt/xray" ]; then
                 if systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx os-updater.timer \
                    && systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx docker-updater.timer \
                    && systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx docker-compose-updater.timer; then
