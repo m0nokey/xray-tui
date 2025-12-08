@@ -30,7 +30,7 @@ RUN groupadd -g $APP_GID app \
  && useradd -u $APP_UID -g $APP_GID -M -s /usr/sbin/nologin app 
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates jq openssh-client sshpass python3 python3-nacl openssl \
+    bash ca-certificates jq openssh-client sshpass python3 python3-nacl \
  && rm -rf /var/lib/apt/lists/*
 
 RUN passwd -l root \
@@ -364,29 +364,12 @@ base_install_prepare_local() {
         apt-get update 2>/dev/null
         apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null
     }
-    install_docker_compose() {
-        local ver=$(curl -sf --tlsv1.3 --proto '=https' https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-        curl -sfLS --tlsv1.3 --proto '=https' -o /usr/local/bin/docker-compose "https://github.com/docker/compose/releases/download/${ver}/docker-compose-$(uname -s)-$(uname -m)"
-        chmod +x /usr/local/bin/docker-compose
-    }
     install_xray() {
         mkdir -p /opt/xray/
         /usr/bin/docker pull ghcr.io/xtls/xray-core:latest
     }
     configure_timezone() {
         timedatectl set-timezone UTC
-    }
-    configure_path() {
-        echo -e "export LC_CTYPE=en_US.UTF-8\nexport LC_ALL=en_US.UTF-8\nexport PATH=$PATH:/usr/sbin" >> /root/.bashrc
-        PATH=/usr/local/bin:/usr/bin:/bin
-    }
-    configure_locales() {
-        echo -e "LANGUAGE=en_US.UTF-8\nLANG=en_US.UTF-8\nLC_ALL=en_US.UTF-8" > /etc/default/locale
-        grep -q "^en_US\.UTF-8 UTF-8" /etc/locale.gen || { grep -q "^# *en_US\.UTF-8 UTF-8" /etc/locale.gen && sed -i 's/^# *\(en_US\.UTF-8 UTF-8\)/\1/' /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen; }
-        locale-gen >/dev/null 2>&1
-        update-locale LANG=en_US.UTF-8 LANGUAGE=en_US.UTF-8 LC_ALL=en_US.UTF-8 >/dev/null 2>&1
-        source /root/.bashrc >/dev/null 2>&1
-        source /etc/default/locale >/dev/null 2>&1  
     }
     setup_security_update() {
         apt-get update >/dev/null 2>&1; apt-get install --no-install-recommends -y unattended-upgrades apt-listchanges >/dev/null 2>&1
@@ -544,89 +527,6 @@ base_install_prepare_local() {
         systemctl daemon-reload
         systemctl enable --now os-updater.timer
     }
-    configure_docker_compose_updater() {
-        cat <<-'EOL' | indent -4 > /usr/local/sbin/docker-compose-updater
-        #!/bin/bash
-        set -Eeuo pipefail
-        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-    
-        compose_file="/opt/xray/docker-compose.yaml"
-        attempt=0
-        max_attempts=3
-        tmp_folder="$(mktemp -d)"
-        binary_name="docker-compose-linux-$(uname -m)"
-        tmp_compose="$tmp_folder/$binary_name"
-        current_version=$(/usr/local/bin/docker-compose -v | grep -o 'v[0-9]*\.[0-9]*\.[0-9]*' || true)
-    
-        trap "rm -rf \"$tmp_folder\"" EXIT
-    
-        latest_version=""
-        until [[ "$latest_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ $((++attempt)) -ge $max_attempts ]]; do
-            latest_version=$(curl -sSfL --tlsv1.3 --http2 --proto '=https' "https://api.github.com/repos/docker/compose/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-            [[ "$latest_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || sleep 5
-        done
-    
-        [[ "$latest_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 0
-        [[ "$current_version" == "$latest_version" ]] && exit 0
-    
-        download_url="https://github.com/docker/compose/releases/download/${latest_version}"
-    
-        attempt=0
-        until curl --tlsv1.3 --http2 --proto '=https' -sfLC - -o "$tmp_compose" "${download_url}/${binary_name}"; do
-            [[ $((attempt++)) -ge $max_attempts ]] && exit 1
-            sleep 5
-        done
-    
-        attempt=0
-        until curl --tlsv1.3 --http2 --proto '=https' -sfLC - -o "$tmp_folder/checksum" "${download_url}/${binary_name}.sha256"; do
-            [[ $((attempt++)) -ge $max_attempts ]] && exit 1
-            sleep 5
-        done
-    
-        (cd "${tmp_folder}" && echo "$(cat checksum)" | sha256sum -c --status) || { echo "Checksum verification failed"; exit 1; }
-        chmod +x "$tmp_compose"
-    
-        /usr/local/bin/docker-compose -f "$compose_file" down || true
-        mv "$tmp_compose" "/usr/local/bin/docker-compose"
-        /usr/local/bin/docker-compose -f "$compose_file" up -d
-    EOL
-    
-        chmod 0755 /usr/local/sbin/docker-compose-updater
-        chown root:root /usr/local/sbin/docker-compose-updater
-    
-        cat <<-'EOL' | indent -4 > /etc/systemd/system/docker-compose-updater.service
-        [Unit]
-        Description=Update docker-compose binary and restart stack
-        After=network-online.target docker.service
-        Wants=network-online.target docker.service
-        ConditionPathExists=/opt/xray/docker-compose.yaml
-    
-        [Service]
-        Type=oneshot
-        ExecStart=/bin/bash /usr/local/sbin/docker-compose-updater
-        Nice=10
-        TimeoutStartSec=30m
-    
-        [Install]
-        WantedBy=multi-user.target
-    EOL
-    
-        cat <<-'EOL' | indent -4 > /etc/systemd/system/docker-compose-updater.timer
-        [Unit]
-        Description=Run docker-compose updater nightly at 01:45
-    
-        [Timer]
-        OnCalendar=*-*-* 01:45
-        Persistent=true
-        AccuracySec=1min
-    
-        [Install]
-        WantedBy=timers.target
-    EOL
-    
-        systemctl daemon-reload
-        systemctl enable --now docker-compose-updater.timer
-    }
     configure_docker_updater() {
         cat <<-'EOL' | indent -4 > /usr/local/sbin/docker-updater
         #!/bin/bash
@@ -689,15 +589,11 @@ base_install_prepare_local() {
     configure_repo
     install_packages
     install_docker
-    install_docker_compose
     install_xray
     configure_timezone
-    configure_path
-    configure_locales
     setup_security_update
     configure_os_updater
     configure_docker_updater
-    configure_docker_compose_updater
     touch /tmp/.base_install_done
 EOS
 }
@@ -729,8 +625,7 @@ ensure_bootstrap_remote() {
         if command -v docker >/dev/null 2>&1 && ( docker compose version >/dev/null 2>&1 || docker-compose -v >/dev/null 2>&1 ); then
             if [ -d "/opt/xray" ]; then
                 if systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx os-updater.timer \
-                   && systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx docker-updater.timer \
-                   && systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx docker-compose-updater.timer; then
+                   && systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx docker-updater.timer; then
                     ok=1
                 fi
             fi
@@ -752,13 +647,13 @@ ensure_bootstrap_remote() {
 write_remote_dc_with_port() {
     local p="$1"
     ssh_run "mkdir -p '${remote_dir}'"
+
     cat <<'EOL' | indent -4 | ssh_pipe "cat > '${remote_dc}'"
     services:
       xray:
         image: ghcr.io/xtls/xray-core:latest
         container_name: xray
-        sysctls:
-          net.ipv4.ip_unprivileged_port_start: __PORT__
+__SYSCTLS__
         cap_drop: [ "ALL" ]
         security_opt:
           - no-new-privileges:true
@@ -775,10 +670,18 @@ write_remote_dc_with_port() {
         restart: unless-stopped
         ports:
           - "__PORT__:__PORT__/tcp"
+          - "__PORT__:__PORT__/udp"
         logging:
           driver: none
 EOL
+
     ssh_run "sed -i 's/__PORT__/${p}/g' '${remote_dc}'"
+
+    if (( p < 1024 )); then
+        ssh_run "sed -i 's#__SYSCTLS__#        sysctls:\n          net.ipv4.ip_unprivileged_port_start: ${p}#' '${remote_dc}'"
+    else
+        ssh_run "sed -i '/__SYSCTLS__/d' '${remote_dc}'"
+    fi
 }
 
 get_remote_json_or_empty() {
@@ -1038,7 +941,7 @@ server_remove() {
                 ui_lock "removing..."
                 ssh_run "(docker compose -f '${remote_dc}' down -v --remove-orphans || docker-compose -f '${remote_dc}' down -v) >/dev/null 2>&1" || true
                 ssh_run '
-                    for unit in os-updater docker-compose-updater docker-updater; do
+                    for unit in os-updater docker-updater; do
                         systemctl disable --now "${unit}.timer" >/dev/null 2>&1 || true
                         systemctl disable --now "${unit}.service" >/dev/null 2>&1 || true
                     done
@@ -1048,12 +951,9 @@ server_remove() {
                 ssh_run '
                     rm -f /etc/systemd/system/os-updater.service \
                           /etc/systemd/system/os-updater.timer \
-                          /etc/systemd/system/docker-compose-updater.service \
-                          /etc/systemd/system/docker-compose-updater.timer \
                           /etc/systemd/system/docker-updater.service \
                           /etc/systemd/system/docker-updater.timer
                     rm -f /usr/local/sbin/os-updater \
-                          /usr/local/sbin/docker-compose-updater \
                           /usr/local/sbin/docker-updater \
                           /var/log/apt-auto-upgrade.log
                     systemctl daemon-reload >/dev/null 2>&1 || true
