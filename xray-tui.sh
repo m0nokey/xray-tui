@@ -30,7 +30,7 @@ RUN groupadd -g $APP_GID app \
  && useradd -u $APP_UID -g $APP_GID -M -s /usr/sbin/nologin app 
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates jq openssh-client sshpass python3 python3-nacl \
+    bash ca-certificates jq openssh-client sshpass python3 python3-nacl openssl \
  && rm -rf /var/lib/apt/lists/*
 
 RUN passwd -l root \
