@@ -670,7 +670,6 @@ __SYSCTLS__
         restart: unless-stopped
         ports:
           - "__PORT__:__PORT__/tcp"
-          - "__PORT__:__PORT__/udp"
         logging:
           driver: none
 EOL
