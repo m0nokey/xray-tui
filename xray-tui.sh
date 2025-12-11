@@ -672,9 +672,9 @@ EOL
     ssh_run "sed -i 's/__PORT__/${p}/g' '${remote_dc}'"
 
     if (( p < 1024 )); then
-        ssh_run "sed -i 's#__SYSCTLS__#        sysctls:\n          net.ipv4.ip_unprivileged_port_start: ${p}#' '${remote_dc}'"
+        ssh_run "sed -i 's#__SYSCTLS__#    sysctls:\n      net.ipv4.ip_unprivileged_port_start: ${p}#' '${remote_dc}'"
     else
-        ssh_run "sed -i '/__SYSCTLS__/d' '${remote_dc}'"
+        ssh_run "sed -i 's#__SYSCTLS__##' '${remote_dc}'"
     fi
 }
 
