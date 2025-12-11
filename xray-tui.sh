@@ -541,9 +541,9 @@ base_install_prepare_local() {
         fi
     
         docker pull ghcr.io/xtls/xray-core:latest
-        #docker-compose -f "$compose_file" build --no-cache
-        docker-compose -f "$compose_file" down
-        docker-compose -f "$compose_file" up -d --force-recreate
+        #docker compose -f "$compose_file" build --no-cache
+        docker compose -f "$compose_file" down
+        docker compose -f "$compose_file" up -d --force-recreate
     
         docker image prune -f || true
         docker builder prune -f || true
