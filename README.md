@@ -136,8 +136,8 @@ Meaning:
 - **2. Install** – install or reinstall the Xray stack on the VPS
 - **3. Restart** – restart the Xray Docker container
 - **4. Remove** – stop and remove Xray plus its config (Docker and OS stay)
-- **5. List** – print all existing VLESS links (active keys)
-- **6. Add** – generate new VLESS links
+- **5. List** – print all existing VLESS active keys
+- **6. Add** – generate new VLESS keys
 - **7. Remove** – delete all keys or a single key
 
 ---
@@ -180,7 +180,7 @@ Server Name: api.github.com:443
 
 ---
 
-### 5. Generate access links
+### 5. Generate keys
 
 From the menu, choose:
 
@@ -191,7 +191,7 @@ From the menu, choose:
 The TUI asks:
 
 ```text
-How many access links do you need?
+How many keys do you need?
 Enter a number (e.g., 1–100).
 ```
 
