@@ -76,14 +76,14 @@ ui_lock() {
         stty -echo -icanon -isig 2>/dev/null || true
         printf '\e[?25l' 2>/dev/null || true
 
-        { 
+        {
           while [[ "${_ui_lock_active:-}" = "1" ]]; do
               read -r -t "${UI_DRAIN_INTERVAL:-0.05}" -n 10000 _junk || true
           done
         } &
         _ui_drain_pid=$!
 
-        { 
+        {
           # quiet spinner
           set +x
           i=0; frames='|/-\'
@@ -138,11 +138,8 @@ drain() { read -r -t 0 -n 10000 _junk 2>/dev/null || true; }
 
 first_token_lower() {
     local s="$1"
-    # trim leading spaces
     s="${s#"${s%%[!$' \t\r\n']*}"}"
-    # take first token
     s="${s%%[ $'\t\r\n']*}"
-    # to lower (bash 4+)
     printf '%s' "${s,,}"
 }
 
@@ -541,9 +538,8 @@ base_install_prepare_local() {
         fi
     
         docker pull ghcr.io/xtls/xray-core:latest
-        #docker compose -f "$compose_file" build --no-cache
-        docker compose -f "$compose_file" down
-        docker compose -f "$compose_file" up -d --force-recreate
+        docker compose -f "$compose_file" down || docker-compose -f "$compose_file" down
+        docker compose -f "$compose_file" up -d --force-recreate || docker-compose -f "$compose_file" up -d --force-recreate
     
         docker image prune -f || true
         docker builder prune -f || true
@@ -621,7 +617,6 @@ ensure_bootstrap_remote() {
     local need_bootstrap=1
     ssh_run '
         ok=0
-        # 1) Docker + compose
         if command -v docker >/dev/null 2>&1 && ( docker compose version >/dev/null 2>&1 || docker-compose -v >/dev/null 2>&1 ); then
             if [ -d "/opt/xray" ]; then
                 if systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx os-updater.timer \
@@ -737,20 +732,33 @@ server_exists_cached() {
 # Build VLESS links; SID is derived per-client via short_id_from_uuid(UUID).
 build_links_array() {
     local json="$1"
-    local vless_sni vless_port priv_key pbk
+    local vless_sni vless_port priv_key pbk raw_path path_enc
+
     vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
     vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
     priv_key="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey // empty' | head -n1)"
+    raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
+
     [[ -z "$vless_sni" || -z "$vless_port" || -z "$priv_key" ]] && { echo "(none)"; return; }
+
     pbk="$(derive_pbk "$priv_key")"
     [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
+
+    raw_path="${raw_path#/}"
+    if [[ -z "$raw_path" ]]; then
+        path_enc="%2F"
+    else
+        path_enc="%2F${raw_path}"
+    fi
+
     mapfile -t ids < <(printf '%s' "$json" \
         | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
     ((${#ids[@]}==0)) && { echo "(none)"; return; }
+
     local u sid
     for u in "${ids[@]}"; do
         sid="$(short_id_from_uuid "$u")"
-        echo "vless://${u}@${host}:${vless_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
+        echo "vless://${u}@${host}:${vless_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
     done
 }
 
@@ -768,7 +776,7 @@ render_server_info_screen() {
     local vless_sni vless_port
     vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
     vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
-    printf '%-12s %s\n' "Protocol:"    "xtls-rprx-vision"
+    printf '%-12s %s\n' "Protocol:"    "vless-xhttp-reality"
     printf '%-12s %s\n' "Server Name:" "${vless_sni}:${vless_port}"
     echo
 }
@@ -792,7 +800,7 @@ server_create_interactive() {
         vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
         vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
 
-        printf '%-12s %s\n' "Protocol:"    "xtls-rprx-vision"
+        printf '%-12s %s\n' "Protocol:"    "vless-xhttp-reality"
         printf '%-12s %s\n' "Server Name:" "${vless_sni}:${vless_port}"
         echo
         echo "You already have an Xray Server created."
@@ -803,7 +811,7 @@ server_create_interactive() {
     fi
 
     printf "Enter SNI (default %s): " "$vless_sni_default"; read -r sni; [[ -z "${sni:-}" ]] && sni="$vless_sni_default"
-    printf "Enter spider path (default %s): " "$vless_spider_x_default"; read -r spx; [[ -z "${spx:-}" ]] && spx="$vless_spider_x_default"
+    printf "Enter path (default %s): " "$vless_spider_x_default"; read -r spx; [[ -z "${spx:-}" ]] && spx="$vless_spider_x_default"
     printf "Enter listen port (default %s): " "$vless_port_default"; read -r port_in; [[ -z "${port_in:-}" ]] && port_in="$vless_port_default"
 
     ui_lock "creating server..."
@@ -822,16 +830,23 @@ server_create_interactive() {
                 "protocol": "vless",
                 "settings": { "clients": [], "decryption": "none" },
                 "streamSettings": {
-                    "network": "tcp",
+                    "network": "xhttp",
+                    "xhttpSettings": {
+                        "path": "__SPX__"
+                    },
                     "security": "reality",
                     "realitySettings": {
-                        "dest": "__SNI__:443",
+                        "target": "__SNI__:443",
                         "serverNames": ["__SNI__"],
                         "privateKey": "__PRIV__",
                         "shortIds": ["__SID__"]
                     }
                 },
-                "sniffing": { "enabled": true, "destOverride": ["http","tls","quic"], "routeOnly": true }
+                "sniffing": {
+                    "enabled": true,
+                    "destOverride": ["http","tls","quic"],
+                    "routeOnly": true
+                }
             }
         ],
         "outbounds": [ { "protocol": "freedom", "tag": "direct" } ]
@@ -842,6 +857,7 @@ EOL
     json="${json//__SNI__/$sni}"
     json="${json/__PRIV__/$priv_key}"
     json="${json/__SID__/$sid}"
+    json="${json//__SPX__/$spx}"
 
     write_remote_dc_with_port "$port_in"
     printf '%s' "$json" > config.json
@@ -853,7 +869,7 @@ EOL
 
     render_server_create_result() {
         header "xray › server › create"
-        printf '%-12s %s\n' "Protocol:"    "xtls-rprx-vision"
+        printf '%-12s %s\n' "Protocol:"    "vless-xhttp-reality"
         printf '%-12s %s\n' "Server Name:" "${sni}:${port_in}"
         echo
     }
@@ -909,7 +925,7 @@ render_server_remove_confirm() {
     vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
     vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
 
-    printf '%-12s %s\n' "Protocol:"    "xtls-rprx-vision"
+    printf '%-12s %s\n' "Protocol:"    "vless-xhttp-reality"
     printf '%-12s %s\n' "Server Name:" "${vless_sni}:${vless_port}"
     echo
     echo "Do you want to remove this Xray server (y/n)?"
@@ -979,7 +995,7 @@ server_remove() {
 
 # ── keys list ──
 render_keys_list_screen() {
-    header "xray › access › list"
+    header "xray › keys › list"
     ui_lock "loading..."
     local json; json="$(get_remote_json_cached)"
     json="$(printf '%s' "$json" | sync_shortids_with_clients)"
@@ -1005,8 +1021,8 @@ keys_list_screen() {
 
 # ── keys add ──
 render_keys_add_prompt() {
-    header "xray › access › add"
-    echo "How many access links do you need?"
+    header "xray › keys › add"
+    echo "How many access keys do you need?"
     echo "Enter a number (e.g., 1–100)."
     echo
 }
@@ -1016,7 +1032,6 @@ keys_add_screen() {
         render_keys_add_prompt
         nav_print
         IFS= read -r ans
-        # allow whitespace around number
         if [[ "$(first_token_lower "$ans")" == "b" ]]; then return 0; fi
         if [[ "$(first_token_lower "$ans")" == "x" ]]; then echo "Bye."; exit 0; fi
         if [[ "$ans" =~ ^[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
@@ -1035,6 +1050,7 @@ keys_add_screen() {
         xray_keys
         local sni="$vless_sni_default"
         local port_in="$vless_port_default"
+        local spx="$vless_spider_x_default"
         local sid_boot="$(short_id_from_uuid "$(uuid)")"
         json="$(cat <<'EOL' | indent -4
         {
@@ -1045,16 +1061,23 @@ keys_add_screen() {
                     "protocol": "vless",
                     "settings": { "clients": [], "decryption": "none" },
                     "streamSettings": {
-                        "network": "tcp",
+                        "network": "xhttp",
+                        "xhttpSettings": {
+                            "path": "__SPX__"
+                        },
                         "security": "reality",
                         "realitySettings": {
-                            "dest": "__SNI__:443",
+                            "target": "__SNI__:443",
                             "serverNames": ["__SNI__"],
                             "privateKey": "__PRIV__",
                             "shortIds": ["__SID__"]
                         }
                     },
-                    "sniffing": { "enabled": true, "destOverride": ["http","tls","quic"], "routeOnly": true }
+                    "sniffing": {
+                        "enabled": true,
+                        "destOverride": ["http","tls","quic"],
+                        "routeOnly": true
+                    }
                 }
             ],
             "outbounds": [ { "protocol": "freedom", "tag": "direct" } ]
@@ -1065,6 +1088,7 @@ EOL
         json="${json//__SNI__/$sni}"
         json="${json/__PRIV__/$priv_key}"
         json="${json/__SID__/$sid_boot}"
+        json="${json//__SPX__/$spx}"
         write_remote_dc_with_port "$port_in"
     fi
 
@@ -1074,7 +1098,7 @@ EOL
     local u
     for u in "${new_uuids[@]}"; do
         json="$(printf '%s' "$json" | jq --arg uuid "$u" '
-            (.inbounds[]|select(.protocol=="vless")|.settings.clients) += [{"id":$uuid,"flow":"xtls-rprx-vision"}]
+            (.inbounds[]|select(.protocol=="vless")|.settings.clients) += [{"id":$uuid}]
         ')"
     done
 
@@ -1088,17 +1112,27 @@ EOL
     ui_unlock
 
     render_keys_add_result() {
-        header "xray › access › add"
-        local vless_sni vless_port priv_key_local pbk
+        header "xray › keys › add"
+        local vless_sni vless_port priv_key_local pbk raw_path path_enc
         vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0]' | head -n1)"
         vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port' | head -n1)"
         priv_key_local="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey' | head -n1)"
+        raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
+
         pbk="$(derive_pbk "$priv_key_local")"
         [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
-        local uu
+
+        raw_path="${raw_path#/}"
+        if [[ -z "$raw_path" ]]; then
+            path_enc="%2F"
+        else
+            path_enc="%2F${raw_path}"
+        fi
+
+        local uu sid
         for uu in "${new_uuids[@]}"; do
             sid="$(short_id_from_uuid "$uu")"
-            echo "vless://${uu}@${host}:${vless_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
+            echo "vless://${uu}@${host}:${vless_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
             echo
         done
     }
@@ -1109,9 +1143,9 @@ EOL
 
 # ── keys remove menu ──
 render_keys_remove_menu() {
-    header "xray › access › remove"
-    echo "1.   Remove all access links"
-    echo "2.   Remove a single access link"
+    header "xray › keys › remove"
+    echo "1.   Remove all keys"
+    echo "2.   Remove a single key"
     echo
 }
 keys_remove_menu() {
@@ -1131,8 +1165,8 @@ keys_remove_menu() {
 
 # ── keys remove all ──
 render_keys_remove_all_confirm() {
-    header "xray › access › remove › all"
-    echo "Do you want to remove all access links (y/n)?"
+    header "xray › keys › remove › all"
+    echo "Do you want to remove all keys (y/n)?"
     echo
 }
 keys_remove_all() {
@@ -1162,7 +1196,7 @@ keys_remove_all() {
                 send_config_and_restart
                 ui_unlock
 
-                header "xray › access › remove › all"
+                header "xray › keys › remove › all"
                 echo "none"
                 echo
                 nav_print
@@ -1177,7 +1211,7 @@ keys_remove_all() {
 
 # ── keys remove one ──
 render_keys_remove_one_pick() {
-    header "xray › access › remove › one"
+    header "xray › keys › remove › one"
     ui_lock "loading..."
     local json; json="$(get_remote_json_cached)"
     mapfile -t uuids < <(printf '%s' "$json" \
@@ -1218,9 +1252,9 @@ keys_remove_one() {
                         local target="${uuids[$idx]}"
 
                         render_keys_remove_one_confirm() {
-                            header "xray › access › remove › one"
+                            header "xray › keys › remove › one"
                             echo "$target"
-                            echo "Do you want to remove this access link (y/n)?"
+                            echo "Do you want to remove this key (y/n)?"
                             echo
                         }
                         while :; do
@@ -1266,18 +1300,18 @@ keys_remove_one() {
 # ─────────────────────────────── menus ───────────────────────────────
 
 render_home() {
-    header "xray › home"
+    header "xray › menu"
 
     echo "Server"
-    echo "1.   Show installed Xray (what’s installed and running)"
-    echo "2.   Install / Reinstall Xray (deploy from scratch)"
-    echo "3.   Restart Xray (soft restart of container)"
-    echo "4.   Remove Xray (container and config)"
+    echo "1. Status"
+    echo "2. Install"
+    echo "3. Restart"
+    echo "4. Remove"
     echo
-    echo "Access"
-    echo "5.   Show access links (all active xray keys)"
-    echo "6.   Issue new access links (create N new keys)"
-    echo "7.   Remove access links (all or one keys)"
+    echo "Keys"
+    echo "5. List"
+    echo "6. Add"
+    echo "7. Remove"
     echo
 }
 menu_xray() {
@@ -1300,7 +1334,7 @@ menu_xray() {
     done
 }
 
-# ──────────────────────── bootstrap: auth & run ────────────────────────
+# ──────────────────────── bootstrap: auth & run ───────────────────────
 
 print_attempt() { header "[Check VPS]"; }
 
