@@ -143,6 +143,14 @@ first_token_lower() {
     printf '%s' "${s,,}"
 }
 
+uri_host() {
+    if [[ "$1" == *:* && "$1" != \[*\] ]]; then
+        printf '[%s]' "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
 nav_print() {
     drain
     printf 'b.   back\n'
@@ -664,7 +672,8 @@ __SYSCTLS__
         command: ["run", "-c", "/etc/xray/config.json"]
         restart: unless-stopped
         ports:
-          - "__PORT__:__PORT__/tcp"
+          - "0.0.0.0:__PORT__:__PORT__/tcp"
+          - "[::]:__PORT__:__PORT__/tcp"
         logging:
           driver: none
 EOL
@@ -758,7 +767,7 @@ build_links_array() {
     local u sid
     for u in "${ids[@]}"; do
         sid="$(short_id_from_uuid "$u")"
-        echo "vless://${u}@${host}:${vless_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
+        echo "vless://${u}@$(uri_host "$host"):${vless_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
     done
 }
 
@@ -1132,7 +1141,7 @@ EOL
         local uu sid
         for uu in "${new_uuids[@]}"; do
             sid="$(short_id_from_uuid "$uu")"
-            echo "vless://${uu}@${host}:${vless_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
+            echo "vless://${uu}@$(uri_host "$host"):${vless_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
             echo
         done
     }
