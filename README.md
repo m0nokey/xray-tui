@@ -74,7 +74,7 @@ You do not need to log in regularly just to update Xray.
 On macOS or Linux:
 
 ```bash
-bash -c "$(curl -sSfL --http2 --proto '=https' 'https://raw.githubusercontent.com/m0nokey/xray-tui/refs/heads/main/xray-tui.sh')"
+bash -c "$(curl -sSfL --http2 --proto '=https' 'https://raw.githubusercontent.com/m0nokey/xray-tui/refs/heads/codex_test/xray-tui.sh')"
 ```
 
 This:
