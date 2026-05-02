@@ -3,18 +3,11 @@ set -euo pipefail
 
 workdir="$(mktemp -d -t xray.XXXXXX 2>/dev/null || mktemp -d -t xray)"
 build_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || date +%s%N)"
-builder="xray.${build_id}"
+image_name="xray-admin:${build_id}"
 
 cleanup() {
-    docker ps -aq --filter "ancestor=xray-admin:${build_id}" | xargs -r docker rm -f >/dev/null 2>&1 || true
-    docker images -q "xray-admin:${build_id}" | xargs -r docker rmi -f >/dev/null 2>&1 || true
-    docker buildx rm -f "$builder" >/dev/null 2>&1 || true
-    docker ps -aq -f "name=buildx_buildkit_" | xargs -r docker rm -f >/dev/null 2>&1 || true
-    for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 'moby/buildkit'); do
-        if [ -z "$(docker ps -aq --filter ancestor="$img" 2>/dev/null)" ]; then
-            docker image rm -f "$img" >/dev/null 2>&1 || true
-        fi
-    done
+    docker ps -aq --filter "ancestor=${image_name}" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    docker images -q "${image_name}" | xargs -r docker rmi -f >/dev/null 2>&1 || true
     rm -rf "$workdir"
     clear; printf '\e[3J'
 }
@@ -185,7 +178,8 @@ remote_cfg="${remote_dir}/config.json"
 remote_dc="${remote_dir}/docker-compose.yaml"
 vless_sni_default="api.github.com"
 vless_spider_x_default="/"
-vless_port_default="443"
+vless_port_min="30000"
+vless_port_max="60000"
 ssh_opts='-o LogLevel=error -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o UserKnownHostsFile=/tmp/known_hosts -o StrictHostKeyChecking=accept-new'
 base_mark="/tmp/.base_install_done"
 
@@ -263,6 +257,95 @@ derive_pbk() {
     pk  = sk.public_key.encode()
     print(base64.urlsafe_b64encode(pk).decode().rstrip('='))
 EOL
+}
+
+random_vless_port() {
+    echo $(( vless_port_min + RANDOM % (vless_port_max - vless_port_min + 1) ))
+}
+
+generate_vless_ports() {
+    vision_port="$(random_vless_port)"
+    while :; do
+        xhttp_port="$(random_vless_port)"
+        [[ "$xhttp_port" != "$vision_port" ]] && break
+    done
+}
+
+encode_vless_path() {
+    local raw_path="${1:-/}"
+    raw_path="${raw_path#/}"
+    if [[ -z "$raw_path" ]]; then
+        printf '%%2F'
+    else
+        printf '%%2F%s' "$raw_path"
+    fi
+}
+
+unique_vless_client_ids() {
+    local json="$1"
+    printf '%s' "$json" | jq -r '
+        [.inbounds[]?|select(.protocol=="vless")|.settings.clients[]?.id]
+        | unique[]
+    '
+}
+
+build_combined_config() {
+    local sni="$1"
+    local spx="$2"
+    local vision_port="$3"
+    local xhttp_port="$4"
+    local priv="$5"
+    local sid="$6"
+
+    jq -n         --arg sni "$sni"         --arg spx "$spx"         --arg priv "$priv"         --arg sid "$sid"         --argjson vision_port "$vision_port"         --argjson xhttp_port "$xhttp_port" '
+        {
+          log: { loglevel: "none" },
+          inbounds: [
+            {
+              port: $vision_port,
+              protocol: "vless",
+              settings: { clients: [], decryption: "none" },
+              streamSettings: {
+                network: "tcp",
+                security: "reality",
+                realitySettings: {
+                  dest: ($sni + ":443"),
+                  serverNames: [$sni],
+                  privateKey: $priv,
+                  shortIds: [$sid]
+                }
+              },
+              sniffing: {
+                enabled: true,
+                destOverride: ["http", "tls", "quic"],
+                routeOnly: true
+              }
+            },
+            {
+              port: $xhttp_port,
+              protocol: "vless",
+              settings: { clients: [], decryption: "none" },
+              streamSettings: {
+                network: "xhttp",
+                xhttpSettings: { path: $spx },
+                security: "reality",
+                realitySettings: {
+                  target: ($sni + ":443"),
+                  serverNames: [$sni],
+                  privateKey: $priv,
+                  shortIds: [$sid]
+                }
+              },
+              sniffing: {
+                enabled: true,
+                destOverride: ["http", "tls", "quic"],
+                routeOnly: true
+              }
+            }
+          ],
+          outbounds: [{ protocol: "freedom", tag: "direct" }]
+        }
+    '
 }
 
 # Update shortIds to match clients deterministically (stdin json → stdout json)
@@ -639,16 +722,31 @@ ensure_bootstrap_remote() {
 
 # ─────────────────────────── remote file writers ───────────────────────────
 
-write_remote_dc_with_port() {
-    local p="$1"
+write_remote_dc_with_ports() {
+    local min_port=65535
+    local port_lines=""
+    local p
+
+    for p in "$@"; do
+        printf -v port_lines '%s          - "%s:%s/tcp"
+' "$port_lines" "$p" "$p"
+        (( p < min_port )) && min_port="$p"
+    done
+
+    local sysctl_block=""
+    if (( min_port < 1024 )); then
+        sysctl_block=$(printf '        sysctls:
+          net.ipv4.ip_unprivileged_port_start: %s' "$min_port")
+    fi
+
     ssh_run "mkdir -p '${remote_dir}'"
 
-    cat <<'EOL' | indent -4 | ssh_pipe "cat > '${remote_dc}'"
+    cat <<EOL | indent -4 | ssh_pipe "cat > '${remote_dc}'"
     services:
       xray:
         image: ghcr.io/xtls/xray-core:latest
         container_name: xray
-__SYSCTLS__
+${sysctl_block}
         cap_drop: [ "ALL" ]
         security_opt:
           - no-new-privileges:true
@@ -664,18 +762,10 @@ __SYSCTLS__
         command: ["run", "-c", "/etc/xray/config.json"]
         restart: unless-stopped
         ports:
-          - "__PORT__:__PORT__/tcp"
+$(printf '%b' "$port_lines")
         logging:
           driver: none
 EOL
-
-    ssh_run "sed -i 's/__PORT__/${p}/g' '${remote_dc}'"
-
-    if (( p < 1024 )); then
-        ssh_run "sed -i 's#__SYSCTLS__#    sysctls:\n      net.ipv4.ip_unprivileged_port_start: ${p}#' '${remote_dc}'"
-    else
-        ssh_run "sed -i 's#__SYSCTLS__##' '${remote_dc}'"
-    fi
 }
 
 get_remote_json_or_empty() {
@@ -732,34 +822,62 @@ server_exists_cached() {
 # Build VLESS links; SID is derived per-client via short_id_from_uuid(UUID).
 build_links_array() {
     local json="$1"
-    local vless_sni vless_port priv_key pbk raw_path path_enc
+    local vless_sni vision_port xhttp_port priv_key pbk raw_path path_enc
 
     vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
-    vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
+    vision_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="tcp")|.port // empty' | head -n1)"
+    xhttp_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.port // empty' | head -n1)"
     priv_key="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey // empty' | head -n1)"
-    raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
+    raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
 
-    [[ -z "$vless_sni" || -z "$vless_port" || -z "$priv_key" ]] && { echo "(none)"; return; }
+    [[ -z "$vless_sni" || -z "$priv_key" ]] && { echo "(none)"; return; }
+    [[ -z "$vision_port" && -z "$xhttp_port" ]] && { echo "(none)"; return; }
 
     pbk="$(derive_pbk "$priv_key")"
     [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
+    path_enc="$(encode_vless_path "$raw_path")"
 
-    raw_path="${raw_path#/}"
-    if [[ -z "$raw_path" ]]; then
-        path_enc="%2F"
-    else
-        path_enc="%2F${raw_path}"
-    fi
-
-    mapfile -t ids < <(printf '%s' "$json" \
-        | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
+    mapfile -t ids < <(unique_vless_client_ids "$json")
     ((${#ids[@]}==0)) && { echo "(none)"; return; }
 
     local u sid
     for u in "${ids[@]}"; do
         sid="$(short_id_from_uuid "$u")"
-        echo "vless://${u}@${host}:${vless_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
+        if [[ -n "$vision_port" ]]; then
+            echo "vless://${u}@${host}:${vision_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
+        fi
+        if [[ -n "$xhttp_port" ]]; then
+            echo "vless://${u}@${host}:${xhttp_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
+        fi
     done
+}
+
+print_server_protocols() {
+    local json="$1"
+    local vless_sni vision_port xhttp_port raw_path
+
+    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
+    vision_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="tcp")|.port // empty' | head -n1)"
+    xhttp_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.port // empty' | head -n1)"
+    raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
+
+    if [[ -n "$vision_port" ]]; then
+        printf '%-12s %s
+' "Protocol:" "xtls-rprx-vision"
+        printf '%-12s %s
+' "Server Name:" "${vless_sni}:${vision_port}"
+        echo
+    fi
+
+    if [[ -n "$xhttp_port" ]]; then
+        printf '%-12s %s
+' "Protocol:" "vless-xhttp-reality"
+        printf '%-12s %s
+' "Server Name:" "${vless_sni}:${xhttp_port}"
+        printf '%-12s %s
+' "Path:" "${raw_path:-/}"
+        echo
+    fi
 }
 
 # ── server info ──
@@ -773,12 +891,7 @@ render_server_info_screen() {
         echo
         return 0
     fi
-    local vless_sni vless_port
-    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
-    vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
-    printf '%-12s %s\n' "Protocol:"    "vless-xhttp-reality"
-    printf '%-12s %s\n' "Server Name:" "${vless_sni}:${vless_port}"
-    echo
+    print_server_protocols "$json"
 }
 print_server_info_screen() {
     render_server_info_screen
@@ -796,13 +909,7 @@ server_create_interactive() {
         local json; json="$(get_remote_json_cached)"
         ui_unlock
 
-        local vless_sni vless_port
-        vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
-        vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
-
-        printf '%-12s %s\n' "Protocol:"    "vless-xhttp-reality"
-        printf '%-12s %s\n' "Server Name:" "${vless_sni}:${vless_port}"
-        echo
+        print_server_protocols "$json"
         echo "You already have an Xray Server created."
         echo
         nav_print
@@ -812,7 +919,6 @@ server_create_interactive() {
 
     printf "Enter SNI (default %s): " "$vless_sni_default"; read -r sni; [[ -z "${sni:-}" ]] && sni="$vless_sni_default"
     printf "Enter path (default %s): " "$vless_spider_x_default"; read -r spx; [[ -z "${spx:-}" ]] && spx="$vless_spider_x_default"
-    printf "Enter listen port (default %s): " "$vless_port_default"; read -r port_in; [[ -z "${port_in:-}" ]] && port_in="$vless_port_default"
 
     ui_lock "creating server..."
     ensure_bootstrap_remote
@@ -820,46 +926,11 @@ server_create_interactive() {
 
     xray_keys
     local sid; sid="$(short_id_from_uuid "$(uuid)")"
-    local json
-    json="$(cat <<'EOL'
-    {
-        "log": { "loglevel": "none" },
-        "inbounds": [
-            {
-                "port": __PORT__,
-                "protocol": "vless",
-                "settings": { "clients": [], "decryption": "none" },
-                "streamSettings": {
-                    "network": "xhttp",
-                    "xhttpSettings": {
-                        "path": "__SPX__"
-                    },
-                    "security": "reality",
-                    "realitySettings": {
-                        "target": "__SNI__:443",
-                        "serverNames": ["__SNI__"],
-                        "privateKey": "__PRIV__",
-                        "shortIds": ["__SID__"]
-                    }
-                },
-                "sniffing": {
-                    "enabled": true,
-                    "destOverride": ["http","tls","quic"],
-                    "routeOnly": true
-                }
-            }
-        ],
-        "outbounds": [ { "protocol": "freedom", "tag": "direct" } ]
-    }
-EOL
-)"
-    json="${json/__PORT__/$port_in}"
-    json="${json//__SNI__/$sni}"
-    json="${json/__PRIV__/$priv_key}"
-    json="${json/__SID__/$sid}"
-    json="${json//__SPX__/$spx}"
+    local vision_port xhttp_port json
+    generate_vless_ports
+    json="$(build_combined_config "$sni" "$spx" "$vision_port" "$xhttp_port" "$priv_key" "$sid")"
 
-    write_remote_dc_with_port "$port_in"
+    write_remote_dc_with_ports "$vision_port" "$xhttp_port"
     printf '%s' "$json" > config.json
     cache_set_json "$json"
 
@@ -869,9 +940,7 @@ EOL
 
     render_server_create_result() {
         header "xray › server › create"
-        printf '%-12s %s\n' "Protocol:"    "vless-xhttp-reality"
-        printf '%-12s %s\n' "Server Name:" "${sni}:${port_in}"
-        echo
+        print_server_protocols "$json"
     }
     render_server_create_result
     nav_print
@@ -921,13 +990,7 @@ render_server_remove_confirm() {
         return 1
     fi
 
-    local vless_sni vless_port
-    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
-    vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port // empty' | head -n1)"
-
-    printf '%-12s %s\n' "Protocol:"    "vless-xhttp-reality"
-    printf '%-12s %s\n' "Server Name:" "${vless_sni}:${vless_port}"
-    echo
+    print_server_protocols "$json"
     echo "Do you want to remove this Xray server (y/n)?"
     echo
     return 0
@@ -1049,47 +1112,12 @@ keys_add_screen() {
         ensure_bootstrap_remote
         xray_keys
         local sni="$vless_sni_default"
-        local port_in="$vless_port_default"
         local spx="$vless_spider_x_default"
         local sid_boot="$(short_id_from_uuid "$(uuid)")"
-        json="$(cat <<'EOL' | indent -4
-        {
-            "log": { "loglevel": "none" },
-            "inbounds": [
-                {
-                    "port": __PORT__,
-                    "protocol": "vless",
-                    "settings": { "clients": [], "decryption": "none" },
-                    "streamSettings": {
-                        "network": "xhttp",
-                        "xhttpSettings": {
-                            "path": "__SPX__"
-                        },
-                        "security": "reality",
-                        "realitySettings": {
-                            "target": "__SNI__:443",
-                            "serverNames": ["__SNI__"],
-                            "privateKey": "__PRIV__",
-                            "shortIds": ["__SID__"]
-                        }
-                    },
-                    "sniffing": {
-                        "enabled": true,
-                        "destOverride": ["http","tls","quic"],
-                        "routeOnly": true
-                    }
-                }
-            ],
-            "outbounds": [ { "protocol": "freedom", "tag": "direct" } ]
-        }
-EOL
-)"
-        json="${json/__PORT__/$port_in}"
-        json="${json//__SNI__/$sni}"
-        json="${json/__PRIV__/$priv_key}"
-        json="${json/__SID__/$sid_boot}"
-        json="${json//__SPX__/$spx}"
-        write_remote_dc_with_port "$port_in"
+        local vision_port xhttp_port
+        generate_vless_ports
+        json="$(build_combined_config "$sni" "$spx" "$vision_port" "$xhttp_port" "$priv_key" "$sid_boot")"
+        write_remote_dc_with_ports "$vision_port" "$xhttp_port"
     fi
 
     declare -a new_uuids=()
@@ -1098,7 +1126,16 @@ EOL
     local u
     for u in "${new_uuids[@]}"; do
         json="$(printf '%s' "$json" | jq --arg uuid "$u" '
-            (.inbounds[]|select(.protocol=="vless")|.settings.clients) += [{"id":$uuid}]
+            .inbounds |= map(
+                if .protocol=="vless" then
+                    if .streamSettings.network=="tcp" then
+                        (.settings.clients += [{"id":$uuid,"flow":"xtls-rprx-vision"}])
+                    else
+                        (.settings.clients += [{"id":$uuid}])
+                    end
+                else .
+                end
+            )
         ')"
     done
 
@@ -1113,27 +1150,28 @@ EOL
 
     render_keys_add_result() {
         header "xray › keys › add"
-        local vless_sni vless_port priv_key_local pbk raw_path path_enc
+        local vless_sni vision_port xhttp_port priv_key_local pbk raw_path path_enc
         vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0]' | head -n1)"
-        vless_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.port' | head -n1)"
+        vision_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="tcp")|.port // empty' | head -n1)"
+        xhttp_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.port // empty' | head -n1)"
         priv_key_local="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey' | head -n1)"
-        raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
+        raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
 
         pbk="$(derive_pbk "$priv_key_local")"
         [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
-
-        raw_path="${raw_path#/}"
-        if [[ -z "$raw_path" ]]; then
-            path_enc="%2F"
-        else
-            path_enc="%2F${raw_path}"
-        fi
+        path_enc="$(encode_vless_path "$raw_path")"
 
         local uu sid
         for uu in "${new_uuids[@]}"; do
             sid="$(short_id_from_uuid "$uu")"
-            echo "vless://${uu}@${host}:${vless_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
-            echo
+            if [[ -n "$vision_port" ]]; then
+                echo "vless://${uu}@${host}:${vision_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
+                echo
+            fi
+            if [[ -n "$xhttp_port" ]]; then
+                echo "vless://${uu}@${host}:${xhttp_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
+                echo
+            fi
         done
     }
     render_keys_add_result
@@ -1375,6 +1413,11 @@ USER $APP_UID:$APP_GID
 ENTRYPOINT ["/usr/local/bin/xray.sh"]
 EOF
 
-docker buildx create --name "$builder" --use --driver docker-container --driver-opt image=moby/buildkit:latest --bootstrap >/dev/null
-docker buildx build --builder "$builder" --load --pull --label "temp.build.id=${build_id}" -t "xray-admin:${build_id}" -t xray-admin "$workdir"
-docker run --rm -it --user 10000:10000 --read-only --workdir /tmp --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 --cap-drop=ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m --cpus 1 xray-admin:${build_id}
+docker build --pull --label "temp.build.id=${build_id}" -t "${image_name}" -t xray-admin "$workdir"
+sleep 2
+tty_flag="-i"
+if [ -t 0 ]; then
+    tty_flag="-it"
+fi
+
+docker run --rm ${tty_flag} --user 10000:10000 --read-only --workdir /tmp --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 --cap-drop=ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m --cpus 1 "${image_name}"
