@@ -14,20 +14,17 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cat <<'EOF' > "${workdir}/Dockerfile"
-FROM debian:trixie-slim
-ENV DEBIAN_FRONTEND=noninteractive
+FROM alpine:3.23
 
 ARG APP_UID=10000
 ARG APP_GID=10000
-RUN groupadd -g $APP_GID app \
- && useradd -u $APP_UID -g $APP_GID -M -s /usr/sbin/nologin app 
+RUN addgroup -g $APP_GID -S app \
+ && adduser -S -D -u $APP_UID -G app -H -s /sbin/nologin app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates jq openssh-client sshpass python3 python3-nacl \
- && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache \
+    bash ca-certificates jq openssh-client sshpass python3 py3-pynacl
 
-RUN passwd -l root \
- && usermod -s /usr/sbin/nologin root
+RUN passwd -l root || true
 
 RUN cat <<'EOW' > /usr/local/bin/xray.sh
 #!/bin/bash
@@ -220,7 +217,12 @@ uuid() { cat /proc/sys/kernel/random/uuid; }
 short_id_from_uuid() {
     local u="$1"
     u="${u//-/}"
-    printf '%s' "$u" | openssl dgst -sha256 -binary | od -An -tx1 | tr -d ' \n' | cut -c1-16
+    python3 - "$u" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])
+PY
 }
 
 xray_keys() {
