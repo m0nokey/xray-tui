@@ -47,32 +47,41 @@ Enter VPS password:
 
 The launcher does not install Xray on the local machine. Server-side installation is performed over SSH.
 
-## Main menu
+## Menus
+
+The main menu selects the area to manage:
 
 ```text
 xray › menu
 ____________________
-Server
-1. Status
-2. Install
-3. Restart
-4. Remove
+1. Server
+2. Keys
 
-Keys
-5. List
-6. Add
-7. Remove
-
-b.   back
-x.   exit
+x. exit
 ?:
 ```
 
-### Server actions
+### Server menu
 
-**1. Status** reads the remote Xray configuration and displays the configured SNI, TCP Vision port, XHTTP port, and XHTTP path. It does not perform an active connectivity test.
+```text
+xray › server
+____________________
+1. Install
+2. Remove
+3. Restart
+4. Status
 
-**2. Install** creates a new server only when `/opt/xray/config.json` does not already exist. It is not an in-place reinstall operation. If a server already exists, the TUI reports that it has already been created.
+b. back
+m. main
+x. exit
+?:
+```
+
+#### Server actions
+
+**4. Status** reads the remote Xray configuration and displays the configured SNI, TCP Vision port, XHTTP port, and XHTTP path. It does not perform an active connectivity test.
+
+**1. Install** creates a new server only when `/opt/xray/config.json` does not already exist. It is not an in-place reinstall operation. If a server already exists, the TUI reports that it has already been created.
 
 The TUI asks for:
 
@@ -83,7 +92,7 @@ The two client-facing ports are generated randomly in the range `30000-60000`. T
 
 **3. Restart** restarts the remote `xray` service through Docker Compose.
 
-**4. Remove** asks for confirmation and then:
+**2. Remove** asks for confirmation and then:
 
 - stops and removes the Xray Compose stack;
 - removes the Xray configuration and Compose file;
@@ -92,13 +101,28 @@ The two client-facing ports are generated randomly in the range `30000-60000`. T
 
 It does not uninstall Docker or modify the rest of the operating system.
 
-### Key actions
+### Keys menu
 
-**5. List** prints all generated VLESS links for every configured client. Each client normally has two links: one for TCP Vision and one for XHTTP.
+```text
+xray › keys
+____________________
+1. List
+2. Add
+3. Remove
 
-**6. Add** accepts between `1` and `100` new keys. If no server exists yet, this action bootstraps one with the default SNI and path before adding the keys.
+b. back
+m. main
+x. exit
+?:
+```
 
-**7. Remove** opens a submenu:
+#### Key actions
+
+**1. List** prints all generated VLESS links for every configured client. Each client normally has two links: one for TCP Vision and one for XHTTP.
+
+**2. Add** accepts between `1` and `100` new keys. If no server exists yet, this action bootstraps one with the default SNI and path before adding the keys.
+
+**3. Remove** opens a submenu:
 
 ```text
 1.   Remove all keys
@@ -107,9 +131,10 @@ It does not uninstall Docker or modify the rest of the operating system.
 
 Removing keys changes only the VLESS client lists and REALITY short IDs. It does not remove the server.
 
-The following commands are available on every screen:
+The following commands are available in the menus:
 
 - `b` goes back;
+- `m` returns to the main menu;
 - `x` exits the TUI.
 
 ## Remote layout

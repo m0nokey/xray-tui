@@ -1342,32 +1342,77 @@ keys_remove_one() {
 render_home() {
     header "xray › menu"
 
-    echo "Server"
-    echo "1. Status"
-    echo "2. Install"
-    echo "3. Restart"
-    echo "4. Remove"
-    echo
-    echo "Keys"
-    echo "5. List"
-    echo "6. Add"
-    echo "7. Remove"
+    echo "1. Server"
+    echo "2. Keys"
     echo
 }
+
+render_server_menu() {
+    header "xray › server"
+
+    echo "1. Install"
+    echo "2. Remove"
+    echo "3. Restart"
+    echo "4. Status"
+    echo
+    echo "b. back"
+    echo "m. main"
+    echo "x. exit"
+}
+
+menu_server() {
+    while :; do
+        render_server_menu
+        nav_print
+        read -r ans
+        case "$(first_token_lower "$ans")" in
+            1) server_create_interactive ;;
+            2) server_remove ;;
+            3) server_restart ;;
+            4) print_server_info_screen ;;
+            b|m) return 0 ;;
+            x) echo "Bye."; exit 0 ;;
+            *) nav_invalid_inline ;;
+        esac
+    done
+}
+
+render_keys_menu() {
+    header "xray › keys"
+
+    echo "1. List"
+    echo "2. Add"
+    echo "3. Remove"
+    echo
+    echo "b. back"
+    echo "m. main"
+    echo "x. exit"
+}
+
+menu_keys() {
+    while :; do
+        render_keys_menu
+        nav_print
+        read -r ans
+        case "$(first_token_lower "$ans")" in
+            1) keys_list_screen ;;
+            2) keys_add_screen ;;
+            3) keys_remove_menu ;;
+            b|m) return 0 ;;
+            x) echo "Bye."; exit 0 ;;
+            *) nav_invalid_inline ;;
+        esac
+    done
+}
+
 menu_xray() {
     while :; do
         render_home
         nav_print
         read -r ans
         case "$(first_token_lower "$ans")" in
-            1) print_server_info_screen ;;
-            2) server_create_interactive ;;
-            3) server_restart ;;
-            4) server_remove ;;
-            5) keys_list_screen ;;
-            6) keys_add_screen ;;
-            7) keys_remove_menu ;;
-            b) : ;;
+            1) menu_server ;;
+            2) menu_keys ;;
             x) echo "Bye."; exit 0 ;;
             *) nav_invalid_inline ;;
         esac
