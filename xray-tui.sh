@@ -128,6 +128,10 @@ ensure_vault_password_file() {
 verify_bootstrap_ssh() {
     local host="$1" user="$2" port="$3" attempt password rc
     for attempt in 1 2 3; do
+        clear_screen
+        echo "Checking SSH access to the VPS." >&2
+        echo "Enter the VPS password to verify the address, port, and user." >&2
+        echo >&2
         if ! read_ascii_secret "VPS password (attempt ${attempt}/3): "; then
             continue
         fi
