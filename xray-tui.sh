@@ -32,42 +32,75 @@ read_ascii_secret() {
     return 1
 }
 
-ensure_vault_password_file() {
+create_vault_password_file() {
     local password password_confirm attempt
+    for attempt in 1 2 3; do
+        clear_screen
+        echo "An encrypted Vault will be created on this computer."
+        echo "It will store your VPS access data and VPN keys."
+        echo "Create and remember a strong Vault password."
+        echo
+        if ! read_ascii_secret "Create Vault password (attempt ${attempt}/3): "; then
+            continue
+        fi
+        password="$REPLY"
+        if ! read_ascii_secret "Confirm Vault password (attempt ${attempt}/3): "; then
+            unset password
+            continue
+        fi
+        password_confirm="$REPLY"
+        if [[ "$password" != "$password_confirm" ]]; then
+            unset password password_confirm
+            clear_screen
+            echo "Vault passwords do not match. Please try again."
+            sleep 1.5
+            continue
+        fi
+        VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
+        chmod 600 "$VAULT_PASSWORD_FILE"
+        printf '%s\n' "$password" >"$VAULT_PASSWORD_FILE"
+        unset password password_confirm
+        return 0
+    done
+    echo "Vault password setup failed after 3 attempts."
+    sleep 2.5
+    return 1
+}
+
+recover_damaged_vault() {
+    local damaged
+    clear_screen
+    echo "The Vault password is correct, but the encrypted state is damaged."
+    echo "The damaged file will be preserved before a new Vault is created."
+    echo
+    echo "1. Move damaged Vault aside and create a new Vault"
+    echo "2. Return without changing it"
+    echo
+    read -r -e -p '?: ' REPLY
+    case "$REPLY" in
+        1)
+            damaged="$STATE_DIR/vault.json.damaged.$(date -u '+%Y%m%dT%H%M%SZ')"
+            mv -- "$VAULT_FILE" "$damaged"
+            rm -f "$VAULT_PASSWORD_FILE"
+            VAULT_PASSWORD_FILE=""
+            echo "Damaged Vault preserved at:"
+            echo "$damaged"
+            sleep 2
+            create_vault_password_file
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+ensure_vault_password_file() {
+    local password attempt checked_state vault_view_status
     [[ -n "$VAULT_PASSWORD_FILE" && -f "$VAULT_PASSWORD_FILE" ]] && return 0
 
     if [[ ! -f "$VAULT_FILE" ]]; then
-        for attempt in 1 2 3; do
-            clear_screen
-            echo "An encrypted Vault will be created on this computer."
-            echo "It will store your VPS access data and VPN keys."
-            echo "Create and remember a strong Vault password."
-            echo
-            if ! read_ascii_secret "Create Vault password (attempt ${attempt}/3): "; then
-                continue
-            fi
-            password="$REPLY"
-            if ! read_ascii_secret "Confirm Vault password (attempt ${attempt}/3): "; then
-                unset password
-                continue
-            fi
-            password_confirm="$REPLY"
-            if [[ "$password" != "$password_confirm" ]]; then
-                unset password password_confirm
-                clear_screen
-                echo "Vault passwords do not match. Please try again."
-                sleep 1.5
-                continue
-            fi
-            VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
-            chmod 600 "$VAULT_PASSWORD_FILE"
-            printf '%s\n' "$password" >"$VAULT_PASSWORD_FILE"
-            unset password password_confirm
-            return 0
-        done
-        echo "Vault password setup failed after 3 attempts."
-        sleep 2.5
-        exit 1
+        create_vault_password_file || return 1
+        return 0
     fi
 
     for attempt in 1 2 3; do
@@ -82,9 +115,23 @@ ensure_vault_password_file() {
         password="$REPLY"
         printf '%s\n' "$password" >"$VAULT_PASSWORD_FILE"
         unset password
-        if ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" >/dev/null 2>&1; then
-            return 0
+        checked_state="$(mktemp /tmp/xray-vault-check.XXXXXX)"
+        vault_view_status=0
+        ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" >"$checked_state" 2>/dev/null || vault_view_status=$?
+        if [[ "$vault_view_status" == 0 ]]; then
+            if json_file_valid "$checked_state"; then
+                rm -f "$checked_state"
+                return 0
+            fi
+            rm -f "$checked_state"
+            if recover_damaged_vault; then
+                return 0
+            fi
+            rm -f "$VAULT_PASSWORD_FILE"
+            VAULT_PASSWORD_FILE=""
+            return 1
         fi
+        rm -f "$checked_state"
         rm -f "$VAULT_PASSWORD_FILE"
         VAULT_PASSWORD_FILE=""
         clear_screen
@@ -96,7 +143,7 @@ ensure_vault_password_file() {
     done
     echo "Vault password verification failed after 3 attempts."
     sleep 2.5
-    exit 1
+    return 1
 }
 
 verify_bootstrap_ssh() {
@@ -183,7 +230,13 @@ PY
 vault_view() {
     if [[ -f "$VAULT_FILE" ]]; then
         local output
-        ensure_vault_password_file
+        if ! ensure_vault_password_file; then
+            return 1
+        fi
+        if [[ ! -f "$VAULT_FILE" ]]; then
+            printf '{"nodes":{}}\n'
+            return 0
+        fi
         output="$(mktemp "$STATE_DIR/.view.XXXXXX")"
         if ! ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" >"$output"; then
             rm -f "$output"
@@ -232,7 +285,9 @@ vault_state_command() {
 
 vault_save() {
     local input="$1" encrypted checked
-    ensure_vault_password_file
+    if ! ensure_vault_password_file; then
+        return 1
+    fi
     if ! json_file_valid "$input"; then
         echo "Refusing to save invalid Vault state." >&2
         return 1
@@ -724,10 +779,11 @@ secure_state() {
             1)
                 clear_screen
                 if [[ -f "$VAULT_FILE" ]]; then
-                    ensure_vault_password_file
-                    ansible-vault rekey --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE"
-                    rm -f "$VAULT_PASSWORD_FILE"
-                    VAULT_PASSWORD_FILE=""
+                    if ensure_vault_password_file && [[ -f "$VAULT_FILE" ]]; then
+                        ansible-vault rekey --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE"
+                        rm -f "$VAULT_PASSWORD_FILE"
+                        VAULT_PASSWORD_FILE=""
+                    fi
                 else
                     initialize_vault
                 fi
