@@ -1,8 +1,14 @@
 ---
 - name: Restart Xray
-  community.docker.docker_compose_v2:
-    project_src: "{{ xray_dir }}"
-    files:
-      - compose.yml
-    state: present
-    restarted: true
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ xray_compose_path }}"
+      - up
+      - -d
+      - --force-recreate
+      - --no-deps
+      - xray
+  changed_when: true

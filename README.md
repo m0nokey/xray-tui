@@ -75,6 +75,12 @@ x. exit
 ?:
 ```
 
+Adding a VPN server is transactional. The candidate state is kept in a temporary
+file while Ansible runs and is written to the encrypted Vault only after a
+successful deployment. If the same VPS IP and SSH port are entered again, the
+existing node is reused and Ansible converges it idempotently with the saved
+deployment credentials instead of creating a duplicate node.
+
 For a selected server:
 
 ```text
@@ -83,6 +89,15 @@ VPN Server:
            IP               STATUS   COUNTRY   CREATED      PROVIDER
 
            203.0.113.10     Active   DE        2026-07-23   Example Provider
+
+Status is confirmed by both the VPS service state and TCP reachability:
+
+```text
+Active           Xray is running and both VPN ports are reachable.
+Partial          Xray is running and only one VPN port is reachable.
+VPN unavailable  The VPS responded, but Xray is not confirmed running.
+Unreachable      No VPN or management port responded; DPI or a provider firewall may be involved.
+```
 
   1. Manage VPN server
   2. Manage access keys

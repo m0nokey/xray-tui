@@ -19,7 +19,7 @@ RUN apk add --no-cache \
     python3 \
     sshpass
 
-RUN ansible-galaxy collection install community.docker ansible.posix
+RUN ansible-galaxy collection install community.docker
 
 WORKDIR /workspace
 ENTRYPOINT ["/bin/bash", "/workspace/xray-tui.sh"]

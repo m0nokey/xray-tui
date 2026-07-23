@@ -9,16 +9,28 @@
         timeout: 30
         sleep: 2
   tasks:
+    - name: Ensure deploy SSH directory permissions
+      ansible.builtin.file:
+        path: /home/deploy/.ssh
+        state: directory
+        owner: deploy
+        group: deploy
+        mode: "0700"
+
     - name: Install the new deploy key
-      ansible.posix.authorized_key:
-        user: deploy
-        key: "{{ new_deploy_authorized_key }}"
+      ansible.builtin.lineinfile:
+        path: /home/deploy/.ssh/authorized_keys
+        line: "{{ new_deploy_authorized_key }}"
+        regexp: "^{{ new_deploy_authorized_key | regex_escape }}$"
+        create: true
+        owner: deploy
+        group: deploy
+        mode: "0600"
         state: present
-        manage_dir: true
 
     - name: Remove the old deploy key
-      ansible.posix.authorized_key:
-        user: deploy
-        key: "{{ old_deploy_authorized_key }}"
+      ansible.builtin.lineinfile:
+        path: /home/deploy/.ssh/authorized_keys
+        line: "{{ old_deploy_authorized_key }}"
+        regexp: "^{{ old_deploy_authorized_key | regex_escape }}$"
         state: absent
-        manage_dir: true

@@ -70,7 +70,7 @@ def deploy_key():
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("action", choices=("count", "names", "extract", "mark-deployed", "set-deploy-key", "remove-node", "add-node", "add-key", "remove-key"))
+parser.add_argument("action", choices=("count", "names", "extract", "mark-deployed", "set-deploy-key", "set-bootstrap", "remove-node", "add-node", "add-key", "remove-key"))
 parser.add_argument("args", nargs="*")
 parser.add_argument("--bootstrap-key")
 opts = parser.parse_args()
@@ -107,6 +107,17 @@ elif opts.action == "set-deploy-key":
     node = nodes[opts.args[0]]
     node["deploy_private_key"] = open(opts.args[1], encoding="utf-8").read()
     node["deploy_authorized_key"] = open(opts.args[2], encoding="utf-8").read().strip()
+elif opts.action == "set-bootstrap":
+    if len(opts.args) != 3 or opts.args[0] not in nodes:
+        raise SystemExit("set-bootstrap requires NODE USER PORT")
+    password = os.environ.get("XRAY_BOOTSTRAP_PASSWORD", "")
+    if not password:
+        raise SystemExit("set-bootstrap requires XRAY_BOOTSTRAP_PASSWORD")
+    node = nodes[opts.args[0]]
+    node["bootstrap_user"] = opts.args[1]
+    node["bootstrap_ssh_port"] = int(opts.args[2])
+    node["bootstrap_password"] = password
+    node["ssh_port"] = int(opts.args[2])
 elif opts.action == "remove-node":
     if len(opts.args) != 1 or opts.args[0] not in nodes:
         raise SystemExit("remove-node requires NODE")

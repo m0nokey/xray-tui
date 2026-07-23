@@ -10,10 +10,15 @@
         sleep: 2
   tasks:
     - name: Restart Xray Compose service
-      community.docker.docker_compose_v2:
-        project_src: /opt/xray
-        files:
-          - compose.yml
-        services:
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - /opt/xray/compose.yml
+          - up
+          - -d
+          - --force-recreate
+          - --no-deps
           - xray
-        state: restarted
+      changed_when: true

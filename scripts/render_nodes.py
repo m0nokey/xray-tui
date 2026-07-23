@@ -2,7 +2,10 @@
 import argparse
 import concurrent.futures
 import json
+import os
 import socket
+import subprocess
+import tempfile
 from datetime import datetime, timezone
 
 
@@ -12,6 +15,66 @@ def port_open(host, port, timeout=1.0):
             return True
     except (OSError, ValueError):
         return False
+
+
+def xray_container_running(node, timeout=5.0):
+    """Confirm the deployed Xray service, rather than only probing its ports."""
+    host = node.get("host", "")
+    ssh_port = node.get("ssh_port")
+    user = node.get("deploy_user", "deploy")
+    private_key = node.get("deploy_private_key", "")
+    if not host or not ssh_port or not private_key:
+        return False
+
+    key_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", prefix=".xray-status-", delete=False
+        ) as key_file:
+            key_file.write(private_key)
+            key_path = key_file.name
+        os.chmod(key_path, 0o600)
+
+        result = subprocess.run(
+            [
+                "ssh",
+                "-i",
+                key_path,
+                "-p",
+                str(ssh_port),
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=3",
+                "-o",
+                "ConnectionAttempts=1",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                f"{user}@{host}",
+                "test -f /opt/xray/compose.yml && "
+                "(docker inspect --format '{{.State.Running}}' xray 2>/dev/null || "
+                "sudo -n docker inspect --format '{{.State.Running}}' xray 2>/dev/null) "
+                "| grep -qx true",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        if key_path:
+            try:
+                os.unlink(key_path)
+            except FileNotFoundError:
+                pass
 
 
 def node_status(node):
@@ -26,13 +89,18 @@ def node_status(node):
         probes = [future.result() for future in futures]
         ssh_reachable = ssh_future.result() if ssh_future else False
 
-    if len(probes) == 2 and all(probes):
-        return "Active"
-    if any(probes):
-        return "Partial"
-    if ssh_reachable:
+    if not ssh_reachable and not any(probes):
+        return "Unreachable"
+    if not ssh_reachable:
         return "VPN unavailable"
-    return "Unreachable"
+
+    xray_running = xray_container_running(node)
+
+    if xray_running and len(probes) == 2 and all(probes):
+        return "Active"
+    if xray_running and any(probes):
+        return "Partial"
+    return "VPN unavailable"
 
 
 parser = argparse.ArgumentParser()
@@ -81,8 +149,8 @@ else:
     if args.check:
         print()
         print("  Status:")
-        print("    Active           Both VPN ports are reachable.")
-        print("    Partial          Only one VPN port is reachable.")
-        print("    VPN unavailable  Management SSH is reachable, but VPN ports are not.")
+        print("    Active           Xray is running and both VPN ports are reachable.")
+        print("    Partial          Xray is running and only one VPN port is reachable.")
+        print("    VPN unavailable  The VPS responded, but Xray is not confirmed running.")
         print("    Unreachable      No VPN or management port responded; DPI or a provider firewall may be involved.")
 print()
