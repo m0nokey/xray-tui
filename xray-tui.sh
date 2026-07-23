@@ -21,7 +21,7 @@ trap 'exit 143' TERM
 read_ascii_secret() {
     local prompt="$1" value read_status
     printf '%s' "$prompt" >&2
-    read -r -s -e value
+    read -r -s value
     read_status=$?
     printf '\n' >&2
     if ((read_status != 0)); then
