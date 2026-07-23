@@ -52,6 +52,11 @@ The controller generates the VPN ports, REALITY keys, paired access keys, and
 the deploy SSH key inside the container. It stores the sensitive state in the
 encrypted local Vault and deploys the VPS automatically through Ansible.
 
+The `Vault` menu can change the encryption password, create a timestamped
+encrypted backup archive, restore an archive, or delete the local Vault. A
+restore keeps the previous Vault as a timestamped `.restore.*` file until the
+Vault is deleted.
+
 Requirements: Docker with Compose and an interactive terminal on macOS or
 Linux. No Ansible, Python, SSH tools, or Xray installation is required on the
 host.

@@ -15,7 +15,13 @@ from nacl.public import PrivateKey
 
 
 def read_state():
-    return json.load(sys.stdin)
+    raw = sys.stdin.read()
+    if not raw.strip():
+        raise SystemExit("encrypted Vault state is empty; refusing to modify it")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"encrypted Vault state is invalid JSON: {exc.msg}") from exc
 
 
 def ip_info(host):
@@ -106,6 +112,14 @@ elif opts.action == "add-node":
     if len(opts.args) != 2:
         raise SystemExit("add-node requires NAME HOST")
     name, host = opts.args
+    if name == "auto":
+        base = re.sub(r"[^A-Za-z0-9]+", "-", host).strip("-").lower() or "server"
+        name = "vpn-" + base[:48]
+        suffix = 2
+        original = name
+        while name in nodes:
+            name = f"{original}-{suffix}"
+            suffix += 1
     if name in nodes:
         raise SystemExit(f"node already exists: {name}")
     country, provider = ip_info(host)

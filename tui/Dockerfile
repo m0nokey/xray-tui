@@ -1,4 +1,14 @@
-FROM alpine:3.23
+ARG XRAY_TUI_BASE_IMAGE=alpine:3.23
+FROM ${XRAY_TUI_BASE_IMAGE}
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+ARG XRAY_TUI_BASE_IMAGE
+ARG XRAY_TUI_DOCKERFILE_SHA256
+
+LABEL xray.tui.base-image="${XRAY_TUI_BASE_IMAGE}" \
+      xray.tui.dockerfile-sha256="${XRAY_TUI_DOCKERFILE_SHA256}"
 
 RUN apk add --no-cache \
     ansible \
@@ -12,4 +22,4 @@ RUN apk add --no-cache \
 RUN ansible-galaxy collection install community.docker ansible.posix
 
 WORKDIR /workspace
-ENTRYPOINT ["/workspace/xray-tui.sh"]
+ENTRYPOINT ["/bin/bash", "/workspace/xray-tui.sh"]

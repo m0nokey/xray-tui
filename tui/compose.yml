@@ -4,9 +4,10 @@ services:
       context: ..
       dockerfile: tui/Dockerfile
     image: local/xray-tui:latest
+    pull_policy: never
     container_name: xray-tui
     working_dir: /workspace
-    entrypoint: ["/workspace/xray-tui.sh"]
+    entrypoint: ["/bin/bash", "/workspace/xray-tui.sh"]
     environment:
       XDG_STATE_HOME: /state
     read_only: true
