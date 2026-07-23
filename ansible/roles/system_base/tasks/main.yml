@@ -1,0 +1,51 @@
+---
+- name: Require deploy SSH key
+  ansible.builtin.assert:
+    that:
+      - deploy_authorized_key | length > 0
+    fail_msg: Pass deploy_authorized_key from the encrypted local state.
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - python3
+      - python3-docker
+      - "{{ docker_packages }}"
+    state: present
+    update_cache: true
+
+- name: Create deploy user
+  ansible.builtin.user:
+    name: "{{ deploy_user }}"
+    shell: /bin/bash
+    groups: docker
+    append: true
+    create_home: true
+    password_lock: true
+    state: present
+
+- name: Install deploy authorized key
+  ansible.posix.authorized_key:
+    user: "{{ deploy_user }}"
+    key: "{{ deploy_authorized_key }}"
+    state: present
+    manage_dir: true
+
+- name: Install hardened SSH drop-in
+  ansible.builtin.template:
+    src:  hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/90-xray-tui-hardening.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/sbin/sshd -t -f %s
+  when: ssh_hardening_enabled
+  notify: Reload SSH
+
+- name: Enable Docker
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started

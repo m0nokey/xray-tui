@@ -1,0 +1,7 @@
+---
+deploy_user: deploy
+deploy_authorized_key: ""
+ssh_hardening_enabled: true
+docker_packages:
+  - docker.io
+  - docker-compose-plugin

@@ -1,0 +1,21 @@
+services:
+  xray:
+    image: {{ xray_image }}
+    container_name: {{ xray_container_name }}
+    command: ["run", "-c", "/etc/xray/config.json"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 512m
+    ulimits:
+      nofile: 262144
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+    volumes:
+      - ./config.json:/etc/xray/config.json:ro
+    ports:
+      - "{{ xray_state.vision_port }}:{{ xray_state.vision_port }}/tcp"
+      - "{{ xray_state.xhttp_port }}:{{ xray_state.xhttp_port }}/tcp"

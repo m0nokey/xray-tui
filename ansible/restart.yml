@@ -1,0 +1,13 @@
+---
+- name: Restart Xray VPN
+  hosts: xray_nodes
+  become: true
+  tasks:
+    - name: Restart Xray Compose service
+      community.docker.docker_compose_v2:
+        project_src: /opt/xray
+        files:
+          - compose.yml
+        services:
+          - xray
+        state: restarted

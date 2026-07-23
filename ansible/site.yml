@@ -1,0 +1,7 @@
+---
+- name: Deploy Xray VPN
+  hosts: xray_nodes
+  become: true
+  roles:
+    - role: system_base
+    - role: xray

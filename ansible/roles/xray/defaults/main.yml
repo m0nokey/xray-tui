@@ -1,0 +1,9 @@
+---
+xray_image: ghcr.io/xtls/xray-core:latest
+xray_dir: /opt/xray
+xray_config_path: "{{ xray_dir }}/config.json"
+xray_compose_path: "{{ xray_dir }}/compose.yml"
+xray_container_name: xray
+xray_server_name: api.github.com
+xray_public_host: "{{ ansible_host | default(inventory_hostname) }}"
+xray_xhttp_path: /

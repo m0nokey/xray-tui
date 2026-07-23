@@ -1,226 +1,125 @@
 # xray-tui
 
-`xray-tui` is a small terminal menu for installing and managing an Xray VPN server on your VPS over SSH. It runs in a temporary Docker container, so you do not need to install Python, Node.js, or other tools on your macOS or Linux computer.
+An Alpine-based local controller for deploying and managing a small Xray VPN
+server through SSH and Ansible. The VPS runs one hardened Xray container. The
+controller does not require Docker on the VPS beyond the Docker runtime used
+by that container and does not create a server-side key database.
 
-It creates one Docker stack with two VLESS inbounds:
+## What it does
 
-- VLESS over TCP with XTLS Vision and REALITY;
-- VLESS over XHTTP with REALITY.
+- deploys VLESS TCP Vision and VLESS XHTTP with REALITY;
+- generates ports, REALITY material, and paired access keys locally;
+- stores all sensitive data in an encrypted Ansible Vault;
+- adds or revokes one access-key pair without changing other users;
+- checks and restarts a VPN server over SSH;
+- rotates the deploy SSH key;
+- applies baseline VPS SSH and Docker hardening through Ansible.
 
-The tool generates complete VLESS links for both transports and lets you manage client UUIDs from the menu.
-
-> **Security notice:** review the script before running it. It connects to the VPS as `root`, installs Docker, changes APT sources, and creates systemd update timers.
+The Vault contains VPS access data, deploy keys, VPN ports, REALITY keys, and
+paired client UUIDs. It is stored under `$HOME/.local/state/xray`, encrypted at
+rest, and never committed to Git or copied to the VPS as a database.
 
 ## Requirements
 
-### Local machine
+The host needs Bash and Docker Compose. The local `xray-tui` image is built from
+Alpine and contains only the controller runtime: `ansible-playbook`,
+`ansible-vault`, `ssh`, `ssh-keygen`, `curl`, Python, and PyNaCl. It has a
+read-only root filesystem, no Docker socket, no Linux capabilities, a
+non-privileged security profile, process and resource limits, and a small
+`tmpfs` for temporary files.
 
-- macOS or Linux;
-- Bash;
-- `curl` for the one-line launcher;
-- Docker Desktop on macOS or Docker Engine with Compose on Linux.
+The VPS must be a Debian-based system with root SSH access for its first
+deployment. Ansible creates the `deploy` user, installs its generated public
+key, disables root and password SSH login, and starts the Docker service.
 
-The launcher builds a temporary Alpine-based admin image and runs the TUI inside it. The temporary container and image are removed when the script exits.
+## Start
 
-### Remote VPS
-
-- Debian with `apt` and systemd;
-- root SSH access;
-- an SSH server reachable on the selected port;
-- a public IPv4 address or DNS name reachable by clients.
-
-The first connection uses a root password. The script accepts up to three login attempts. The SSH host key is accepted into a temporary `known_hosts` file for that run.
-
-## Quick start
-
-```bash
-bash -c "$(curl -sSfL --http2 --proto '=https' 'https://raw.githubusercontent.com/m0nokey/xray-tui/refs/heads/main/xray-tui.sh')"
+```sh
+./run.sh
 ```
 
-The script builds the local admin image, starts the TUI, and asks for:
+The first run creates the local Vault password. Add a VPS from the menu, enter
+its address and the initial root private-key path, and the controller will
+generate the local state and deploy the server automatically.
+
+## Menu
 
 ```text
-Enter VPS IP address:
-Enter VPS port (default 22):
-Enter VPS password:
-```
+1. VPN servers
+2. Add VPN server
+3. Vault
 
-The launcher does not install Xray on the local machine. Server-side installation is performed over SSH.
-
-## Menu layout
-
-```text
-1. Server
-2. Keys
-
-x. exit
-?:
-
-Server:
-
-1. Install
-2. Remove
-3. Restart
-4. Status
-
-b. back
-m. main
-x. exit
-?:
-
-Keys:
-
-1. List
-2. Add
-3. Remove
-
-b. back
-m. main
 x. exit
 ?:
 ```
 
-### Server actions
-
-**4. Status** reads the remote Xray configuration and displays the configured SNI, TCP Vision port, XHTTP port, and XHTTP path. It does not perform an active connectivity test.
-
-**1. Install** creates a new server only when `/opt/xray/config.json` does not already exist. It is not an in-place reinstall operation. If a server already exists, the TUI reports that it has already been created.
-
-The TUI asks for:
-
-- SNI, default: `api.github.com`;
-- XHTTP path, default: `/`.
-
-The two client-facing ports are generated randomly in the range `30000-60000`. They are different and are not entered manually.
-
-**3. Restart** restarts the remote `xray` service through Docker Compose.
-
-**2. Remove** asks for confirmation and then:
-
-- stops and removes the Xray Compose stack;
-- removes the Xray configuration and Compose file;
-- removes the OS and Docker update timers and helper scripts;
-- removes `/opt/xray`.
-
-It does not uninstall Docker or modify the rest of the operating system.
-
-### Key actions
-
-**1. List** prints all generated VLESS links for every configured client. Each client normally has two links: one for TCP Vision and one for XHTTP.
-
-**2. Add** accepts between `1` and `100` new keys. If no server exists yet, this action bootstraps one with the default SNI and path before adding the keys.
-
-**3. Remove** opens a submenu:
+For a selected server:
 
 ```text
-1.   Remove all keys
-2.   Remove a single key
+VPN Server:
+
+           IP               STATUS   COUNTRY   CREATED      PROVIDER
+
+           203.0.113.10     Active   DE        2026-07-23   Example Provider
+
+  1. Manage VPN server
+  2. Manage access keys
+
+  b. back
+  m. main
+  x. exit
+  ?:
 ```
 
-Removing keys changes only the VLESS client lists and REALITY short IDs. It does not remove the server.
-
-The following commands are available in the menus:
-
-- `b` goes back;
-- `m` returns to the main menu;
-- `x` exits the TUI.
-
-## Remote layout
-
-After installation, the main files are:
+Server management:
 
 ```text
-/opt/xray/config.json
-/opt/xray/docker-compose.yaml
+Manage VPN server:
+
+  1. Check VPN status
+  2. Restart VPN server
+  3. Rotate SSH key
+  4. Remove VPN server
+
+  b. back
+  m. main
+  x. exit
+  ?:
 ```
 
-The Compose service uses:
+Access-key management:
 
 ```text
-ghcr.io/xtls/xray-core:latest
+Manage access keys:
+
+  1. Show keys
+  2. Add key
+  3. Remove key
+
+  b. back
+  m. main
+  x. exit
+  ?:
 ```
 
-The generated container has these relevant constraints:
+Each access-key profile contains two links, one for Vision and one for XHTTP.
+Removing a profile revokes both UUIDs together.
 
-- read-only root filesystem;
-- `/tmp` mounted as a temporary filesystem;
-- all Linux capabilities dropped;
-- `no-new-privileges` enabled;
-- `pids_limit: 512`;
-- `mem_limit: 512m`;
-- `nofile: 262144`;
-- restart policy: `unless-stopped`;
-- only the two generated ports are published as TCP ports.
-
-## Generated Xray configuration
-
-The configuration contains two VLESS inbounds that share one REALITY key pair and server name.
-
-### TCP Vision
+## Layout
 
 ```text
-network: tcp
-security: reality
-flow: xtls-rprx-vision
+tui/Dockerfile                   Alpine xray-tui image
+tui/compose.yml                  hardened local container
+ansible/                         VPS roles and templates
+scripts/state_cli.py             local Vault state operations
+scripts/render_nodes.py          aligned node/status table
+scripts/render_keys.py           paired VLESS link output
+xray-tui.sh                      interactive controller
+run.sh                            local entrypoint
 ```
 
-The generated link contains `type=tcp` and `flow=xtls-rprx-vision`.
-
-### XHTTP
-
-```text
-network: xhttp
-security: reality
-path: <the path entered during installation>
-```
-
-The generated link contains `type=xhttp` and the URL-encoded XHTTP path.
-
-Both inbounds use VLESS with `decryption: none`, REALITY, and Xray sniffing with HTTP, TLS, and QUIC destination overrides. The Docker Compose stack publishes TCP ports only; this project does not create a UDP listener.
-
-## VLESS links
-
-For every client UUID, the TUI generates links similar to:
-
-```text
-vless://UUID@SERVER:PORT?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=api.github.com&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID#vless-vision-reality
-```
-
-```text
-vless://UUID@SERVER:PORT?type=xhttp&encryption=none&security=reality&sni=api.github.com&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID&path=%2F#vless-xhttp-reality
-```
-
-The `sid` value is deterministically derived from the client UUID. The `pbk` value is derived from the REALITY private key and is distributed as part of the client link. Treat complete links and UUIDs as secrets because anyone who has one can use the server as that client.
-
-Clients must support the selected VLESS transport and REALITY. Examples include Shadowrocket, v2rayNG, and v2rayN, subject to their support for the exact Xray transport options.
-
-## Automatic updates on the VPS
-
-The first installation creates two systemd timers.
-
-### Operating system updates
-
-`os-updater.timer` runs daily around `01:00` with a randomized delay of up to 13 minutes. It updates Debian packages, performs cleanup, and reboots the VPS when a kernel or package update requires it.
-
-### Xray image updates
-
-`docker-updater.timer` runs daily at `02:00`. It:
-
-1. pulls `ghcr.io/xtls/xray-core:latest`;
-2. stops the existing Compose stack;
-3. recreates it with the existing `/opt/xray/config.json`;
-4. prunes unused Docker images and build cache.
-
-The Xray configuration is preserved during this update.
-
-## Security considerations
-
-- The tool operates as `root` on the remote VPS.
-- The generated VLESS links are credentials; do not publish them.
-- Use SSH keys and disable SSH password authentication after the initial setup.
-- Choose an SNI that is a real TLS-capable hostname and reachable from the VPS.
-- Keep generated client links private and remove keys that are no longer needed.
-- Review the downloaded script before executing a one-line installer.
+The generated Vault and private keys are outside the repository. Back them up
+only as encrypted Vault data.
 
 ## License
 

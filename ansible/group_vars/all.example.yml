@@ -1,0 +1,3 @@
+---
+xray_server_name: api.github.com
+xray_xhttp_path: /

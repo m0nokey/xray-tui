@@ -1,0 +1,23 @@
+---
+- name: Remove Xray VPN
+  hosts: xray_nodes
+  become: true
+  tasks:
+    - name: Check whether the Xray Compose project exists
+      ansible.builtin.stat:
+        path: /opt/xray/compose.yml
+      register: xray_compose
+
+    - name: Remove the Xray Compose project
+      community.docker.docker_compose_v2:
+        project_src: /opt/xray
+        files:
+          - compose.yml
+        state: absent
+        remove_orphans: true
+      when: xray_compose.stat.exists
+
+    - name: Remove Xray files
+      ansible.builtin.file:
+        path: /opt/xray
+        state: absent
