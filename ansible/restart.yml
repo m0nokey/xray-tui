@@ -2,6 +2,12 @@
 - name: Restart Xray VPN
   hosts: xray_nodes
   become: true
+  pre_tasks:
+    - name: Wait for SSH access
+      ansible.builtin.wait_for_connection:
+        delay: 2
+        timeout: 30
+        sleep: 2
   tasks:
     - name: Restart Xray Compose service
       community.docker.docker_compose_v2:

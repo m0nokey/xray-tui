@@ -2,6 +2,12 @@
 - name: Deploy Xray VPN
   hosts: xray_nodes
   become: true
+  pre_tasks:
+    - name: Wait for initial SSH access
+      ansible.builtin.wait_for_connection:
+        delay: 2
+        timeout: 30
+        sleep: 2
   roles:
     - role: system_base
     - role: xray

@@ -4,12 +4,31 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 VAULT_FILE="$STATE_DIR/vault.json"
+VAULT_PASSWORD_FILE=""
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 
+cleanup() {
+    [[ -n "$VAULT_PASSWORD_FILE" ]] && rm -f "$VAULT_PASSWORD_FILE"
+}
+trap cleanup EXIT INT TERM
+
+ensure_vault_password_file() {
+    local password
+    [[ -n "$VAULT_PASSWORD_FILE" && -f "$VAULT_PASSWORD_FILE" ]] && return 0
+    VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
+    chmod 600 "$VAULT_PASSWORD_FILE"
+    printf 'Vault password: '
+    read -r -s password
+    printf '\n'
+    printf '%s\n' "$password" >"$VAULT_PASSWORD_FILE"
+    unset password
+}
+
 vault_view() {
     if [[ -f "$VAULT_FILE" ]]; then
-        ansible-vault view "$VAULT_FILE"
+        ensure_vault_password_file
+        ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE"
     else
         printf '{"nodes":{}}\n'
     fi
@@ -17,10 +36,11 @@ vault_view() {
 
 vault_save() {
     local input="$1" temp
+    ensure_vault_password_file
     temp="$(mktemp "$STATE_DIR/.state.XXXXXX")"
     chmod 600 "$temp"
     cat >"$temp" <"$input"
-    ansible-vault encrypt "$temp" --output "$VAULT_FILE"
+    ansible-vault encrypt "$temp" --output "$VAULT_FILE" --vault-password-file "$VAULT_PASSWORD_FILE"
     chmod 600 "$VAULT_FILE"
     rm -f "$temp"
 }
@@ -48,15 +68,27 @@ show_nodes() {
     vault_view | python3 "$ROOT_DIR/scripts/render_nodes.py" --check
 }
 
+yaml_scalar() {
+    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
 add_node() {
-    local name host bootstrap before after
+    local name host bootstrap_password bootstrap_port before after
     printf 'Node name: '; read -r name
     printf 'IP address or hostname: '; read -r host
-    printf 'Initial root SSH private key path: '; read -r bootstrap
+    printf 'Initial SSH port [22]: '
+    read -r bootstrap_port
+    bootstrap_port="${bootstrap_port:-22}"
+    [[ "$bootstrap_port" =~ ^[0-9]+$ ]] || { echo "SSH port must be numeric."; read -r -p "Press Enter" _; return 1; }
+    printf 'Initial root SSH password: '
+    read -r -s bootstrap_password
+    printf '\n'
+    [[ -n "$bootstrap_password" ]] || { echo "SSH password cannot be empty."; read -r -p "Press Enter" _; return 1; }
     before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
     after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
     vault_view >"$before"
-    python3 "$ROOT_DIR/scripts/state_cli.py" add-node "$name" "$host" --bootstrap-key "$bootstrap" <"$before" >"$after"
+    XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" add-node "$name" "$host" <"$before" >"$after"
+    unset bootstrap_password
     vault_save "$after"
     rm -f "$before" "$after"
     echo "VPN server added to encrypted state."
@@ -67,45 +99,45 @@ add_node() {
 }
 
 deploy_node() {
-    local node="$1" before extra inventory key_file user host bootstrap
+    local node="$1" before extra inventory key_file user host port bootstrap bootstrap_password
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory="$(mktemp)"
     vault_view >"$before"
     python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_port"])' "$node" <"$before")"
     key_file="$(mktemp)"
     bootstrap="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_private_key", ""), end="")' "$node" <"$before")"
-    if [[ -n "$bootstrap" ]]; then
+    bootstrap_password="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_password", ""), end="")' "$node" <"$before")"
+    if [[ -n "$bootstrap_password" ]]; then
+        user=root
+        port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", 22))' "$node" <"$before")"
+        bootstrap_password="$(yaml_scalar "$bootstrap_password")"
+        printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: $user" "      ansible_port: $port" "      ansible_password: $bootstrap_password" "      ansible_become_password: $bootstrap_password" >"$inventory"
+    elif [[ -n "$bootstrap" ]]; then
         user=root
         printf '%s' "$bootstrap" >"$key_file"
+        printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: $user" "      ansible_port: $port" "      ansible_ssh_private_key_file: $key_file" >"$inventory"
     else
         user=deploy
         python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["deploy_private_key"], end="")' "$node" <"$before" >"$key_file"
+        printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: $user" "      ansible_port: $port" "      ansible_ssh_private_key_file: $key_file" >"$inventory"
     fi
-    printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: $user" >"$inventory"
     chmod 600 "$key_file"
-    ansible-playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/site.yml" --private-key "$key_file"
+    if [[ -n "$bootstrap_password" ]]; then
+        ansible-playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/site.yml"
+    else
+        ansible-playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/site.yml" --private-key "$key_file"
+    fi
     if [[ "$user" == root ]]; then
         state_mutate mark-deployed "$node"
     fi
     rm -f "$before" "$extra" "$inventory" "$key_file"
 }
 
-node_ssh() {
-    local node="$1" command="$2" before key_file host
-    before="$(mktemp)"
-    key_file="$(mktemp)"
-    vault_view >"$before"
-    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["deploy_private_key"], end="")' "$node" <"$before" >"$key_file"
-    chmod 600 "$key_file"
-    ssh -i "$key_file" -p 22 -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new deploy@"$host" "$command"
-    rm -f "$before" "$key_file"
-}
-
 run_node_playbook() {
-    local node="$1" playbook="$2" before extra inventory key_file host
+    local node="$1" playbook="$2" before extra inventory key_file host port
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory="$(mktemp)"
@@ -113,15 +145,16 @@ run_node_playbook() {
     vault_view >"$before"
     python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_port"])' "$node" <"$before")"
     python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["deploy_private_key"], end="")' "$node" <"$before" >"$key_file"
-    printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: deploy" >"$inventory"
+    printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: deploy" "      ansible_port: $port" >"$inventory"
     chmod 600 "$key_file"
     ansible-playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/$playbook" --private-key "$key_file"
     rm -f "$before" "$extra" "$inventory" "$key_file"
 }
 
 rotate_ssh_key() {
-    local node="$1" before extra inventory old_key new_key new_pub host old_pub
+    local node="$1" before extra inventory old_key new_key new_pub host old_pub port
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory="$(mktemp)"
@@ -130,6 +163,7 @@ rotate_ssh_key() {
     new_pub="${new_key}.pub"
     vault_view >"$before"
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_port"])' "$node" <"$before")"
     old_pub="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["deploy_authorized_key"], end="")' "$node" <"$before")"
     python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["deploy_private_key"], end="")' "$node" <"$before" >"$old_key"
     chmod 600 "$old_key"
@@ -152,9 +186,9 @@ data = {
 json.dump(data, sys.stdout, indent=2)
 print()
 PY
-    printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: deploy" >"$inventory"
+    printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: deploy" "      ansible_port: $port" >"$inventory"
     ansible-playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/rotate-ssh.yml" --private-key "$old_key"
-    ssh -i "$new_key" -p 22 -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new deploy@"$host" true
+    ssh -i "$new_key" -p "$port" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new deploy@"$host" true
     state_mutate set-deploy-key "$node" "$new_key" "$new_pub"
     rm -f "$before" "$extra" "$inventory" "$old_key" "$new_key" "$new_pub"
     echo "SSH key rotated."
@@ -283,9 +317,9 @@ secure_state() {
         echo
         prompt_nav
         case "$REPLY" in
-            1) ansible-vault rekey "$VAULT_FILE" ;;
+            1) ensure_vault_password_file; ansible-vault rekey --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE"; rm -f "$VAULT_PASSWORD_FILE"; VAULT_PASSWORD_FILE="" ;;
             2) cp -p "$VAULT_FILE" "$STATE_DIR/vault.json.backup" ;;
-            3) cp -p "$STATE_DIR/vault.json.backup" "$VAULT_FILE" ;;
+            3) cp -p "$STATE_DIR/vault.json.backup" "$VAULT_FILE"; rm -f "$VAULT_PASSWORD_FILE"; VAULT_PASSWORD_FILE="" ;;
             b|m|x) return ;;
         esac
     done

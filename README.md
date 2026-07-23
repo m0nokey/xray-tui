@@ -29,7 +29,8 @@ non-privileged security profile, process and resource limits, and a small
 `tmpfs` for temporary files.
 
 The VPS must be a Debian-based system with root SSH access for its first
-deployment. Ansible creates the `deploy` user, installs its generated public
+deployment. The controller asks for the current root SSH password and passes
+it to Ansible only inside the container. Ansible creates the `deploy` user, installs its generated public
 key, disables root and password SSH login, and starts the Docker service.
 
 ## Start
@@ -39,7 +40,7 @@ key, disables root and password SSH login, and starts the Docker service.
 ```
 
 The first run creates the local Vault password. Add a VPS from the menu, enter
-its address and the initial root private-key path, and the controller will
+its address and the initial root SSH password, and the controller will
 generate the local state and deploy the server automatically.
 
 ## Menu
@@ -118,7 +119,8 @@ xray-tui.sh                      interactive controller
 run.sh                            local entrypoint
 ```
 
-The generated Vault and private keys are outside the repository. Back them up
+The generated Vault and private keys are outside the repository. The bootstrap
+password is cleared from the Vault after the deploy user is verified. Back them up
 only as encrypted Vault data.
 
 ## License

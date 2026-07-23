@@ -109,7 +109,7 @@ The `xray-tui` container mounts the repository read-only and mounts only
 over SSH.
 
 The `./run.sh` entrypoint starts the interactive controller. It creates the
-Vault on first use, asks for the initial root SSH key when a node is added,
+Vault on first use, asks for the initial root SSH password when a node is added,
 generates all Xray material locally, and runs the Ansible deployment. The
 controller is the only supported way to change access keys or deploy state;
 there is no plaintext `state.json` or manual inventory step.

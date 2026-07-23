@@ -91,6 +91,7 @@ elif opts.action == "mark-deployed":
     if len(opts.args) != 1 or opts.args[0] not in nodes:
         raise SystemExit("mark-deployed requires NODE")
     nodes[opts.args[0]]["bootstrap_private_key"] = ""
+    nodes[opts.args[0]]["bootstrap_password"] = ""
 elif opts.action == "set-deploy-key":
     if len(opts.args) != 3 or opts.args[0] not in nodes:
         raise SystemExit("set-deploy-key requires NODE PRIVATE_KEY PUBLIC_KEY")
@@ -112,6 +113,8 @@ elif opts.action == "add-node":
     bootstrap_private = ""
     if opts.bootstrap_key:
         bootstrap_private = open(opts.bootstrap_key, encoding="utf-8").read()
+    bootstrap_password = os.environ.get("XRAY_BOOTSTRAP_PASSWORD", "")
+    bootstrap_port = int(os.environ.get("XRAY_BOOTSTRAP_PORT", "22"))
     reality_private, reality_public = reality_keys()
     ports = random.SystemRandom().sample(range(30000, 60001), 2)
     vision_uuid = str(uuid.uuid4())
@@ -125,7 +128,9 @@ elif opts.action == "add-node":
         "deploy_private_key": private,
         "deploy_authorized_key": public,
         "bootstrap_private_key": bootstrap_private,
-        "ssh_port": 22,
+        "bootstrap_password": bootstrap_password,
+        "bootstrap_ssh_port": bootstrap_port,
+        "ssh_port": bootstrap_port,
         "xray": {
             "vision_port": ports[0], "xhttp_port": ports[1],
             "reality_private_key": reality_private,

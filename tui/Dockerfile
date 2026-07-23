@@ -6,7 +6,10 @@ RUN apk add --no-cache \
     curl \
     openssh-client \
     py3-pynacl \
-    python3
+    python3 \
+    sshpass
+
+RUN ansible-galaxy collection install community.docker ansible.posix
 
 WORKDIR /workspace
 ENTRYPOINT ["/workspace/xray-tui.sh"]
