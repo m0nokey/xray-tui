@@ -1,6 +1,6 @@
 # xray-tui
 
-`xray-tui` is a terminal UI for installing and managing an Xray server on a remote Debian VPS over SSH.
+`xray-tui` is a small terminal menu for installing and managing an Xray VPN server on your VPS over SSH. It runs in a temporary Docker container, so you do not need to install Python, Node.js, or other tools on your macOS or Linux computer.
 
 It creates one Docker stack with two VLESS inbounds:
 
@@ -47,25 +47,17 @@ Enter VPS password:
 
 The launcher does not install Xray on the local machine. Server-side installation is performed over SSH.
 
-## Menus
-
-The main menu selects the area to manage:
+## Menu layout
 
 ```text
-xray › menu
-____________________
 1. Server
 2. Keys
 
 x. exit
 ?:
-```
 
-### Server menu
+Server:
 
-```text
-xray › server
-____________________
 1. Install
 2. Remove
 3. Restart
@@ -75,9 +67,20 @@ b. back
 m. main
 x. exit
 ?:
+
+Keys:
+
+1. List
+2. Add
+3. Remove
+
+b. back
+m. main
+x. exit
+?:
 ```
 
-#### Server actions
+### Server actions
 
 **4. Status** reads the remote Xray configuration and displays the configured SNI, TCP Vision port, XHTTP port, and XHTTP path. It does not perform an active connectivity test.
 
@@ -101,22 +104,7 @@ The two client-facing ports are generated randomly in the range `30000-60000`. T
 
 It does not uninstall Docker or modify the rest of the operating system.
 
-### Keys menu
-
-```text
-xray › keys
-____________________
-1. List
-2. Add
-3. Remove
-
-b. back
-m. main
-x. exit
-?:
-```
-
-#### Key actions
+### Key actions
 
 **1. List** prints all generated VLESS links for every configured client. Each client normally has two links: one for TCP Vision and one for XHTTP.
 

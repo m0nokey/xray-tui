@@ -140,6 +140,11 @@ nav_print() {
     printf '?:   '
 }
 
+menu_prompt() {
+    drain
+    printf '?:   '
+}
+
 nav_invalid_inline() {
     printf '\033[1A\r\033[K?:   no valid entry!'
     sleep 0.5
@@ -1345,6 +1350,7 @@ render_home() {
     echo "1. Server"
     echo "2. Keys"
     echo
+    echo "x. exit"
 }
 
 render_server_menu() {
@@ -1363,7 +1369,7 @@ render_server_menu() {
 menu_server() {
     while :; do
         render_server_menu
-        nav_print
+        menu_prompt
         read -r ans
         case "$(first_token_lower "$ans")" in
             1) server_create_interactive ;;
@@ -1392,7 +1398,7 @@ render_keys_menu() {
 menu_keys() {
     while :; do
         render_keys_menu
-        nav_print
+        menu_prompt
         read -r ans
         case "$(first_token_lower "$ans")" in
             1) keys_list_screen ;;
@@ -1408,7 +1414,7 @@ menu_keys() {
 menu_xray() {
     while :; do
         render_home
-        nav_print
+        menu_prompt
         read -r ans
         case "$(first_token_lower "$ans")" in
             1) menu_server ;;
