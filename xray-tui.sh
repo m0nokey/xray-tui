@@ -42,7 +42,9 @@ read_ascii_secret() {
 
 create_vault_password_file() {
     local password password_confirm attempt
-    for attempt in 1 2 3; do
+    attempt=0
+    while ((attempt < 3)); do
+        attempt=$((attempt + 1))
         clear_screen
         echo "An encrypted Vault will be created on this computer." >&2
         echo "It will store your VPS access data and VPN keys." >&2
@@ -95,7 +97,9 @@ ensure_vault_password_file() {
         return 0
     fi
 
-    for attempt in 1 2 3; do
+    attempt=0
+    while ((attempt < 3)); do
+        attempt=$((attempt + 1))
         clear_screen
         echo "An encrypted Vault was found on this computer." >&2
         echo "It contains saved VPS access data and VPN keys." >&2
@@ -148,7 +152,9 @@ ensure_vault_password_file() {
 
 verify_bootstrap_ssh() {
     local host="$1" user="$2" port="$3" attempt password rc
-    for attempt in 1 2 3; do
+    attempt=0
+    while ((attempt < 3)); do
+        attempt=$((attempt + 1))
         clear_screen
         echo "Checking SSH access to the VPS." >&2
         echo "Enter the VPS password to verify the address, port, and user." >&2
