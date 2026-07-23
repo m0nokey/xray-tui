@@ -5,7 +5,6 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 VAULT_FILE="$STATE_DIR/vault.json"
 VAULT_PASSWORD_FILE=""
 MAIN_MENU_REQUESTED=0
-ALLOW_DAMAGED_VAULT_RECOVERY=0
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 export ANSIBLE_LOCAL_TEMP=/tmp/ansible-local
@@ -68,21 +67,6 @@ create_vault_password_file() {
     return 1
 }
 
-recover_damaged_vault() {
-    local damaged
-    [[ "$ALLOW_DAMAGED_VAULT_RECOVERY" == 1 ]] || return 1
-    damaged="$STATE_DIR/vault.json.damaged.$(date -u '+%Y%m%dT%H%M%SZ')"
-    mv -- "$VAULT_FILE" "$damaged"
-    clear_screen
-    echo "The previous Vault state was damaged." >&2
-    echo "It was preserved at:" >&2
-    echo "$damaged" >&2
-    echo >&2
-    echo "A new empty Vault will be created with the same password." >&2
-    sleep 2
-    return 0
-}
-
 ensure_vault_password_file() {
     local password attempt checked_state vault_view_status
     [[ -n "$VAULT_PASSWORD_FILE" && -f "$VAULT_PASSWORD_FILE" ]] && return 0
@@ -113,11 +97,10 @@ ensure_vault_password_file() {
                 return 0
             fi
             rm -f "$checked_state"
-            if recover_damaged_vault; then
-                return 0
-            fi
             rm -f "$VAULT_PASSWORD_FILE"
             VAULT_PASSWORD_FILE=""
+            echo "The Vault password is correct, but the Vault state is invalid." >&2
+            echo "Restore a valid backup or delete the Vault before continuing." >&2
             return 1
         fi
         rm -f "$checked_state"
@@ -249,7 +232,7 @@ read_vault_state() {
         rm -f "$output"
         clear_screen
         echo "Unable to read the encrypted Vault state."
-        echo "Restore a valid backup or delete the damaged Vault before continuing."
+        echo "Restore a valid backup or delete the invalid Vault before continuing."
         echo "The Vault was not changed."
         read -r -p "Press Enter to continue" _
         return 1
@@ -473,13 +456,7 @@ add_node() {
     done
     before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
     after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
-    ALLOW_DAMAGED_VAULT_RECOVERY=1
-    if ! read_vault_state "$before"; then
-        ALLOW_DAMAGED_VAULT_RECOVERY=0
-        rm -f "$before" "$after"
-        return 1
-    fi
-    ALLOW_DAMAGED_VAULT_RECOVERY=0
+    read_vault_state "$before" || { rm -f "$before" "$after"; return 1; }
     if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" add-node "$name" "$host" <"$before" >"$after"; then
         rm -f "$before" "$after"
         return 1
