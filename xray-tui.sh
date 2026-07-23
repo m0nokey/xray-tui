@@ -735,9 +735,15 @@ remove_node() {
 }
 
 vpn_servers() {
-    local count names choice node
+    local count names choice node state
     clear_screen
-    if ! count="$(vault_state_command python3 "$ROOT_DIR/scripts/state_cli.py" count)"; then
+    state="$(mktemp "$STATE_DIR/.servers.XXXXXX")"
+    if ! read_vault_state "$state"; then
+        rm -f "$state"
+        return 1
+    fi
+    if ! count="$(python3 "$ROOT_DIR/scripts/state_cli.py" count <"$state")"; then
+        rm -f "$state"
         return 1
     fi
     if [[ "$count" == 0 ]]; then
@@ -750,36 +756,42 @@ vpn_servers() {
         echo
         prompt_nav
         case "$REPLY" in
-            1) add_node ;;
-            b) return ;;
-            m) MAIN_MENU_REQUESTED=1; return ;;
-            x) exit_tui ;;
+            1) rm -f "$state"; add_node ;;
+            b) rm -f "$state"; return ;;
+            m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return ;;
+            x) rm -f "$state"; exit_tui ;;
             *) invalid_choice ;;
         esac
+        rm -f "$state"
         return
     fi
     if [[ "$count" == 1 ]]; then
-        if ! node="$(vault_state_command python3 "$ROOT_DIR/scripts/state_cli.py" names)"; then
+        if ! node="$(python3 "$ROOT_DIR/scripts/state_cli.py" names <"$state")"; then
+            rm -f "$state"
             return 1
         fi
+        rm -f "$state"
         manage_node "$node"
         return
     fi
-    show_nodes
+    python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
     prompt_nav
     case "$REPLY" in
-        b) return ;;
-        m) MAIN_MENU_REQUESTED=1; return ;;
-        x) exit_tui ;;
+        b) rm -f "$state"; return ;;
+        m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return ;;
+        x) rm -f "$state"; exit_tui ;;
         *[!0-9]*) invalid_choice ;;
         *)
-            if ! names="$(vault_state_command python3 "$ROOT_DIR/scripts/state_cli.py" names)"; then
+            if ! names="$(python3 "$ROOT_DIR/scripts/state_cli.py" names <"$state")"; then
+                rm -f "$state"
                 return 1
             fi
             node="$(printf '%s\n' "$names" | sed -n "${REPLY}p")"
+            rm -f "$state"
             [[ -n "$node" ]] && manage_node "$node" || invalid_choice
             ;;
     esac
+    rm -f "$state"
 }
 
 secure_state() {
