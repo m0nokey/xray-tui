@@ -78,14 +78,13 @@ ensure_vault_password_file() {
         return 0
     fi
 
-    clear_screen
-    echo "An encrypted Vault was found on this computer." >&2
-    echo "It contains saved VPS access data and VPN keys." >&2
-    echo "Enter the Vault password to unlock it." >&2
-    echo "If this is a first setup and you do not need the old data, use Vault > Delete Vault first." >&2
-    echo >&2
     for attempt in 1 2 3; do
         clear_screen
+        echo "An encrypted Vault was found on this computer." >&2
+        echo "It contains saved VPS access data and VPN keys." >&2
+        echo "Enter the Vault password to unlock it." >&2
+        echo "If this is a first setup and you do not need the old data, use Vault > Delete Vault first." >&2
+        echo >&2
         VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
         chmod 600 "$VAULT_PASSWORD_FILE"
         if ! read_ascii_secret "Vault password (attempt ${attempt}/3): "; then
