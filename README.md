@@ -57,9 +57,9 @@ encrypted backup archive, restore an archive, or delete the local Vault. A
 restore keeps the previous Vault as a timestamped `.restore.*` file until the
 Vault is deleted. Every state update is validated and encrypted in a temporary
 file before the active Vault is replaced, so a failed update cannot leave a
-partially written state. If an older damaged Vault is detected after the
-correct password is entered, the setup flow can preserve it as `.damaged.*`
-and create a new empty Vault without deleting it silently.
+partially written state. If an older damaged Vault is detected during `Add VPN
+server` after the correct password is entered, it is preserved as `.damaged.*`
+and a new empty Vault is created automatically without deleting it silently.
 
 Requirements: Docker with Compose and an interactive terminal on macOS or
 Linux. No Ansible, Python, SSH tools, or Xray installation is required on the

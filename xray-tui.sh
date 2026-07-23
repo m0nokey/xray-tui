@@ -5,6 +5,7 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 VAULT_FILE="$STATE_DIR/vault.json"
 VAULT_PASSWORD_FILE=""
 MAIN_MENU_REQUESTED=0
+ALLOW_DAMAGED_VAULT_RECOVERY=0
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 export ANSIBLE_LOCAL_TEMP=/tmp/ansible-local
@@ -19,14 +20,14 @@ trap cleanup EXIT INT TERM
 read_ascii_secret() {
     local prompt="$1" value
     read -r -s -e -p "$prompt" value
-    printf '\n'
+    printf '\n' >&2
     if (export LC_ALL=C; [[ -n "$value" && "$value" =~ ^[[:print:]]+$ ]]); then
         REPLY="$value"
         unset value
         return 0
     fi
     unset value
-    echo "Invalid password. Use printable ASCII characters with the English keyboard layout."
+    echo "Invalid password. Use printable ASCII characters with the English keyboard layout." >&2
     sleep 1
     clear_screen
     return 1
@@ -36,10 +37,10 @@ create_vault_password_file() {
     local password password_confirm attempt
     for attempt in 1 2 3; do
         clear_screen
-        echo "An encrypted Vault will be created on this computer."
-        echo "It will store your VPS access data and VPN keys."
-        echo "Create and remember a strong Vault password."
-        echo
+        echo "An encrypted Vault will be created on this computer." >&2
+        echo "It will store your VPS access data and VPN keys." >&2
+        echo "Create and remember a strong Vault password." >&2
+        echo >&2
         if ! read_ascii_secret "Create Vault password (attempt ${attempt}/3): "; then
             continue
         fi
@@ -52,7 +53,7 @@ create_vault_password_file() {
         if [[ "$password" != "$password_confirm" ]]; then
             unset password password_confirm
             clear_screen
-            echo "Vault passwords do not match. Please try again."
+            echo "Vault passwords do not match. Please try again." >&2
             sleep 1.5
             continue
         fi
@@ -62,36 +63,24 @@ create_vault_password_file() {
         unset password password_confirm
         return 0
     done
-    echo "Vault password setup failed after 3 attempts."
+    echo "Vault password setup failed after 3 attempts." >&2
     sleep 2.5
     return 1
 }
 
 recover_damaged_vault() {
     local damaged
+    [[ "$ALLOW_DAMAGED_VAULT_RECOVERY" == 1 ]] || return 1
+    damaged="$STATE_DIR/vault.json.damaged.$(date -u '+%Y%m%dT%H%M%SZ')"
+    mv -- "$VAULT_FILE" "$damaged"
     clear_screen
-    echo "The Vault password is correct, but the encrypted state is damaged."
-    echo "The damaged file will be preserved before a new Vault is created."
-    echo
-    echo "1. Move damaged Vault aside and create a new Vault"
-    echo "2. Return without changing it"
-    echo
-    read -r -e -p '?: ' REPLY
-    case "$REPLY" in
-        1)
-            damaged="$STATE_DIR/vault.json.damaged.$(date -u '+%Y%m%dT%H%M%SZ')"
-            mv -- "$VAULT_FILE" "$damaged"
-            rm -f "$VAULT_PASSWORD_FILE"
-            VAULT_PASSWORD_FILE=""
-            echo "Damaged Vault preserved at:"
-            echo "$damaged"
-            sleep 2
-            create_vault_password_file
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+    echo "The previous Vault state was damaged." >&2
+    echo "It was preserved at:" >&2
+    echo "$damaged" >&2
+    echo >&2
+    echo "A new empty Vault will be created with the same password." >&2
+    sleep 2
+    return 0
 }
 
 ensure_vault_password_file() {
@@ -136,12 +125,12 @@ ensure_vault_password_file() {
         VAULT_PASSWORD_FILE=""
         clear_screen
         if [[ "$attempt" -lt 3 ]]; then
-            echo "The Vault password is incorrect. Please try again."
+            echo "The Vault password is incorrect. Please try again." >&2
             sleep 1.5
             clear_screen
         fi
     done
-    echo "Vault password verification failed after 3 attempts."
+    echo "Vault password verification failed after 3 attempts." >&2
     sleep 2.5
     return 1
 }
@@ -430,7 +419,7 @@ prompt_nav() {
 }
 
 clear_screen() {
-    printf '\033[H\033[2J\033[3J'
+    printf '\033[H\033[2J\033[3J' >&2
 }
 
 exit_tui() {
@@ -484,7 +473,13 @@ add_node() {
     done
     before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
     after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
-    read_vault_state "$before" || { rm -f "$before" "$after"; return 1; }
+    ALLOW_DAMAGED_VAULT_RECOVERY=1
+    if ! read_vault_state "$before"; then
+        ALLOW_DAMAGED_VAULT_RECOVERY=0
+        rm -f "$before" "$after"
+        return 1
+    fi
+    ALLOW_DAMAGED_VAULT_RECOVERY=0
     if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" add-node "$name" "$host" <"$before" >"$after"; then
         rm -f "$before" "$after"
         return 1
