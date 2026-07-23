@@ -164,10 +164,38 @@ valid_ipv4() {
     done
 }
 
+json_file_valid() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        state = json.load(stream)
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+if not isinstance(state, dict) or not isinstance(state.get("nodes"), dict):
+    raise SystemExit(1)
+PY
+}
+
 vault_view() {
     if [[ -f "$VAULT_FILE" ]]; then
+        local output
         ensure_vault_password_file
-        ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE"
+        output="$(mktemp "$STATE_DIR/.view.XXXXXX")"
+        if ! ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" >"$output"; then
+            rm -f "$output"
+            return 1
+        fi
+        if ! json_file_valid "$output"; then
+            rm -f "$output"
+            echo "The encrypted Vault contains invalid state and was not changed." >&2
+            return 1
+        fi
+        cat "$output"
+        rm -f "$output"
     else
         printf '{"nodes":{}}\n'
     fi
@@ -175,25 +203,55 @@ vault_view() {
 
 read_vault_state() {
     local output="$1"
-    if ! vault_view >"$output" || ! python3 -c 'import json,sys; json.load(sys.stdin)' <"$output" >/dev/null 2>&1; then
+    if ! vault_view >"$output"; then
         rm -f "$output"
         clear_screen
         echo "Unable to read the encrypted Vault state."
+        echo "Restore a valid backup or delete the damaged Vault before continuing."
         echo "The Vault was not changed."
         read -r -p "Press Enter to continue" _
         return 1
     fi
 }
 
+vault_state_command() {
+    local state command_status
+    state="$(mktemp "$STATE_DIR/.read.XXXXXX")"
+    if ! read_vault_state "$state"; then
+        rm -f "$state"
+        return 1
+    fi
+    if "$@" <"$state"; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    rm -f "$state"
+    return "$command_status"
+}
+
 vault_save() {
-    local input="$1" temp
+    local input="$1" encrypted checked
     ensure_vault_password_file
-    temp="$(mktemp "$STATE_DIR/.state.XXXXXX")"
-    chmod 600 "$temp"
-    cat >"$temp" <"$input"
-    ansible-vault encrypt "$temp" --output "$VAULT_FILE" --vault-password-file "$VAULT_PASSWORD_FILE"
+    if ! json_file_valid "$input"; then
+        echo "Refusing to save invalid Vault state." >&2
+        return 1
+    fi
+    encrypted="$(mktemp "$STATE_DIR/.vault.XXXXXX")"
+    checked="$(mktemp "$STATE_DIR/.decrypted.XXXXXX")"
+    chmod 600 "$encrypted" "$checked"
+    if ! ansible-vault encrypt "$input" --output "$encrypted" --vault-password-file "$VAULT_PASSWORD_FILE"; then
+        rm -f "$encrypted" "$checked"
+        return 1
+    fi
+    if ! ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$encrypted" >"$checked" || ! json_file_valid "$checked"; then
+        rm -f "$encrypted" "$checked"
+        echo "Refusing to install an invalid encrypted Vault." >&2
+        return 1
+    fi
+    mv -f "$encrypted" "$VAULT_FILE"
     chmod 600 "$VAULT_FILE"
-    rm -f "$temp"
+    rm -f "$checked"
 }
 
 state_mutate() {
@@ -202,8 +260,17 @@ state_mutate() {
     before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
     after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
     read_vault_state "$before" || { rm -f "$before" "$after"; return 1; }
-    python3 "$ROOT_DIR/scripts/state_cli.py" "$action" "$@" <"$before" >"$after"
-    vault_save "$after"
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" "$action" "$@" <"$before" >"$after"; then
+        rm -f "$before" "$after"
+        return 1
+    fi
+    if ! vault_save "$after"; then
+        rm -f "$before" "$after"
+        clear_screen
+        echo "The Vault was not changed."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
     rm -f "$before" "$after"
 }
 
@@ -211,7 +278,12 @@ initialize_vault() {
     local temp
     temp="$(mktemp "$STATE_DIR/.initial-state.XXXXXX")"
     printf '{"nodes":{}}\n' >"$temp"
-    vault_save "$temp"
+    if ! vault_save "$temp"; then
+        rm -f "$temp"
+        echo "Vault initialization failed."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
     rm -f "$temp"
     echo "Vault initialized."
     read -r -p "Press Enter to continue" _
@@ -318,7 +390,7 @@ invalid_choice() {
 }
 
 show_nodes() {
-    vault_view | python3 "$ROOT_DIR/scripts/render_nodes.py" --check
+    vault_state_command python3 "$ROOT_DIR/scripts/render_nodes.py" --check
 }
 
 yaml_scalar() {
@@ -358,7 +430,10 @@ add_node() {
     before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
     after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
     read_vault_state "$before" || { rm -f "$before" "$after"; return 1; }
-    XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" add-node "$name" "$host" <"$before" >"$after"
+    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" add-node "$name" "$host" <"$before" >"$after"; then
+        rm -f "$before" "$after"
+        return 1
+    fi
     unset bootstrap_password
     name="$(python3 - "$before" "$after" <<'PY'
 import json
@@ -369,7 +444,13 @@ after = json.load(open(sys.argv[2], encoding="utf-8"))
 print(next(name for name in after["nodes"] if name not in before.get("nodes", {})))
 PY
 )"
-    vault_save "$after"
+    if ! vault_save "$after"; then
+        rm -f "$before" "$after"
+        clear_screen
+        echo "The VPN server was not added. The Vault was not changed."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
     rm -f "$before" "$after"
     echo "VPN server added to encrypted state."
     if ! deploy_node "$name"; then
@@ -488,9 +569,9 @@ manage_keys() {
         echo
         prompt_nav
         case "$REPLY" in
-            1) clear_screen; vault_view | python3 "$ROOT_DIR/scripts/render_keys.py" "$node"; read -r -p "Press Enter to continue" _ ;;
-            2) clear_screen; state_mutate add-key "$node"; deploy_node "$node"; echo "Access key added."; read -r -p "Press Enter" _ ;;
-            3) clear_screen; read -r -e -p 'Key id: ' key_id; state_mutate remove-key "$node" "$key_id"; deploy_node "$node"; echo "Access key removed."; read -r -p "Press Enter" _ ;;
+            1) clear_screen; vault_state_command python3 "$ROOT_DIR/scripts/render_keys.py" "$node"; read -r -p "Press Enter to continue" _ ;;
+            2) clear_screen; if state_mutate add-key "$node"; then deploy_node "$node"; echo "Access key added."; fi; read -r -p "Press Enter" _ ;;
+            3) clear_screen; read -r -e -p 'Key id: ' key_id; if state_mutate remove-key "$node" "$key_id"; then deploy_node "$node"; echo "Access key removed."; fi; read -r -p "Press Enter" _ ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
             x) exit_tui ;;
@@ -504,7 +585,7 @@ manage_node() {
     while true; do
         clear_screen
         echo
-        vault_view | python3 "$ROOT_DIR/scripts/render_nodes.py" --check --node "$node"
+        vault_state_command python3 "$ROOT_DIR/scripts/render_nodes.py" --check --node "$node"
         echo
         echo "1. Manage VPN server"
         echo "2. Manage access keys"
@@ -535,7 +616,7 @@ manage_server() {
         echo
         prompt_nav
         case "$REPLY" in
-            1) clear_screen; vault_view | python3 "$ROOT_DIR/scripts/render_nodes.py" --check --node "$node"; read -r -p "Press Enter" _ ;;
+            1) clear_screen; vault_state_command python3 "$ROOT_DIR/scripts/render_nodes.py" --check --node "$node"; read -r -p "Press Enter" _ ;;
             2) clear_screen; run_node_playbook "$node" restart.yml; read -r -p "Press Enter" _ ;;
             3) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
             4) clear_screen; remove_node "$node"; return ;;
@@ -573,7 +654,9 @@ remove_node() {
 vpn_servers() {
     local count names choice node
     clear_screen
-    count="$(vault_view | python3 "$ROOT_DIR/scripts/state_cli.py" count)"
+    if ! count="$(vault_state_command python3 "$ROOT_DIR/scripts/state_cli.py" count)"; then
+        return 1
+    fi
     if [[ "$count" == 0 ]]; then
         echo
         echo "VPN servers:"
@@ -593,7 +676,9 @@ vpn_servers() {
         return
     fi
     if [[ "$count" == 1 ]]; then
-        node="$(vault_view | python3 "$ROOT_DIR/scripts/state_cli.py" names)"
+        if ! node="$(vault_state_command python3 "$ROOT_DIR/scripts/state_cli.py" names)"; then
+            return 1
+        fi
         manage_node "$node"
         return
     fi
@@ -605,7 +690,10 @@ vpn_servers() {
         x) exit_tui ;;
         *[!0-9]*) invalid_choice ;;
         *)
-            node="$(vault_view | python3 "$ROOT_DIR/scripts/state_cli.py" names | sed -n "${REPLY}p")"
+            if ! names="$(vault_state_command python3 "$ROOT_DIR/scripts/state_cli.py" names)"; then
+                return 1
+            fi
+            node="$(printf '%s\n' "$names" | sed -n "${REPLY}p")"
             [[ -n "$node" ]] && manage_node "$node" || invalid_choice
             ;;
     esac

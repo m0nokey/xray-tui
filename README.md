@@ -55,7 +55,9 @@ encrypted local Vault and deploys the VPS automatically through Ansible.
 The `Vault` menu can change the encryption password, create a timestamped
 encrypted backup archive, restore an archive, or delete the local Vault. A
 restore keeps the previous Vault as a timestamped `.restore.*` file until the
-Vault is deleted.
+Vault is deleted. Every state update is validated and encrypted in a temporary
+file before the active Vault is replaced, so a failed update cannot leave a
+partially written state.
 
 Requirements: Docker with Compose and an interactive terminal on macOS or
 Linux. No Ansible, Python, SSH tools, or Xray installation is required on the

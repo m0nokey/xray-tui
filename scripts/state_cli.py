@@ -19,9 +19,12 @@ def read_state():
     if not raw.strip():
         raise SystemExit("encrypted Vault state is empty; refusing to modify it")
     try:
-        return json.loads(raw)
+        state = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"encrypted Vault state is invalid JSON: {exc.msg}") from exc
+    if not isinstance(state, dict) or not isinstance(state.get("nodes"), dict):
+        raise SystemExit("encrypted Vault state has an invalid structure; expected an object with nodes")
+    return state
 
 
 def ip_info(host):
