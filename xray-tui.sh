@@ -19,9 +19,15 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 read_ascii_secret() {
-    local prompt="$1" value
-    read -r -s -e -p "$prompt" value
+    local prompt="$1" value read_status
+    printf '%s' "$prompt" >&2
+    read -r -s -e value
+    read_status=$?
     printf '\n' >&2
+    if ((read_status != 0)); then
+        unset value
+        return 1
+    fi
     if (export LC_ALL=C; [[ -n "$value" && "$value" =~ ^[[:print:]]+$ ]]); then
         REPLY="$value"
         unset value
@@ -78,6 +84,17 @@ ensure_vault_password_file() {
         return 0
     fi
 
+    if ! vault_ciphertext_valid; then
+        rm -f "$VAULT_FILE" "$VAULT_PASSWORD_FILE"
+        VAULT_PASSWORD_FILE=""
+        clear_screen
+        echo "The existing Vault is damaged and was removed." >&2
+        echo "A new encrypted Vault will be created now." >&2
+        sleep 2.5
+        create_vault_password_file || return 1
+        return 0
+    fi
+
     for attempt in 1 2 3; do
         clear_screen
         echo "An encrypted Vault was found on this computer." >&2
@@ -106,9 +123,13 @@ ensure_vault_password_file() {
             rm -f "$checked_state"
             rm -f "$VAULT_PASSWORD_FILE"
             VAULT_PASSWORD_FILE=""
-            echo "The Vault password is correct, but the Vault state is invalid." >&2
-            echo "Restore a valid backup or delete the Vault before continuing." >&2
-            return 1
+            rm -f "$VAULT_FILE"
+            clear_screen
+            echo "The existing Vault state is damaged and was removed." >&2
+            echo "A new encrypted Vault will be created now." >&2
+            sleep 2.5
+            create_vault_password_file || return 1
+            return 0
         fi
         rm -f "$checked_state"
         rm -f "$VAULT_PASSWORD_FILE"
@@ -208,6 +229,24 @@ except (OSError, json.JSONDecodeError):
 if not isinstance(state, dict) or not isinstance(state.get("nodes"), dict):
     raise SystemExit(1)
 PY
+}
+
+vault_ciphertext_valid() {
+    [[ -s "$VAULT_FILE" ]] || return 1
+    awk '
+        NR == 1 {
+            fields = split($0, header, ";")
+            if (fields != 3 || header[1] != "$ANSIBLE_VAULT" ||
+                header[2] !~ /^[0-9]+[.][0-9]+$/ ||
+                header[3] !~ /^[A-Za-z0-9_-]+$/) bad = 1
+            next
+        }
+        {
+            if ($0 !~ /^[0-9A-Fa-f]+$/ || length($0) % 2 != 0) bad = 1
+            payload = 1
+        }
+        END { exit (bad || !payload) ? 1 : 0 }
+    ' "$VAULT_FILE"
 }
 
 vault_view() {
