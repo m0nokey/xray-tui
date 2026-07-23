@@ -33,15 +33,26 @@ deployment. The controller asks for the current root SSH password and passes
 it to Ansible only inside the container. Ansible creates the `deploy` user, installs its generated public
 key, disables root and password SSH login, and starts the Docker service.
 
-## Start
+## Quick start
 
 ```sh
+git clone https://github.com/m0nokey/xray-tui.git
+cd xray-tui
 ./run.sh
 ```
 
-The first run creates the local Vault password. Add a VPS from the menu, enter
-its address and the initial root SSH password, and the controller will
-generate the local state and deploy the server automatically.
+The first run builds the Alpine `xray-tui` container and asks you to create a
+Vault password. Then choose `Add VPN server`, enter the VPS address, the
+initial SSH port, and the current root password. Press `Enter` at the port
+prompt to use the default port `22`.
+
+The controller generates the VPN ports, REALITY keys, paired access keys, and
+the deploy SSH key inside the container. It stores the sensitive state in the
+encrypted local Vault and deploys the VPS automatically through Ansible.
+
+Requirements: Docker with Compose and an interactive terminal on macOS or
+Linux. No Ansible, Python, SSH tools, or Xray installation is required on the
+host.
 
 ## Menu
 
