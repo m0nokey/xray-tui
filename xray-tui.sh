@@ -73,9 +73,12 @@ yaml_scalar() {
 }
 
 add_node() {
-    local name host bootstrap_password bootstrap_port before after
+    local name host bootstrap_user bootstrap_password bootstrap_port before after
     printf 'Node name: '; read -r name
     printf 'IP address or hostname: '; read -r host
+    printf 'Initial SSH user [root]: '
+    read -r bootstrap_user
+    bootstrap_user="${bootstrap_user:-root}"
     printf 'Initial SSH port [22]: '
     read -r bootstrap_port
     bootstrap_port="${bootstrap_port:-22}"
@@ -87,7 +90,7 @@ add_node() {
     before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
     after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
     vault_view >"$before"
-    XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" add-node "$name" "$host" <"$before" >"$after"
+    XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" add-node "$name" "$host" <"$before" >"$after"
     unset bootstrap_password
     vault_save "$after"
     rm -f "$before" "$after"
@@ -99,7 +102,7 @@ add_node() {
 }
 
 deploy_node() {
-    local node="$1" before extra inventory key_file user host port bootstrap bootstrap_password
+    local node="$1" before extra inventory key_file user host port bootstrap bootstrap_password bootstrap_user
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory="$(mktemp)"
@@ -110,13 +113,14 @@ deploy_node() {
     key_file="$(mktemp)"
     bootstrap="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_private_key", ""), end="")' "$node" <"$before")"
     bootstrap_password="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_password", ""), end="")' "$node" <"$before")"
+    bootstrap_user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_user", "root"), end="")' "$node" <"$before")"
     if [[ -n "$bootstrap_password" ]]; then
-        user=root
+        user="$bootstrap_user"
         port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", 22))' "$node" <"$before")"
         bootstrap_password="$(yaml_scalar "$bootstrap_password")"
         printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: $user" "      ansible_port: $port" "      ansible_password: $bootstrap_password" "      ansible_become_password: $bootstrap_password" >"$inventory"
     elif [[ -n "$bootstrap" ]]; then
-        user=root
+        user="$bootstrap_user"
         printf '%s' "$bootstrap" >"$key_file"
         printf '%s\n' "all:" "  hosts:" "    $node:" "      ansible_host: $host" "      ansible_user: $user" "      ansible_port: $port" "      ansible_ssh_private_key_file: $key_file" >"$inventory"
     else

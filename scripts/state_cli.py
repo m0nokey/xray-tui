@@ -115,6 +115,7 @@ elif opts.action == "add-node":
         bootstrap_private = open(opts.bootstrap_key, encoding="utf-8").read()
     bootstrap_password = os.environ.get("XRAY_BOOTSTRAP_PASSWORD", "")
     bootstrap_port = int(os.environ.get("XRAY_BOOTSTRAP_PORT", "22"))
+    bootstrap_user = os.environ.get("XRAY_BOOTSTRAP_USER", "root")
     reality_private, reality_public = reality_keys()
     ports = random.SystemRandom().sample(range(30000, 60001), 2)
     vision_uuid = str(uuid.uuid4())
@@ -129,6 +130,7 @@ elif opts.action == "add-node":
         "deploy_authorized_key": public,
         "bootstrap_private_key": bootstrap_private,
         "bootstrap_password": bootstrap_password,
+        "bootstrap_user": bootstrap_user,
         "bootstrap_ssh_port": bootstrap_port,
         "ssh_port": bootstrap_port,
         "xray": {

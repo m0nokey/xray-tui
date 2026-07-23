@@ -43,8 +43,10 @@ cd xray-tui
 
 The first run builds the Alpine `xray-tui` container and asks you to create a
 Vault password. Then choose `Add VPN server`, enter the VPS address, the
-initial SSH port, and the current root password. Press `Enter` at the port
-prompt to use the default port `22`.
+initial SSH user, port, and password. Press `Enter` at the user and port
+prompts to use `root` and the default port `22`. The initial user must have
+sudo access; Ansible uses privilege escalation (`become`) to perform root
+tasks.
 
 The controller generates the VPN ports, REALITY keys, paired access keys, and
 the deploy SSH key inside the container. It stores the sensitive state in the
