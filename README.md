@@ -1,115 +1,53 @@
 # xray-tui
 
-A small text UI (TUI) tool to install and manage **Xray (VLESS-XHTTP-REALITY)** on your Debian VPS over SSH — without installing anything on your local machine except Docker.
+`xray-tui` is a terminal UI for installing and managing an Xray server on a remote Debian VPS over SSH.
 
-You run **one command** on your laptop/PC, then use a simple menu to:
+It creates one Docker stack with two VLESS inbounds:
 
-- Install Xray on a fresh VPS
-- Generate ready-to-use VLESS links
-- List / add / remove access keys
+- VLESS over TCP with XTLS Vision and REALITY;
+- VLESS over XHTTP with REALITY.
 
-> ⚠️ Security Notice  
-> Always review scripts from the internet before running them on your system.
+The tool generates complete VLESS links for both transports and lets you manage client UUIDs from the menu.
 
----
-
-## What it does
-
-On your **remote VPS (Debian 12+)**, the tool will:
-
-- Install **Docker** if it is not installed
-- Pull the official Xray image: `ghcr.io/xtls/xray-core:latest`
-- Create a **VLESS-XHTTP-REALITY** server:
-  - Protocol: VLESS
-  - Transport: `network: xhttp`
-  - Security: REALITY (TLS camouflage to a real site)
-- Set up nightly auto-updates for:
-  - Debian OS (security and regular updates)
-  - Docker and docker-compose plugin
-  - Xray image
-
-You end up with:
-
-- `/opt/xray/config.json` – Xray configuration
-- `/opt/xray/docker-compose.yaml` – Docker stack
-- A running `xray` container managed entirely from the TUI
-
----
+> **Security notice:** review the script before running it. It connects to the VPS as `root`, installs Docker, changes APT sources, and creates systemd update timers.
 
 ## Requirements
 
-### Local machine (your laptop/PC)
+### Local machine
 
-- macOS or Linux
-- **Docker** installed:
-  - macOS → Docker Desktop
-  - Linux → Docker Engine
+- macOS or Linux;
+- Bash;
+- `curl` for the one-line launcher;
+- Docker Desktop on macOS or Docker Engine with Compose on Linux.
 
-The TUI runs **inside a Docker container**. It does not install Python, Go, Node, or anything else on your host.
+The launcher builds a temporary Alpine-based admin image and runs the TUI inside it. The temporary container and image are removed when the script exits.
 
 ### Remote VPS
 
-- Debian **12 or newer**
-- Root SSH access (password is fine for the first run)
+- Debian with `apt` and systemd;
+- root SSH access;
+- an SSH server reachable on the selected port;
+- a public IPv4 address or DNS name reachable by clients.
 
----
-
-## Auto-updates on the VPS
-
-Once installed, the VPS will automatically:
-
-- Update Debian packages daily
-- Keep Docker and docker-compose plugin up to date
-- Pull the latest `ghcr.io/xtls/xray-core:latest`
-- Restart the Xray stack with the same configuration
-
-You do not need to log in regularly just to update Xray.
-
----
+The first connection uses a root password. The script accepts up to three login attempts. The SSH host key is accepted into a temporary `known_hosts` file for that run.
 
 ## Quick start
-
-### 1. Run the TUI from your local machine
-
-On macOS or Linux:
 
 ```bash
 bash -c "$(curl -sSfL --http2 --proto '=https' 'https://raw.githubusercontent.com/m0nokey/xray-tui/refs/heads/main/xray-tui.sh')"
 ```
 
-This:
-
-- Pulls a small Docker image
-- Starts **xray-tui** inside Docker
-- Opens a text menu in your terminal
-
-Nothing is permanently installed on your local system (only a Docker image).
-
----
-
-### 2. Connect to your VPS
-
-The TUI will ask:
+The script builds the local admin image, starts the TUI, and asks for:
 
 ```text
-Enter VPS IP address: 1.2.3.4
-Enter VPS port (default 22): 22
+Enter VPS IP address:
+Enter VPS port (default 22):
 Enter VPS password:
 ```
 
-Provide:
+The launcher does not install Xray on the local machine. Server-side installation is performed over SSH.
 
-- VPS IP address
-- SSH port (default: 22)
-- Root password
-
-If the login succeeds, you will see the main menu.
-
----
-
-### 3. Main menu
-
-Home screen:
+## Main menu
 
 ```text
 xray › menu
@@ -127,144 +65,150 @@ Keys
 
 b.   back
 x.   exit
-?:   _
+?:
 ```
 
-Meaning:
+### Server actions
 
-- **1. Status** – show current protocol, domain (SNI) and port
-- **2. Install** – install or reinstall the Xray stack on the VPS
-- **3. Restart** – restart the Xray Docker container
-- **4. Remove** – stop and remove Xray plus its config (Docker and OS stay)
-- **5. List** – print all existing VLESS active keys
-- **6. Add** – generate new VLESS keys
-- **7. Remove** – delete all keys or a single key
+**1. Status** reads the remote Xray configuration and displays the configured SNI, TCP Vision port, XHTTP port, and XHTTP path. It does not perform an active connectivity test.
 
----
+**2. Install** creates a new server only when `/opt/xray/config.json` does not already exist. It is not an in-place reinstall operation. If a server already exists, the TUI reports that it has already been created.
 
-### 4. First install
+The TUI asks for:
 
-From the menu, choose:
+- SNI, default: `api.github.com`;
+- XHTTP path, default: `/`.
+
+The two client-facing ports are generated randomly in the range `30000-60000`. They are different and are not entered manually.
+
+**3. Restart** restarts the remote `xray` service through Docker Compose.
+
+**4. Remove** asks for confirmation and then:
+
+- stops and removes the Xray Compose stack;
+- removes the Xray configuration and Compose file;
+- removes the OS and Docker update timers and helper scripts;
+- removes `/opt/xray`.
+
+It does not uninstall Docker or modify the rest of the operating system.
+
+### Key actions
+
+**5. List** prints all generated VLESS links for every configured client. Each client normally has two links: one for TCP Vision and one for XHTTP.
+
+**6. Add** accepts between `1` and `100` new keys. If no server exists yet, this action bootstraps one with the default SNI and path before adding the keys.
+
+**7. Remove** opens a submenu:
 
 ```text
-2
+1.   Remove all keys
+2.   Remove a single key
 ```
 
-You will be prompted for:
+Removing keys changes only the VLESS client lists and REALITY short IDs. It does not remove the server.
 
-- **SNI** – domain used for REALITY camouflage (for example `api.github.com`)
-- **Path** – HTTP path for xhttp (for example `/` or `/api`)
-- **Listen port** – default `443` or try any from 20000 to 60000
+The following commands are available on every screen:
 
-The script will then:
+- `b` goes back;
+- `x` exits the TUI.
 
-- Install Docker if needed
-- Create `/opt/xray/config.json` with **VLESS-XHTTP-REALITY** inbound
-- Create `/opt/xray/docker-compose.yaml`
-- Start the `xray` container
+## Remote layout
 
-You can verify with:
+After installation, the main files are:
 
 ```text
-1
+/opt/xray/config.json
+/opt/xray/docker-compose.yaml
 ```
 
-Example output:
+The Compose service uses:
 
 ```text
-Protocol:    vless-xhttp-reality
-Server Name: api.github.com:443
+ghcr.io/xtls/xray-core:latest
 ```
 
-(Values depend on your choices.)
+The generated container has these relevant constraints:
 
----
+- read-only root filesystem;
+- `/tmp` mounted as a temporary filesystem;
+- all Linux capabilities dropped;
+- `no-new-privileges` enabled;
+- `pids_limit: 512`;
+- `mem_limit: 512m`;
+- `nofile: 262144`;
+- restart policy: `unless-stopped`;
+- only the two generated ports are published as TCP ports.
 
-### 5. Generate keys
+## Generated Xray configuration
 
-From the menu, choose:
+The configuration contains two VLESS inbounds that share one REALITY key pair and server name.
+
+### TCP Vision
 
 ```text
-6
+network: tcp
+security: reality
+flow: xtls-rprx-vision
 ```
 
-The TUI asks:
+The generated link contains `type=tcp` and `flow=xtls-rprx-vision`.
+
+### XHTTP
 
 ```text
-How many keys do you need?
-Enter a number (e.g., 1–100).
+network: xhttp
+security: reality
+path: <the path entered during installation>
 ```
 
-Example: enter `3`.
+The generated link contains `type=xhttp` and the URL-encoded XHTTP path.
 
-The tool will generate 3 unique UUIDs and print 3 full VLESS URLs, for example:
+Both inbounds use VLESS with `decryption: none`, REALITY, and Xray sniffing with HTTP, TLS, and QUIC destination overrides. The Docker Compose stack publishes TCP ports only; this project does not create a UDP listener.
+
+## VLESS links
+
+For every client UUID, the TUI generates links similar to:
 
 ```text
-vless://xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx@1.2.3.4:443?type=xhttp&encryption=none&security=reality&sni=api.github.com&fp=chrome&pbk=...&sid=...&path=%2F#vless-xhttp-reality
+vless://UUID@SERVER:PORT?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=api.github.com&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID#vless-vision-reality
 ```
 
-You can copy these URLs into:
+```text
+vless://UUID@SERVER:PORT?type=xhttp&encryption=none&security=reality&sni=api.github.com&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID&path=%2F#vless-xhttp-reality
+```
 
-- **Shadowrocket** (iOS/Mac)
-- **v2rayNG** (Android)
-- **v2rayN** (Windows)
-- Any other VLESS client that supports REALITY + xhttp
+The `sid` value is deterministically derived from the client UUID. The `pbk` value is derived from the REALITY private key and is distributed as part of the client link. Treat complete links and UUIDs as secrets because anyone who has one can use the server as that client.
 
----
+Clients must support the selected VLESS transport and REALITY. Examples include Shadowrocket, v2rayNG, and v2rayN, subject to their support for the exact Xray transport options.
 
-### 6. Manage keys
+## Automatic updates on the VPS
 
-- To **list** all existing links: choose menu item `5` (List).
-- To **remove**:
-  - choose menu item `7` (Remove)
-  - then select:
-    - remove all keys, or
-    - remove one key by number
+The first installation creates two systemd timers.
 
-Only client entries in `config.json` are deleted.  
-The server itself keeps running unless you choose **4. Remove** in the Server section.
+### Operating system updates
 
----
+`os-updater.timer` runs daily around `01:00` with a randomized delay of up to 13 minutes. It updates Debian packages, performs cleanup, and reboots the VPS when a kernel or package update requires it.
 
-## Protocol overview (VLESS-XHTTP-REALITY)
+### Xray image updates
 
-Short summary:
+`docker-updater.timer` runs daily at `02:00`. It:
 
-- **VLESS** – lightweight protocol (no built-in TLS layer)
-- **REALITY** – makes traffic look like a real HTTPS connection to a real host (for example `api.github.com`)
-- **XHTTP** – HTTP-like transport that looks similar to normal HTTP/2 traffic and is friendly to proxies and DPI
+1. pulls `ghcr.io/xtls/xray-core:latest`;
+2. stops the existing Compose stack;
+3. recreates it with the existing `/opt/xray/config.json`;
+4. prunes unused Docker images and build cache.
 
-Your traffic:
+The Xray configuration is preserved during this update.
 
-- Looks like a normal HTTPS session to the configured SNI
-- Does not require a real TLS certificate on your VPS
-- Uses a different stack than old VLESS-TCP-XTLS-Vision
+## Security considerations
 
----
-
-## Notes
-
-- All Xray files live under `/opt/xray/` on the VPS
-- You can always:
-  - **3. Restart** – restart the container if something is stuck
-  - **2. Install** – reinstall the stack (config and compose are recreated)
-- Generated links include all required parameters: `uuid`, `pbk`, `sid`, `sni`, port, path, and so on
-
-For better security after the initial setup:
-
-- Switch VPS SSH to **key-based auth**
-- Disable password login
-- Treat generated VLESS links as secrets (like passwords)
-
----
-
-## Security Notice
-
-This tool connects to your VPS as **root** over SSH to install and manage Docker/Xray.  
-Keep your VPS credentials and VLESS links private and rotate them if needed.
-
----
+- The tool operates as `root` on the remote VPS.
+- The generated VLESS links are credentials; do not publish them.
+- Use SSH keys and disable SSH password authentication after the initial setup.
+- Choose an SNI that is a real TLS-capable hostname and reachable from the VPS.
+- Keep generated client links private and remove keys that are no longer needed.
+- Review the downloaded script before executing a one-line installer.
 
 ## License
 
-Licensed under the MIT license. See [LICENSE](./LICENSE) for details.
+MIT. See [LICENSE](./LICENSE).
