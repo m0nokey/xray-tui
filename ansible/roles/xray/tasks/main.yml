@@ -102,6 +102,32 @@
     mode: "0600"
   notify: Restart Xray
 
+- name: Build Unbound image when sources changed
+  ansible.builtin.shell: |
+    set -eu
+    state_dir="{{ xray_dir }}/.build-fingerprints"
+    state_file="$state_dir/unbound.sha256"
+    mkdir -p "$state_dir"
+    fingerprint="$({
+      sha256sum compose.yml
+      sha256sum unbound/Dockerfile
+      sha256sum unbound/unbound.conf
+    } | sha256sum | awk '{print $1}')"
+    old_fingerprint="$(cat "$state_file" 2>/dev/null || true)"
+    if docker image inspect local/xray-tui-unbound:latest >/dev/null 2>&1 \
+      && [ "$fingerprint" = "$old_fingerprint" ]; then
+      exit 0
+    fi
+    docker compose --file compose.yml build unbound
+    printf '%s\n' "$fingerprint" > "$state_file"
+    echo "xray-unbound-built"
+  args:
+    chdir: "{{ xray_dir }}"
+    executable: /bin/bash
+  register: xray_unbound_build
+  changed_when: "'xray-unbound-built' in xray_unbound_build.stdout"
+  when: xray_dns_profile != 'disabled'
+
 - name: Validate Unbound configuration
   ansible.builtin.command:
     argv:
