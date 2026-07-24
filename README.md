@@ -5,6 +5,11 @@ It runs on your computer and lets you install, check, restart, update, and
 remove Xray VPN servers through a menu. Access keys can be added or removed
 individually without changing keys that are already in use.
 
+> **Legacy version:** the old direct-SSH approach is preserved in the
+> [`legacy/`](./legacy/) folder. It does not include the current VPS hardening
+> and Ansible management flow. Use it only if you specifically need the old
+> lightweight approach. The current project is the manager described below.
+
 The VPS runs Xray in Docker with two protocols:
 
 - VLESS TCP with Vision and REALITY;
