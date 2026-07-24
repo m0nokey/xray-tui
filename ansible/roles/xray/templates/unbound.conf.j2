@@ -1,7 +1,11 @@
 server:
   interface: 0.0.0.0
-  access-control: 0.0.0.0/0 allow
+  access-control: 10.0.0.0/8 allow
+  access-control: 172.16.0.0/12 allow
+  access-control: 192.168.0.0/16 allow
+  access-control: 0.0.0.0/0 refuse
   port: 5353
+  directory: "/opt/unbound/etc/unbound"
   do-daemonize: no
   username: unbound
   pidfile: "/tmp/unbound.pid"
@@ -45,10 +49,12 @@ server:
   msg-cache-size: 32m
   rrset-cache-size: 64m
   infra-cache-numhosts: 20000
-  cache-min-ttl: 60
-  cache-max-ttl: 86400
+  cache-min-ttl: 0
+  cache-max-ttl: 21600
   cache-max-negative-ttl: 900
   serve-expired: no
+  extended-statistics: yes
+  statistics-inhibit-zero: yes
   module-config: "respip validator iterator"
 {% for policy in xray_dns_profiles[xray_dns_profile].rpz %}
 rpz:
@@ -58,6 +64,11 @@ rpz:
   rpz-action-override: nxdomain
   rpz-log: no
 {% endfor %}
+
+remote-control:
+  control-enable: yes
+  control-use-cert: no
+  control-interface: /run/unbound/unbound.ctl
 
 forward-zone:
   name: "."
