@@ -1,0 +1,9 @@
+---
+- name: Harden Xray VPN node SSH
+  hosts: xray_nodes
+  become: true
+  tasks:
+    - name: Run SSH hardening tasks
+      ansible.builtin.import_role:
+        name: system_base
+        tasks_from: harden_ssh

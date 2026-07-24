@@ -8,6 +8,49 @@
         delay: 2
         timeout: 30
         sleep: 2
+
+    - name: Check whether the current SSH configuration backup exists
+      ansible.builtin.stat:
+        path: /var/lib/xray-tui/backup/sshd_config
+      register: xray_tui_ssh_config_backup_current
+
+    - name: Check whether the legacy SSH configuration backup exists
+      ansible.builtin.stat:
+        path: /etc/ssh/sshd_config.xray-tui.bak
+      register: xray_tui_ssh_config_backup_legacy
+
+    - name: Check whether Xray TUI SSH hardening is still installed
+      ansible.builtin.stat:
+        path: /etc/ssh/sshd_config.d/90-xray-tui-hardening.conf
+      register: xray_tui_ssh_dropin
+
+    - name: Check whether the Xray Compose project still exists
+      ansible.builtin.stat:
+        path: /opt/xray/compose.yml
+      register: xray_tui_compose
+
+    - name: Detect a previously interrupted cleanup
+      ansible.builtin.set_fact:
+        xray_tui_partial_cleanup: >-
+          {{ not xray_tui_ssh_config_backup_current.stat.exists
+             and not xray_tui_ssh_config_backup_legacy.stat.exists
+             and not xray_tui_ssh_dropin.stat.exists
+             and not xray_tui_compose.stat.exists }}
+
+    - name: Select the original SSH configuration backup
+      ansible.builtin.set_fact:
+        xray_tui_ssh_config_backup_path: >-
+          {{ '/var/lib/xray-tui/backup/sshd_config'
+             if xray_tui_ssh_config_backup_current.stat.exists
+             else '/etc/ssh/sshd_config.xray-tui.bak' }}
+
+    - name: Require an original SSH configuration backup
+      ansible.builtin.assert:
+        that:
+          - xray_tui_ssh_config_backup_current.stat.exists or xray_tui_ssh_config_backup_legacy.stat.exists or xray_tui_partial_cleanup
+        fail_msg: >-
+          The original SSH configuration backup is missing. Remote cleanup was stopped
+          to avoid leaving the VPS locked to Xray TUI SSH settings.
   tasks:
     - name: Check whether the Xray Compose project exists
       ansible.builtin.stat:
@@ -21,9 +64,254 @@
           - compose.yml
         state: absent
         remove_orphans: true
+        remove_images: all
+        remove_volumes: true
       when: xray_compose.stat.exists
 
     - name: Remove Xray files
       ansible.builtin.file:
         path: /opt/xray
         state: absent
+
+    - name: Stop Xray TUI updater services
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl disable --now xray-docker-updater.timer xray-docker-updater.service 2>/dev/null || true
+        systemctl disable --now xray-tui-os-updater.timer xray-tui-os-updater.service 2>/dev/null || true
+        systemctl stop xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true
+        systemctl reset-failed xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Remove Xray TUI updater files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/sbin/xray-docker-updater
+        - /etc/systemd/system/xray-docker-updater.service
+        - /etc/systemd/system/xray-docker-updater.timer
+        - /usr/local/sbin/xray-tui-os-updater
+        - /etc/systemd/system/xray-tui-os-updater.service
+        - /etc/systemd/system/xray-tui-os-updater.timer
+
+    - name: Reload systemd after removing Xray TUI units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Stop and disable Docker
+      ansible.builtin.systemd_service:
+        name: docker
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove Docker packages installed for the VPN stack
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+          - python3-docker
+        state: absent
+        purge: true
+        autoremove: true
+      when: ansible_facts.os_family == "Debian"
+
+    - name: Remove Docker runtime data and configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/docker
+        - /var/lib/containerd
+        - /etc/docker
+        - /etc/containerd
+
+    - name: Remove the Docker group created for the VPN stack
+      ansible.builtin.group:
+        name: docker
+        state: absent
+      failed_when: false
+
+    - name: Remove Docker APT integration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/docker.sources
+        - /etc/apt/preferences.d/docker
+        - /etc/apt/keyrings/docker.gpg
+
+    - name: Remove updater configuration installed by Xray TUI
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/apt.conf.d/50unattended-upgrades
+        - /etc/apt/apt.conf.d/20auto-upgrades
+
+    - name: Remove updater packages installed by Xray TUI
+      ansible.builtin.apt:
+        name:
+          - unattended-upgrades
+          - apt-listchanges
+        state: absent
+        purge: true
+        autoremove: true
+      when: ansible_facts.os_family == "Debian"
+
+    - name: Stop SSH rollback units before restoring the original configuration
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl stop xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true
+        systemctl reset-failed xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Remove Xray TUI SSH drop-in
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/90-xray-tui-hardening.conf
+        state: absent
+
+    - name: Restore the original sshd_config
+      ansible.builtin.copy:
+        src: "{{ xray_tui_ssh_config_backup_path }}"
+        dest: /etc/ssh/sshd_config
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: xray_tui_ssh_config_backup_current.stat.exists or xray_tui_ssh_config_backup_legacy.stat.exists
+
+    - name: Validate the restored SSH configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -t -f /etc/ssh/sshd_config
+      changed_when: false
+
+    - name: Check whether original SSH host keys were backed up
+      ansible.builtin.stat:
+        path: /var/lib/xray-tui/.ssh-host-keys-backed-up
+      register: xray_tui_host_keys_backup
+
+    - name: Restore original SSH host keys
+      ansible.builtin.shell: |
+        set -euo pipefail
+        find /etc/ssh -maxdepth 1 -type f -name 'ssh_host_*' -delete
+        cp -a /var/lib/xray-tui/ssh-host-keys/. /etc/ssh/
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: xray_tui_host_keys_backup.stat.exists
+
+    - name: Reload SSH after restoring the original configuration
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl reload ssh || systemctl reload sshd
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Check whether Xray TUI created the deploy user
+      ansible.builtin.stat:
+        path: /var/lib/xray-tui/.deploy-user-created
+      register: xray_tui_deploy_user_marker
+
+
+    - name: Check whether the current sources.list backup exists
+      ansible.builtin.stat:
+        path: /var/lib/xray-tui/backup/sources.list
+      register: xray_tui_sources_list_backup_current
+
+    - name: Check whether the legacy sources.list backup exists
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.xray-tui.bak
+      register: xray_tui_sources_list_backup_legacy
+
+    - name: Select the original sources.list backup
+      ansible.builtin.set_fact:
+        xray_tui_sources_list_backup_path: >-
+          {{ '/var/lib/xray-tui/backup/sources.list'
+             if xray_tui_sources_list_backup_current.stat.exists
+             else '/etc/apt/sources.list.xray-tui.bak' }}
+
+    - name: Restore the original sources.list when it was backed up
+      ansible.builtin.copy:
+        src: "{{ xray_tui_sources_list_backup_path }}"
+        dest: /etc/apt/sources.list
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - ansible_facts.os_family == "Debian"
+        - xray_tui_sources_list_backup_current.stat.exists or xray_tui_sources_list_backup_legacy.stat.exists
+
+    - name: Remove Xray TUI APT source files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/debian.sources
+
+    - name: Stop remaining deploy-user processes before removing the user
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if id deploy >/dev/null 2>&1; then
+          pkill -TERM -u deploy 2>/dev/null || true
+          sleep 1
+          pkill -KILL -u deploy 2>/dev/null || true
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when:
+        - xray_tui_deploy_user_marker.stat.exists or xray_tui_partial_cleanup
+        - (ansible_user | default('')) != 'deploy'
+
+    - name: Remove deploy user created by Xray TUI
+      ansible.builtin.user:
+        name: deploy
+        state: absent
+        remove: true
+        force: true
+      when:
+        - xray_tui_deploy_user_marker.stat.exists or xray_tui_partial_cleanup
+        - (ansible_user | default('')) != 'deploy'
+
+    - name: Remove deploy group created by Xray TUI
+      ansible.builtin.group:
+        name: deploy
+        state: absent
+      when:
+        - xray_tui_deploy_user_marker.stat.exists or xray_tui_partial_cleanup
+        - (ansible_user | default('')) != 'deploy'
+
+    - name: Remove deploy sudoers file
+      ansible.builtin.file:
+        path: /etc/sudoers.d/deploy
+        state: absent
+
+    - name: Remove Xray TUI backup and marker files after cleanup
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/ssh/sshd_config.xray-tui.bak
+        - /etc/ssh/.xray-tui-ed25519-host-key
+        - /etc/apt/sources.list.xray-tui.bak
+        - /var/lib/xray-tui/.ssh-host-keys-backed-up
+        - /var/lib/xray-tui/.deploy-user-created
+        - /var/lib/xray-tui/ssh-host-keys
+        - /var/lib/xray-tui/backup
+      when: (ansible_user | default('')) != 'deploy'
+
+    - name: Remove Xray TUI state directory after cleanup
+      ansible.builtin.file:
+        path: /var/lib/xray-tui
+        state: absent
+      when: (ansible_user | default('')) != 'deploy'

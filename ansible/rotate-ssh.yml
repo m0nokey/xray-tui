@@ -34,3 +34,4 @@
         line: "{{ old_deploy_authorized_key }}"
         regexp: "^{{ old_deploy_authorized_key | regex_escape }}$"
         state: absent
+      when: rotate_remove_old_key | default(true) | bool

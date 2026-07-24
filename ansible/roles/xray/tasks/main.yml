@@ -5,11 +5,12 @@
       - xray_state is mapping
       - xray_state.vision_port is number
       - xray_state.xhttp_port is number
+      - ssh_port is number
       - xray_state.reality_private_key | length > 0
       - xray_state.reality_public_key | length > 0
       - xray_state.reality_short_id | length > 0
       - xray_state.access_keys is sequence
-    fail_msg: Pass the encrypted local Xray state with -e @state.yml.
+    fail_msg: Pass the encrypted local Xray state and SSH port with -e @state.yml.
 
 - name: Create Xray directory
   ansible.builtin.file:

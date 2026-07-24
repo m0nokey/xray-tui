@@ -13,6 +13,43 @@
   ansible.builtin.set_fact:
     system_base_debian_codename: "{{ ansible_facts.distribution_release }}"
 
+- name: Create Xray TUI backup directory
+  ansible.builtin.file:
+    path: "{{ system_base_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check whether the original sources.list was backed up
+  ansible.builtin.stat:
+    path: "{{ system_base_sources_list_backup }}"
+  register: system_base_sources_list_backup_stat
+
+- name: Check whether sources.list exists
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list
+  register: system_base_sources_list_stat
+
+- name: Back up the original sources.list
+  ansible.builtin.copy:
+    src: /etc/apt/sources.list
+    dest: "{{ system_base_sources_list_backup }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - ansible_facts.os_family == "Debian"
+    - not system_base_sources_list_backup_stat.stat.exists
+    - system_base_sources_list_stat.stat.exists
+
+- name: Configure timezone
+  ansible.builtin.command:
+    cmd: "timedatectl set-timezone {{ system_base_timezone }}"
+  changed_when: false
+  when: ansible_facts.service_mgr == "systemd"
+
 - name: Configure Debian APT sources
   ansible.builtin.template:
     src: debian.sources.j2
@@ -135,6 +172,14 @@
     group: "{{ deploy_user }}"
     mode: "0700"
 
+- name: Ensure deploy Ansible temporary directory permissions
+  ansible.builtin.file:
+    path: "/home/{{ deploy_user }}/.ansible/tmp"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0700"
+
 - name: Install deploy authorized key
   ansible.builtin.copy:
     dest: "/home/{{ deploy_user }}/.ssh/authorized_keys"
@@ -153,90 +198,117 @@
     content: |
       {{ deploy_user }} ALL=(ALL) NOPASSWD:ALL
 
-- name: Generate missing SSH host keys
-  ansible.builtin.command:
-    cmd: ssh-keygen -A
-  changed_when: false
-  when: ssh_hardening_enabled | bool
-
-- name: Detect controller SSH KEX algorithms
-  ansible.builtin.command:
-    cmd: ssh -Q kex
-  delegate_to: localhost
-  register: harden_ssh_controller_kex_cmd
-  changed_when: false
-  when: ssh_hardening_enabled | bool
-
-- name: Detect VPS SSH KEX algorithms
-  ansible.builtin.command:
-    cmd: ssh -Q kex
-  register: harden_ssh_vps_kex_cmd
-  changed_when: false
-  when: ssh_hardening_enabled | bool
-
-- name: Select shared hardened SSH KEX algorithms
-  ansible.builtin.set_fact:
-    harden_ssh_kex_algorithms: >-
-      {{
-        harden_ssh_preferred_kex
-        | select('in', harden_ssh_vps_kex_cmd.stdout_lines)
-        | select('in', harden_ssh_controller_kex_cmd.stdout_lines)
-        | join(',')
-      }}
-  when: ssh_hardening_enabled | bool
-
-- name: Require shared hardened SSH KEX algorithms
-  ansible.builtin.fail:
-    msg: "No shared hardened SSH KEX algorithm exists between controller and VPS."
-  when:
-    - ssh_hardening_enabled | bool
-    - harden_ssh_kex_algorithms | length == 0
-
-- name: Check current sshd_config
-  ansible.builtin.stat:
-    path: /etc/ssh/sshd_config
-  register: system_base_sshd_config
-  when: ssh_hardening_enabled | bool
-
-- name: Backup current sshd_config
-  ansible.builtin.copy:
-    src: /etc/ssh/sshd_config
-    dest: /etc/ssh/sshd_config.xray-tui.bak
-    remote_src: true
-    owner: root
-    group: root
-    mode: "0644"
-  when:
-    - ssh_hardening_enabled | bool
-    - system_base_sshd_config.stat.exists | default(false)
-
-- name: Remove obsolete Xray TUI SSH drop-in
-  ansible.builtin.file:
-    path: /etc/ssh/sshd_config.d/90-xray-tui-hardening.conf
-    state: absent
-  when: ssh_hardening_enabled | bool
-
-- name: Install complete hardened sshd_config
-  ansible.builtin.template:
-    src: sshd_config.j2
-    dest: /etc/ssh/sshd_config
-    owner: root
-    group: root
-    mode: "0644"
-    validate: /usr/sbin/sshd -t -f %s
-  when: ssh_hardening_enabled | bool
-
-- name: Reload SSH daemon after hardening
-  ansible.builtin.shell: |
-    set -euo pipefail
-    systemctl reload ssh || systemctl reload sshd
-  args:
-    executable: /bin/bash
-  changed_when: false
-  when: ssh_hardening_enabled | bool
-
 - name: Enable Docker
   ansible.builtin.systemd_service:
     name: docker
     enabled: true
     state: started
+
+- name: Install unattended upgrade packages
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: 86400
+  when:
+    - ansible_facts.os_family == "Debian"
+    - system_base_enable_os_updater | bool
+
+- name: Configure unattended upgrades
+  ansible.builtin.template:
+    src: 50unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+  when: system_base_enable_os_updater | bool
+
+- name: Configure apt periodic upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Download-Upgradeable-Packages "1";
+      APT::Periodic::AutocleanInterval "7";
+      APT::Periodic::Unattended-Upgrade "1";
+  when: system_base_enable_os_updater | bool
+
+- name: Install Xray TUI OS updater
+  ansible.builtin.template:
+    src: xray-tui-os-updater.j2
+    dest: /usr/local/sbin/xray-tui-os-updater
+    owner: root
+    group: root
+    mode: "0755"
+  when: system_base_enable_os_updater | bool
+
+- name: Install Xray TUI OS updater service
+  ansible.builtin.template:
+    src: xray-tui-os-updater.service.j2
+    dest: /etc/systemd/system/xray-tui-os-updater.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: system_base_enable_os_updater | bool
+  register: system_base_os_updater_service
+
+- name: Install Xray TUI OS updater timer
+  ansible.builtin.template:
+    src: xray-tui-os-updater.timer.j2
+    dest: /etc/systemd/system/xray-tui-os-updater.timer
+    owner: root
+    group: root
+    mode: "0644"
+  when: system_base_enable_os_updater | bool
+  register: system_base_os_updater_timer
+
+- name: Enable Xray TUI OS updater timer
+  ansible.builtin.systemd_service:
+    name: xray-tui-os-updater.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ system_base_os_updater_service.changed or system_base_os_updater_timer.changed }}"
+  when: system_base_enable_os_updater | bool
+
+- name: Install Xray TUI Docker updater
+  ansible.builtin.template:
+    src: docker-project-updater.j2
+    dest: "/usr/local/sbin/{{ system_base_docker_updater_name }}-docker-updater"
+    owner: root
+    group: root
+    mode: "0755"
+  when: system_base_enable_docker_updater | bool
+
+- name: Install Xray TUI Docker updater service
+  ansible.builtin.template:
+    src: docker-project-updater.service.j2
+    dest: "/etc/systemd/system/{{ system_base_docker_updater_name }}-docker-updater.service"
+    owner: root
+    group: root
+    mode: "0644"
+  when: system_base_enable_docker_updater | bool
+  register: system_base_docker_updater_service
+
+- name: Install Xray TUI Docker updater timer
+  ansible.builtin.template:
+    src: docker-project-updater.timer.j2
+    dest: "/etc/systemd/system/{{ system_base_docker_updater_name }}-docker-updater.timer"
+    owner: root
+    group: root
+    mode: "0644"
+  when: system_base_enable_docker_updater | bool
+  register: system_base_docker_updater_timer
+
+- name: Enable Xray TUI Docker updater timer
+  ansible.builtin.systemd_service:
+    name: "{{ system_base_docker_updater_name }}-docker-updater.timer"
+    enabled: true
+    state: started
+    daemon_reload: "{{ system_base_docker_updater_service.changed or system_base_docker_updater_timer.changed }}"
+  when: system_base_enable_docker_updater | bool

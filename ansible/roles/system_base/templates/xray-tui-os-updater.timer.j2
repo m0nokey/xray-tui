@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Xray TUI OS updater nightly
+
+[Timer]
+OnCalendar=*-*-* 01:00
+RandomizedDelaySec=13m
+Persistent=true
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run {{ system_base_docker_updater_name }} Docker updater
+
+[Timer]
+OnCalendar={{ system_base_docker_updater_calendar }}
+RandomizedDelaySec={{ system_base_docker_updater_randomized_delay_sec }}
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

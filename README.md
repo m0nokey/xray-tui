@@ -1,96 +1,108 @@
 # xray-tui
 
-An Alpine-based local controller for deploying and managing a small Xray VPN
-server through SSH and Ansible. The VPS runs one hardened Xray container. The
-controller does not require Docker on the VPS beyond the Docker runtime used
-by that container and does not create a server-side key database.
+`xray-tui` is a simple console manager for Xray VPN servers and access keys.
+It runs on your computer and lets you install, check, restart, update, and
+remove Xray VPN servers through a menu. Access keys can be added or removed
+individually without changing keys that are already in use.
 
-## What it does
+The VPS runs Xray in Docker with two protocols:
 
-- deploys VLESS TCP Vision and VLESS XHTTP with REALITY;
-- generates ports, REALITY material, and paired access keys locally;
-- stores all sensitive data in an encrypted Ansible Vault;
-- adds or revokes one access-key pair without changing other users;
-- checks and restarts a VPN server over SSH;
-- rotates the deploy SSH key;
-- applies baseline VPS SSH and Docker hardening through Ansible.
+- VLESS TCP with Vision and REALITY;
+- VLESS XHTTP with REALITY.
 
-The Vault contains VPS access data, deploy keys, VPN ports, REALITY keys, and
-paired client UUIDs. It is stored under `$HOME/.local/state/xray`, encrypted at
-rest, and never committed to Git or copied to the VPS as a database.
+## Supported VPS
 
-## Requirements
+Any VPS provider is supported when the target VPS runs **Debian 12 or newer**.
 
-The host needs Bash and Docker Compose. The local `xray-tui` image is built from
-Alpine and contains only the controller runtime: `ansible-playbook`,
-`ansible-vault`, `ssh`, `ssh-keygen`, `curl`, Python, and PyNaCl. It has a
-read-only root filesystem, no Docker socket, no Linux capabilities, a
-non-privileged security profile, process and resource limits, and a small
-`tmpfs` for temporary files.
+Ubuntu and other operating systems are not supported. The VPS must have:
 
-The VPS must be a Debian-based system with root SSH access for its first
-deployment. The controller asks for the current root SSH password and passes
-it to Ansible only inside the container. Ansible creates the `deploy` user, installs its generated public
-key, disables root and password SSH login, and starts the Docker service.
+- SSH access;
+- an initial user with `sudo` access, usually `root`;
+- password authentication available for the first installation;
+- a public IP address or resolvable hostname.
 
-## Quick start
+The controller installs Docker, Xray, automatic updates, and SSH hardening on
+the VPS. The initial SSH password is used only during Ansible operations and is
+stored locally only inside the encrypted Vault.
+
+## Requirements On Your Computer
+
+You need:
+
+- Docker with Docker Compose;
+- Bash;
+- an interactive terminal;
+- `curl` for checking the Docker base image version.
+
+You do not need to install Ansible, Python, SSH tools, or Xray on your
+computer. They run inside the local Alpine-based controller container.
+
+## Quick Start
 
 ```sh
 git clone https://github.com/m0nokey/xray-tui.git
 cd xray-tui
-./run.sh
+bash run.sh
 ```
 
-The first run builds the Alpine `xray-tui` container and asks you to create a
-Vault password. Then choose `Add VPN server`, enter the VPS address, the
-initial SSH user, port, and password. Press `Enter` at the user and port
-prompts to use `root` and the default port `22`. The initial user must have
-sudo access; Ansible uses privilege escalation (`become`) to perform root
-tasks.
+On the first start, the controller builds its local container and asks you to
+create a Vault password. Then choose `2. Add VPN server`.
 
-The controller generates the VPN ports, REALITY keys, paired access keys, and
-the deploy SSH key inside the container. It stores the sensitive state in the
-encrypted local Vault and deploys the VPS automatically through Ansible.
+The setup asks for:
 
-The `Vault` menu can change the encryption password, create a timestamped
-encrypted backup archive, restore an archive, or delete the local Vault. A
-restore keeps the previous Vault as a timestamped `.restore.*` file until the
-Vault is deleted. Every state update is validated and encrypted in a temporary
-file before the active Vault is replaced, so a failed update cannot leave a
-partially written state. An invalid Vault is never used as input and must be
-restored from an encrypted backup or deleted explicitly before continuing.
+1. VPS IP address or hostname;
+2. initial SSH user, default `root`;
+3. initial SSH port, default `22`;
+4. initial SSH password;
+5. Reality camouflage domain, default `github.com`.
 
-Requirements: Docker with Compose and an interactive terminal on macOS or
-Linux. No Ansible, Python, SSH tools, or Xray installation is required on the
-host.
+After a successful deployment, the controller generates the VPN ports, REALITY
+keys, paired access keys, and a new deploy SSH key. All sensitive connection
+data is saved in the encrypted local Vault.
 
-## Menu
+## Main Menu
 
 ```text
 1. VPN servers
 2. Add VPN server
 3. Vault
 
+i. info
 x. exit
 ?:
 ```
 
-Adding a VPN server is transactional. The candidate state is kept in a temporary
-file while Ansible runs and is written to the encrypted Vault only after a
-successful deployment. If the same VPS IP and SSH port are entered again, the
-existing node is reused and Ansible converges it idempotently with the saved
-deployment credentials instead of creating a duplicate node.
+Press `i` on any menu to see help for that screen. Press `Enter` after the
+help text to return to the same menu. `b` goes back, `m` returns to the main
+menu, and `x` exits the controller.
 
-For a selected server:
+## Managing A Server
+
+When a server is selected, the controller shows its IP address, status,
+country, creation date, and provider.
 
 ```text
-VPN Server:
+1. Manage VPN server
+2. Manage access keys
 
-           IP               STATUS   COUNTRY   CREATED      PROVIDER
+b. back
+m. main
+i. info
+x. exit
+?:
+```
 
-           203.0.113.10     Active   DE        2026-07-23   Example Provider
+### Manage VPN Server
 
-Status is confirmed by both the VPS service state and TCP reachability:
+```text
+1. Check VPN status
+2. Restart VPN server
+3. Rotate SSH key
+4. Remove VPN server
+```
+
+The status check tests management SSH access, the Xray container, and both VPN
+ports:
 
 ```text
 Active           Xray is running and both VPN ports are reachable.
@@ -99,65 +111,87 @@ VPN unavailable  The VPS responded, but Xray is not confirmed running.
 Unreachable      No VPN or management port responded; DPI or a provider firewall may be involved.
 ```
 
-  1. Manage VPN server
-  2. Manage access keys
+`Rotate SSH key` creates a new deploy key, verifies it, and then revokes the
+old key. The VPN access keys are not changed.
 
-  b. back
-  m. main
-  x. exit
-  ?:
-```
+`Remove VPN server` removes the Xray installation, Docker stack, automatic
+updaters, and the deploy account from the VPS. It restores the original SSH
+configuration and removes the server from the Vault only after remote cleanup
+has completed successfully.
 
-Server management:
-
-```text
-Manage VPN server:
-
-  1. Check VPN status
-  2. Restart VPN server
-  3. Rotate SSH key
-  4. Remove VPN server
-
-  b. back
-  m. main
-  x. exit
-  ?:
-```
-
-Access-key management:
+### Manage Access Keys
 
 ```text
-Manage access keys:
-
-  1. Show keys
-  2. Add key
-  3. Remove key
-
-  b. back
-  m. main
-  x. exit
-  ?:
+1. Show
+2. Add
+3. Remove
 ```
 
-Each access-key profile contains two links, one for Vision and one for XHTTP.
-Removing a profile revokes both UUIDs together.
+One access-key profile contains two UUIDs:
 
-## Layout
+- one Vision UUID;
+- one XHTTP UUID.
+
+The `Show` action displays both client links. `Add` creates from 1 to 50 new
+profiles in one operation. `Remove` shows the key numbers and both protocol
+UUIDs, then removes the selected pair together. The last number removes all
+access keys after confirmation.
+
+## Vault
+
+The Vault is a local encrypted file containing VPS access data, SSH keys, VPN
+ports, REALITY material, and access-key UUIDs. It is created on the first
+setup or through `Vault > Create Vault`.
+
+The file is stored on your computer at:
 
 ```text
-tui/Dockerfile                   Alpine xray-tui image
-tui/compose.yml                  hardened local container
-ansible/                         VPS roles and templates
-scripts/state_cli.py             local Vault state operations
-scripts/render_nodes.py          aligned node/status table
-scripts/render_keys.py           paired VLESS link output
-xray-tui.sh                      interactive controller
-run.sh                            local entrypoint
+$HOME/.local/state/xray/vault.json
 ```
 
-The generated Vault and private keys are outside the repository. The bootstrap
-password is cleared from the Vault after the deploy user is verified. Back them up
-only as encrypted Vault data.
+The Vault menu provides:
+
+```text
+1. Change encryption password
+2. Backup encrypted state
+3. Restore encrypted state
+4. Delete Vault
+```
+
+The Vault password is never stored in the repository or on the VPS. Keep the
+password and encrypted backups safe: the password cannot be recovered from the
+Vault file.
+
+## Security And Updates
+
+Ansible configures the VPS through SSH and applies the following management
+steps:
+
+- creates the `deploy` management user with a generated SSH key;
+- enables passwordless sudo for that management user;
+- disables root and password SSH login after installation;
+- generates a random non-default SSH management port;
+- applies hardened SSH settings and rotates the SSH host key;
+- runs Xray in Docker;
+- installs automatic Debian security updates;
+- installs a scheduled Docker image updater for Xray.
+
+The Xray configuration is rendered on the VPS from the state supplied by the
+local controller. The local Vault is the source of truth for managing nodes
+and keys; no separate key database is created by the controller.
+
+## Repository Layout
+
+```text
+xray-tui.sh                      interactive console manager
+run.sh                           local launcher and image freshness check
+tui/Dockerfile                    Alpine controller image
+tui/compose.yml                  local hardened controller container
+ansible/                          VPS playbooks, roles, and templates
+scripts/state_cli.py              encrypted state operations
+scripts/render_nodes.py           server table and status output
+scripts/render_keys.py            paired VLESS link output
+```
 
 ## License
 

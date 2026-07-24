@@ -1,5 +1,5 @@
 ---
-- name: Deploy Xray VPN
+- name: Bootstrap Xray VPN node
   hosts: xray_nodes
   become: true
   pre_tasks:
@@ -8,8 +8,8 @@
         delay: 2
         timeout: 30
         sleep: 2
-  roles:
-    - role: system_base
-      vars:
-        ssh_hardening_enabled: false
-    - role: xray
+  tasks:
+    - name: Bootstrap deploy access
+      ansible.builtin.import_role:
+        name: system_base
+        tasks_from: bootstrap

@@ -1,0 +1,45 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+export APT_LISTCHANGES_FRONTEND=none
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LOG=/var/log/xray-tui-os-updater.log
+exec > >(tee -a "$LOG") 2>&1
+
+exec 9>/run/xray-tui-os-updater.lock
+flock -n 9 || { echo "[INFO] another apt run is in progress"; exit 0; }
+
+retry() {
+    local attempts="$1" pause="$2" n=1
+    shift 2
+    until "$@"; do
+        if ((n >= attempts)); then
+            echo "[ERROR] command failed after ${attempts} attempts: $*"
+            return 1
+        fi
+        echo "[WARN] attempt ${n} failed; retrying in ${pause}s"
+        sleep "$pause"
+        ((n++))
+    done
+}
+
+echo "[INFO] === $(date -Is) start ==="
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+retry 5 10 apt-get -qq -o Acquire::Retries=3 update
+retry 3 20 apt-get -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    -o DPkg::Lock::Timeout=600 \
+    -y dist-upgrade
+apt-get -y autoremove --purge || true
+apt-get clean || true
+
+if [[ -f /run/reboot-required || -f /var/run/reboot-required ]]; then
+    echo "[INFO] reboot required; restarting"
+    systemctl reboot || /sbin/reboot
+else
+    echo "[INFO] reboot not required"
+fi
+echo "[INFO] === $(date -Is) end ==="

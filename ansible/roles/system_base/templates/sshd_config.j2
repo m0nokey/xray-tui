@@ -1,5 +1,5 @@
 Protocol 2
-Port {{ ansible_port | default(22) }}
+Port {{ ssh_port | int }}
 MaxSessions 2
 PermitRootLogin no
 PermitTunnel no
@@ -11,7 +11,7 @@ PasswordAuthentication no
 LoginGraceTime 10
 IgnoreRhosts yes
 HostbasedAuthentication no
-AllowGroups {{ deploy_user }}
+AllowGroups {{ harden_ssh_allow_groups }}
 PermitOpen none
 MaxAuthTries 3
 StrictModes yes

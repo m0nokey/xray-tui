@@ -115,13 +115,24 @@ controller is the only supported way to change access keys or deploy state;
 there is no plaintext `state.json` or manual inventory step.
 
 The local `xray-tui` controller keeps the generated ports, REALITY key pair, short ID, access
-key pairs, and the deploy SSH key under `$HOME/.local/state/xray/`. The
+key pairs, the deploy SSH key, and encrypted initial SSH credentials under `$HOME/.local/state/xray/`. The
 directory is protected locally and never belongs to the Git worktree. Ansible transfers only the
 rendered files over SSH and does not create a second access-key database on
 the VPS.
 
+The controller asks for the Reality camouflage hostname (SNI) when a new node
+is added. It stores that value in the encrypted node state and uses it for the
+Xray `serverNames`, Reality destination, and both generated client links.
+The initial SSH address, port, user, and password remain encrypted in the
+Vault for bootstrap recovery, reinstall, and removal fallback, then disappear
+when the node record is deleted.
+
 Restart and removal are also Ansible operations. The controller invokes
 `restart.yml` or `remove.yml`; it does not run Docker commands or delete VPS
-files directly over SSH. Removal stops and removes the Xray Compose project
-and `/opt/xray`, while leaving the VPS base hardening and Docker runtime
-available for a later deployment.
+files directly over SSH. Before hardening, the original SSH configuration,
+host keys, and managed APT source file are backed up under
+`/var/lib/xray-tui/`. Removal stops and removes the Xray Compose project,
+updater timers, Docker packages, and Xray TUI files; restores the original
+SSH and APT files; removes the Xray TUI-created `deploy` user; and leaves the
+timezone at UTC. Cleanup refuses to proceed when the original SSH
+configuration backup is missing.
