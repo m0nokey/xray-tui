@@ -796,16 +796,16 @@ select_dns_profile() {
         if [[ -n "${DNS_FILTER_CURRENT_PROFILE:-}" ]]; then
             printf '%s\n' "Current profile: ${DNS_FILTER_CURRENT_PROFILE}"
         fi
-        printf '%s\n' "Detected VPS resources: ${VPS_VCPUS} vCPU, $((VPS_RAM_MB / 1024)) GB RAM"
+        printf '%s\n' "Detected VPS resources: ${VPS_VCPUS} vCPU, $(((VPS_RAM_MB + 512) / 1024)) GB RAM"
         echo
         menu_option 1 "Disabled - no DNS blocklists"
-        if ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 1024)); then
+        if ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 768)); then
             menu_option 2 "Basic - URLhaus malware protection"
         fi
-        if ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 2048)); then
+        if ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 1536)); then
             menu_option 3 "Balanced - URLhaus and HaGeZi TIF Mini"
         fi
-        if ((VPS_VCPUS >= 2 && VPS_RAM_MB >= 2048)); then
+        if ((VPS_VCPUS >= 2 && VPS_RAM_MB >= 1800)); then
             menu_option 4 "Full - six RPZ blocklists"
             if ((VPS_RAM_MB < 4096)); then
                 printf '%s\n' "  Full is available, but 4 GB RAM is recommended."
@@ -816,15 +816,15 @@ select_dns_profile() {
         case "$REPLY" in
             1) DNS_FILTER_PROFILE=disabled; return 0 ;;
             2)
-                ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 1024)) && { DNS_FILTER_PROFILE=basic; return 0; }
+                ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 768)) && { DNS_FILTER_PROFILE=basic; return 0; }
                 invalid_choice
                 ;;
             3)
-                ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 2048)) && { DNS_FILTER_PROFILE=balanced; return 0; }
+                ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 1536)) && { DNS_FILTER_PROFILE=balanced; return 0; }
                 invalid_choice
                 ;;
             4)
-                ((VPS_VCPUS >= 2 && VPS_RAM_MB >= 2048)) && { DNS_FILTER_PROFILE=full; return 0; }
+                ((VPS_VCPUS >= 2 && VPS_RAM_MB >= 1800)) && { DNS_FILTER_PROFILE=full; return 0; }
                 invalid_choice
                 ;;
             i) show_info dns ;;
