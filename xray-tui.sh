@@ -715,7 +715,7 @@ open_node_ssh_session() {
     printf '%s\n' "Opening SSH session to ${user}@${host}:${port}."
     printf '%s\n' "Exit the remote shell to return to Xray TUI."
     echo
-    if ssh -i "$key_file" -p "$port" \
+    if ssh -tt -i "$key_file" -p "$port" \
         -o IdentitiesOnly=yes \
         -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
