@@ -8,17 +8,23 @@ LOG=/var/log/xray-tui-os-updater.log
 exec > >(tee -a "$LOG") 2>&1
 
 exec 9>/run/xray-tui-os-updater.lock
-flock -n 9 || { echo "[INFO] another apt run is in progress"; exit 0; }
+if ! flock -n 9; then
+    echo "[INFO] another apt run in progress, exiting"
+    exit 0
+fi
+
+trap 'echo "[ERROR] failed at line $LINENO (exit=$?)"' ERR
 
 retry() {
-    local attempts="$1" pause="$2" n=1
+    local attempts="$1" pause="$2"
     shift 2
+    local n=1
     until "$@"; do
-        if ((n >= attempts)); then
-            echo "[ERROR] command failed after ${attempts} attempts: $*"
+        if (( n >= attempts )); then
+            echo "[ERROR] after ${attempts} attempts: $*"
             return 1
         fi
-        echo "[WARN] attempt ${n} failed; retrying in ${pause}s"
+        echo "[WARN] attempt $n failed; retrying in ${pause}s: $*"
         sleep "$pause"
         ((n++))
     done
@@ -27,19 +33,46 @@ retry() {
 echo "[INFO] === $(date -Is) start ==="
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+
+install -m0755 -d /etc/apt/keyrings || true
+curl -fsSL --tlsv1.3 --http2 --proto '=https' \
+    "https://download.docker.com/linux/debian/gpg" \
+    | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg || true
+chmod 0644 /etc/apt/keyrings/docker.gpg || true
+
 retry 5 10 apt-get -qq -o Acquire::Retries=3 update
 retry 3 20 apt-get -qq \
     -o Dpkg::Options::="--force-confdef" \
     -o Dpkg::Options::="--force-confold" \
     -o DPkg::Lock::Timeout=600 \
     -y dist-upgrade
+
 apt-get -y autoremove --purge || true
 apt-get clean || true
 
-if [[ -f /run/reboot-required || -f /var/run/reboot-required ]]; then
-    echo "[INFO] reboot required; restarting"
+need_reboot=false
+reason=""
+current_kernel="$(uname -r || true)"
+latest_installed_kernel="$(ls -1 /lib/modules 2>/dev/null | sort -V | tail -1 || true)"
+if [ -n "$latest_installed_kernel" ] && [ "$current_kernel" != "$latest_installed_kernel" ]; then
+    need_reboot=true
+    reason="kernel $current_kernel -> $latest_installed_kernel"
+fi
+
+if [ -f /run/reboot-required ] || [ -f /var/run/reboot-required ]; then
+    need_reboot=true
+    if [ -z "$reason" ]; then
+        reason="reboot-required flag"
+    else
+        reason="$reason + reboot-required flag"
+    fi
+fi
+
+if $need_reboot; then
+    echo "[INFO] rebooting: $reason"
     systemctl reboot || /sbin/reboot
 else
     echo "[INFO] reboot not required"
 fi
+
 echo "[INFO] === $(date -Is) end ==="

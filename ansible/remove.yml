@@ -93,6 +93,7 @@
         - /etc/systemd/system/xray-docker-updater.service
         - /etc/systemd/system/xray-docker-updater.timer
         - /usr/local/sbin/xray-tui-os-updater
+        - /etc/logrotate.d/xray-tui-os-updater
         - /etc/systemd/system/xray-tui-os-updater.service
         - /etc/systemd/system/xray-tui-os-updater.timer
 
@@ -153,6 +154,7 @@
       loop:
         - /etc/apt/apt.conf.d/50unattended-upgrades
         - /etc/apt/apt.conf.d/20auto-upgrades
+        - /var/log/xray-tui-os-updater.log
 
     - name: Remove updater packages installed by Xray TUI
       ansible.builtin.apt:

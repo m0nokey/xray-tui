@@ -248,6 +248,15 @@
     mode: "0755"
   when: system_base_enable_os_updater | bool
 
+- name: Install Xray TUI OS updater logrotate config
+  ansible.builtin.template:
+    src: xray-tui-os-updater.logrotate.j2
+    dest: /etc/logrotate.d/xray-tui-os-updater
+    owner: root
+    group: root
+    mode: "0644"
+  when: system_base_enable_os_updater | bool
+
 - name: Install Xray TUI OS updater service
   ansible.builtin.template:
     src: xray-tui-os-updater.service.j2

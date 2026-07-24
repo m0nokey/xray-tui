@@ -3,6 +3,12 @@ services:
     image: {{ xray_image }}
     container_name: {{ xray_container_name }}
     command: ["run", "-c", "/etc/xray/config.json"]
+    healthcheck:
+      test: ["CMD", "xray", "run", "-test", "-config=/etc/xray/config.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped
     read_only: true
     cap_drop: ["ALL"]

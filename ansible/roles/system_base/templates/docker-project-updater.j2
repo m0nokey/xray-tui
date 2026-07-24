@@ -4,37 +4,78 @@ set -Eeuo pipefail
 compose_file="{{ system_base_docker_updater_compose_file }}"
 project="{{ system_base_docker_updater_name }}"
 container="{{ xray_container_name | default('xray') }}"
+image_ref="{{ xray_image }}"
 health_timeout="{{ system_base_docker_updater_health_timeout }}"
+rollback_ref="local/xray-rollback:$(date +%s)"
 
 log_i() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 log_e() { printf '\033[1;31m[ERR]\033[0m %s\n' "$*" >&2; }
 die() { log_e "$*"; exit 1; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
+
+need_cmd docker
+need_cmd flock
 
 exec 9>/run/{{ system_base_docker_updater_name }}-docker-updater.lock
 flock -n 9 || { log_i "another update run is in progress"; exit 0; }
 
 wait_health() {
-    local i state running
+    local i status
     for ((i = 0; i < health_timeout; i++)); do
-        state="$(docker inspect -f '{% raw %}{{.State.Health.Status}}{% endraw %}' "$container" 2>/dev/null || true)"
-        running="$(docker inspect -f '{% raw %}{{.State.Running}}{% endraw %}' "$container" 2>/dev/null || true)"
-        if [[ "$state" == healthy || ( -z "$state" && "$running" == true ) ]]; then
-            return 0
-        fi
+        status="$(docker inspect -f '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}{% endraw %}' "$container" 2>/dev/null || true)"
+        [[ "$status" == "healthy" ]] && return 0
+        [[ "$status" == "unhealthy" || "$status" == "exited" || "$status" == "dead" ]] && return 1
         sleep 1
     done
     return 1
 }
 
+rollback() {
+    local old_id="$1"
+    [[ -n "$old_id" ]] || {
+        log_e "no previous image available for rollback"
+        return 1
+    }
+    log_e "rolling back Xray image"
+    docker image tag "$old_id" "$image_ref" || return 1
+    docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-recreate xray || return 1
+    wait_health || return 1
+    log_i "rollback completed"
+}
+
 [[ -f "$compose_file" ]] || exit 0
-log_i "pulling Xray image"
+docker compose -f "$compose_file" -p "$project" config -q || die "compose syntax error"
+
+old_id="$(docker inspect -f '{% raw %}{{.Image}}{% endraw %}' "$container" 2>/dev/null || true)"
+old_health="$(docker inspect -f '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}{% endraw %}' "$container" 2>/dev/null || true)"
+
+log_i "pulling Xray image ${image_ref}"
 docker compose -f "$compose_file" -p "$project" pull xray
+new_id="$(docker image inspect -f '{% raw %}{{.Id}}{% endraw %}' "$image_ref" 2>/dev/null || true)"
+[[ -n "$new_id" ]] || die "pulled Xray image is unavailable"
+
+if [[ -n "$old_id" && "$old_id" == "$new_id" && "$old_health" == "healthy" ]]; then
+    log_i "Xray image unchanged and container is healthy; nothing to do"
+    exit 0
+fi
+
+if [[ -n "$old_id" ]]; then
+    docker image tag "$old_id" "$rollback_ref"
+fi
+
 log_i "recreating Xray"
-docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-recreate xray
-if ! wait_health; then
-    log_e "Xray is unhealthy after update"
+if ! docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-recreate xray; then
+    [[ -n "$old_id" ]] && rollback "$old_id" || true
     exit 1
 fi
+
+if ! wait_health; then
+    log_e "Xray is unhealthy after update"
+    [[ -n "$old_id" ]] && rollback "$old_id" || true
+    exit 1
+fi
+
+docker image rm "$rollback_ref" >/dev/null 2>&1 || true
 docker image prune -f >/dev/null 2>&1 || true
 docker builder prune -f --filter 'until={{ system_base_docker_updater_prune_builder_until }}' >/dev/null 2>&1 || true
 log_i "Xray update complete"
