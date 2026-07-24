@@ -1,0 +1,8 @@
+---
+- name: Reload SSH
+  ansible.builtin.shell: |
+    set -euo pipefail
+    systemctl reload ssh || systemctl reload sshd
+  args:
+    executable: /bin/bash
+  changed_when: false

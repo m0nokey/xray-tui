@@ -1,0 +1,8 @@
+ansible/inventory/hosts.yml
+ansible/group_vars/all.yml
+ansible/.ansible-tmp/
+*.vault-password
+*.key
+*.pem
+*.crt
+__pycache__/

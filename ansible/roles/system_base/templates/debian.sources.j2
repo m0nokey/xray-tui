@@ -1,0 +1,11 @@
+Types: deb deb-src
+URIs: https://deb.debian.org/debian
+Suites: {{ system_base_debian_codename }} {{ system_base_debian_codename }}-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb deb-src
+URIs: https://security.debian.org/debian-security
+Suites: {{ system_base_debian_codename }}-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg

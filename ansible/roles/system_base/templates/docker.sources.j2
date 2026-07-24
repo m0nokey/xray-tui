@@ -1,0 +1,6 @@
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: {{ ansible_facts.distribution_release }}
+Components: stable
+Architectures: {{ ansible_facts.architecture | regex_replace('x86_64', 'amd64') | regex_replace('aarch64', 'arm64') }}
+Signed-By: /etc/apt/keyrings/docker.gpg

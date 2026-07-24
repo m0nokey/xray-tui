@@ -1,0 +1,6 @@
+all:
+  children:
+    xray_nodes:
+      hosts:
+        vpn.example.com:
+          ansible_user: root

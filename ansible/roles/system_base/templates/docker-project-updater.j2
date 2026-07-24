@@ -1,0 +1,40 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+compose_file="{{ system_base_docker_updater_compose_file }}"
+project="{{ system_base_docker_updater_name }}"
+container="{{ xray_container_name | default('xray') }}"
+health_timeout="{{ system_base_docker_updater_health_timeout }}"
+
+log_i() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
+log_e() { printf '\033[1;31m[ERR]\033[0m %s\n' "$*" >&2; }
+die() { log_e "$*"; exit 1; }
+
+exec 9>/run/{{ system_base_docker_updater_name }}-docker-updater.lock
+flock -n 9 || { log_i "another update run is in progress"; exit 0; }
+
+wait_health() {
+    local i state running
+    for ((i = 0; i < health_timeout; i++)); do
+        state="$(docker inspect -f '{% raw %}{{.State.Health.Status}}{% endraw %}' "$container" 2>/dev/null || true)"
+        running="$(docker inspect -f '{% raw %}{{.State.Running}}{% endraw %}' "$container" 2>/dev/null || true)"
+        if [[ "$state" == healthy || ( -z "$state" && "$running" == true ) ]]; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+[[ -f "$compose_file" ]] || exit 0
+log_i "pulling Xray image"
+docker compose -f "$compose_file" -p "$project" pull xray
+log_i "recreating Xray"
+docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-recreate xray
+if ! wait_health; then
+    log_e "Xray is unhealthy after update"
+    exit 1
+fi
+docker image prune -f >/dev/null 2>&1 || true
+docker builder prune -f --filter 'until={{ system_base_docker_updater_prune_builder_until }}' >/dev/null 2>&1 || true
+log_i "Xray update complete"

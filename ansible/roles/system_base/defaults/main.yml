@@ -1,0 +1,48 @@
+---
+deploy_user: deploy
+deploy_authorized_key: ""
+system_base_deploy_user_marker: /var/lib/xray-tui/.deploy-user-created
+system_base_backup_dir: /var/lib/xray-tui/backup
+ssh_hardening_enabled: true
+system_base_manage_debian_repo: true
+system_base_sources_list_backup: /var/lib/xray-tui/backup/sources.list
+system_base_timezone: UTC
+system_base_enable_os_updater: true
+system_base_enable_docker_updater: true
+system_base_docker_updater_name: xray
+system_base_docker_updater_compose_file: /opt/xray/compose.yml
+system_base_docker_updater_calendar: "*-*-* 02:00"
+system_base_docker_updater_randomized_delay_sec: 7m
+system_base_docker_updater_timeout: 30m
+system_base_docker_updater_health_timeout: 120
+system_base_docker_updater_prune_builder_until: 24h
+system_base_ssh_rollback_unit: xray-tui-ssh-rollback
+system_base_ssh_rollback_delay: 2min
+system_base_ssh_config_backup: /var/lib/xray-tui/backup/sshd_config
+system_base_legacy_ssh_config_backup: /etc/ssh/sshd_config.xray-tui.bak
+system_base_legacy_sources_list_backup: /etc/apt/sources.list.xray-tui.bak
+system_base_ssh_host_key_marker: /etc/ssh/.xray-tui-ed25519-host-key
+system_base_ssh_host_keys_backup_dir: /var/lib/xray-tui/ssh-host-keys
+system_base_ssh_host_keys_backup_marker: /var/lib/xray-tui/.ssh-host-keys-backed-up
+harden_ssh_initial_user: root
+harden_ssh_preferred_kex:
+  - mlkem768x25519-sha256
+  - sntrup761x25519-sha512
+  - sntrup761x25519-sha512@openssh.com
+
+system_base_required_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg2
+  - lsb-release
+  - python3
+  - python3-docker
+  - sudo
+
+system_base_docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin

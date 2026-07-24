@@ -1,0 +1,34 @@
+services:
+  xray-tui:
+    build:
+      context: ..
+      dockerfile: tui/Dockerfile
+    image: local/xray-tui:latest
+    pull_policy: never
+    container_name: xray-tui
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    entrypoint: ["/bin/bash", "/workspace/xray-tui.sh"]
+    environment:
+      XDG_STATE_HOME: /state
+      XRAY_TUI_HOST_STATE_DIR: ${XDG_STATE_HOME:-${HOME}/.local/state}/xray
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 0.5
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777
+    volumes:
+      - type: bind
+        source: ..
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${XDG_STATE_HOME:-${HOME}/.local/state}/xray
+        target: /state/xray
+    restart: "no"

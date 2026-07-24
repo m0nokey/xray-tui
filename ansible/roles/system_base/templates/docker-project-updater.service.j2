@@ -1,0 +1,16 @@
+[Unit]
+Description=Update {{ system_base_docker_updater_name }} Docker stack
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+ConditionPathExists={{ system_base_docker_updater_compose_file }}
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/{{ system_base_docker_updater_name }}-docker-updater
+TimeoutStartSec={{ system_base_docker_updater_timeout }}
+Nice=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

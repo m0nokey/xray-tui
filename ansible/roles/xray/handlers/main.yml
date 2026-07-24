@@ -1,0 +1,14 @@
+---
+- name: Restart Xray
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ xray_compose_path }}"
+      - up
+      - -d
+      - --force-recreate
+      - --no-deps
+      - xray
+  changed_when: true

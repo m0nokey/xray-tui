@@ -1,0 +1,44 @@
+Protocol 2
+Port {{ ssh_port | int }}
+MaxSessions 2
+PermitRootLogin no
+PermitTunnel no
+PrintLastLog no
+Compression no
+UsePAM yes
+UseDNS no
+PasswordAuthentication no
+LoginGraceTime 10
+IgnoreRhosts yes
+HostbasedAuthentication no
+AllowGroups {{ harden_ssh_allow_groups }}
+PermitOpen none
+MaxAuthTries 3
+StrictModes yes
+GatewayPorts no
+MaxStartups 5:30:20
+TCPKeepAlive no
+ClientAliveCountMax 3
+ClientAliveInterval 20
+X11Forwarding no
+AddressFamily inet
+PrintMotd no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitUserEnvironment no
+PermitUserRC no
+RekeyLimit 512M 1h
+AcceptEnv LANG LC_*
+AllowTcpForwarding no
+AllowAgentForwarding no
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKeyAlgorithms ssh-ed25519
+Ciphers aes256-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com
+KexAlgorithms {{ harden_ssh_kex_algorithms }}
+AuthorizedKeysFile .ssh/authorized_keys
+LogLevel ERROR
+SyslogFacility AUTHPRIV
+Subsystem sftp /bin/false

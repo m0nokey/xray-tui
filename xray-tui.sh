@@ -1,1476 +1,1780 @@
-#!/bin/bash
-set -euo pipefail
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
+VAULT_FILE="$STATE_DIR/vault.json"
+HOST_STATE_DIR="${XRAY_TUI_HOST_STATE_DIR:-$STATE_DIR}"
+HOST_VAULT_FILE="$HOST_STATE_DIR/vault.json"
+VAULT_PASSWORD_FILE=""
+MAIN_MENU_REQUESTED=0
+LAST_ANSIBLE_OUTPUT=""
+# Internal status used to distinguish missing saved SSH access from deployment errors.
+readonly NO_SAVED_SSH_ACCESS=125
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+export ANSIBLE_LOCAL_TEMP=/tmp/ansible-local
+export ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp
+export ANSIBLE_CONFIG="$ROOT_DIR/ansible/ansible.cfg"
+export ANSIBLE_FORCE_COLOR=true
+mkdir -p "$ANSIBLE_LOCAL_TEMP" "$ANSIBLE_SSH_CONTROL_PATH_DIR"
 
-workdir="$(mktemp -d -t xray.XXXXXX 2>/dev/null || mktemp -d -t xray)"
-build_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || date +%s%N)"
-image_name="xray-admin:${build_id}"
+if [[ -t 1 ]]; then
+    COLOR_RESET=$'\033[0m'
+    COLOR_TEXT=$'\033[97m'
+    COLOR_HEADER=$'\033[38;5;183m'
+    COLOR_LINE=$'\033[38;5;117m'
+    COLOR_INFO=$'\033[38;5;117m'
+    COLOR_WARN=$'\033[38;5;221m'
+    COLOR_ERROR=$'\033[38;5;203m'
+    COLOR_MUTED=$'\033[38;5;245m'
+else
+    COLOR_RESET=''
+    COLOR_TEXT=''
+    COLOR_HEADER=''
+    COLOR_LINE=''
+    COLOR_INFO=''
+    COLOR_WARN=''
+    COLOR_ERROR=''
+    COLOR_MUTED=''
+fi
 
 cleanup() {
-    docker ps -aq --filter "ancestor=${image_name}" | xargs -r docker rm -f >/dev/null 2>&1 || true
-    docker images -q "${image_name}" | xargs -r docker rmi -f >/dev/null 2>&1 || true
-    rm -rf "$workdir"
-    clear; printf '\e[3J'
+    [[ -n "$VAULT_PASSWORD_FILE" ]] && rm -f "$VAULT_PASSWORD_FILE"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-cat <<'EOF' > "${workdir}/Dockerfile"
-FROM alpine:3.23
-
-ARG APP_UID=10000
-ARG APP_GID=10000
-RUN addgroup -g $APP_GID -S app \
- && adduser -S -D -u $APP_UID -G app -H -s /sbin/nologin app
-
-RUN apk add --no-cache \
-    bash ca-certificates jq openssh-client sshpass python3 py3-pynacl
-
-RUN passwd -l root || true
-
-RUN cat <<'EOW' > /usr/local/bin/xray.sh
-#!/bin/bash
-set -Eeuo pipefail
-
-# ─────────────────────────────── helpers ───────────────────────────────
-
-indent() {
-    local arg="${1:-}"
-    local mode
-    local num
-    if [[ "$arg" =~ ^([+-])([0-9]+)$ ]]; then
-        mode="${BASH_REMATCH[1]}"
-        num="${BASH_REMATCH[2]}"
-    else
-        mode="$arg"
-        num="${2:-0}"
+read_ascii_secret() {
+    local prompt="$1" value read_status
+    printf '%s' "$prompt" >&2
+    read -r -s value
+    read_status=$?
+    printf '\n' >&2
+    if ((read_status != 0)); then
+        unset value
+        return 1
     fi
-    case "$mode" in
-        +) sed "s/^/$(printf '%*s' "$num")/";;
-        -) sed -E "s/^ {0,$num}//";;
-        0) awk '{ $1=$1; print }';;
-        *) return 1;;
-    esac
-}
-
-cls() { clear; printf '\e[3J'; }
-hr() { printf '%s\n' "____________________"; }
-header() { cls; echo "$1"; hr; }
-
-ui_lock() {
-    local msg="${*:-working...}"
-    _ui_depth=${_ui_depth:-0}
-    if (( _ui_depth == 0 )); then
-        _ui_lock_active=1
-        _ui_msg_stack=()
-        _ui_msg="$msg"
-
-        stty -echo -icanon -isig 2>/dev/null || true
-        printf '\e[?25l' 2>/dev/null || true
-
-        {
-          while [[ "${_ui_lock_active:-}" = "1" ]]; do
-              read -r -t "${UI_DRAIN_INTERVAL:-0.05}" -n 10000 _junk || true
-          done
-        } &
-        _ui_drain_pid=$!
-
-        {
-          # quiet spinner
-          set +x
-          i=0; frames='|/-\'
-          while [[ "${_ui_lock_active:-}" = "1" ]]; do
-              printf "\r%s %s" "$_ui_msg" "${frames:i++%4:1}"
-              sleep 0.1
-          done
-          printf "\r\033[K"
-        } &
-        _ui_spin_pid=$!
-    else
-        _ui_msg_stack+=("$_ui_msg")
-        _ui_msg="$msg"
-    fi
-
-    _ui_depth=$((_ui_depth + 1))
-}
-
-ui_set() {
-    local msg="${*:-working...}"
-    [[ "${_ui_depth:-0}" -gt 0 ]] && _ui_msg="$msg"
-}
-
-ui_unlock() {
-    _ui_depth=${_ui_depth:-0}
-    (( _ui_depth > 0 )) || return 0
-
-    _ui_depth=$((_ui_depth - 1))
-    if (( _ui_depth > 0 )); then
-        local n=${#_ui_msg_stack[@]}
-        if (( n > 0 )); then
-            _ui_msg="${_ui_msg_stack[$((n-1))]}"
-            unset "_ui_msg_stack[$((n-1))]"
-        fi
+    if (export LC_ALL=C; [[ -n "$value" && "$value" =~ ^[[:print:]]+$ ]]); then
+        REPLY="$value"
+        unset value
         return 0
     fi
-
-    _ui_lock_active=0
-    kill "${_ui_drain_pid:-}" "${_ui_spin_pid:-}" 2>/dev/null || true
-    wait "${_ui_drain_pid:-}" 2>/dev/null || true
-    wait "${_ui_spin_pid:-}" 2>/dev/null || true
-    printf "\r\033[K"
-
-    stty sane 2>/dev/null || true
-    printf '\e[?25h' 2>/dev/null || true
-    read -r -t 0.01 -n 10000 _junk 2>/dev/null || true
-    unset _ui_drain_pid _ui_spin_pid _ui_msg _ui_msg_stack _ui_lock_active
-}
-trap 'ui_unlock >/dev/null 2>&1 || true' EXIT
-
-drain() { read -r -t 0 -n 10000 _junk 2>/dev/null || true; }
-
-first_token_lower() {
-    local s="$1"
-    s="${s#"${s%%[!$' \t\r\n']*}"}"
-    s="${s%%[ $'\t\r\n']*}"
-    printf '%s' "${s,,}"
-}
-
-nav_print() {
-    drain
-    printf 'b.   back\n'
-    printf 'x.   exit\n'
-    printf '?:   '
-}
-
-menu_prompt() {
-    drain
-    printf '?:   '
-}
-
-nav_invalid_inline() {
-    printf '\033[1A\r\033[K?:   no valid entry!'
-    sleep 0.5
-    printf '\r\033[K?:   '
-}
-
-nav_wait_bx_redraw() {
-    local render_fn="$1"; shift
-    while :; do
-        IFS= read -r _nav_ans
-        local key; key="$(first_token_lower "$_nav_ans")"
-        case "$key" in
-            b) return 0 ;;
-            x) echo "Bye."; exit 0 ;;
-            *) nav_invalid_inline
-               "$render_fn" "$@"
-               nav_print
-               ;;
-        esac
-    done
-}
-
-actions_block() {
-    printf "b.   back\n"
-    printf "x.   exit\n"
-    printf "?:   "
-}
-
-# ─────────────────────────────── config ───────────────────────────────
-
-remote_dir="/opt/xray"
-remote_cfg="${remote_dir}/config.json"
-remote_dc="${remote_dir}/docker-compose.yaml"
-vless_sni_default="api.github.com"
-vless_spider_x_default="/"
-vless_port_min="30000"
-vless_port_max="60000"
-ssh_opts='-o LogLevel=error -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o UserKnownHostsFile=/tmp/known_hosts -o StrictHostKeyChecking=accept-new'
-base_mark="/tmp/.base_install_done"
-
-# ───────────────────────────── ssh helpers ─────────────────────────────
-
-test_login() {
-  local host="$1" port="$2" password="$3"
-  ( set +x
-    printf '%s' "$password" | /usr/bin/sshpass -d 0 \
-      ssh -p "$port" $ssh_opts "root@${host}" exit
-  ) >/dev/null 2>&1
-}
-
-ssh_run() {
-  local cmd="$1"
-  ( set +x
-    printf '%s' "$password" | /usr/bin/sshpass -d 0 \
-      ssh -p "$port" $ssh_opts "root@${host}" "$cmd"
-  ) </dev/null 2>/dev/null || return $?
-}
-
-ssh_pipe() {
-  local cmd="$1"
-  ( set +x
-    exec 9<<<"$password"
-    cat | /usr/bin/sshpass -d 9 \
-      ssh -p "$port" $ssh_opts "root@${host}" "$cmd"
-    exec 9<&-
-  ) 2>/dev/null
-}
-ssh_cat() { ssh_run "cat '$1'"; }
-jq_docker() { jq "$@"; }
-
-# ───────────────────────── key & id utilities ─────────────────────────
-
-uuid() { cat /proc/sys/kernel/random/uuid; }
-
-short_id_from_uuid() {
-    local u="$1"
-    u="${u//-/}"
-    python3 - "$u" <<'PY'
-import hashlib
-import sys
-
-print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])
-PY
-}
-
-xray_keys() {
-    local out
-    out="$(
-        cat <<'EOL' | indent -4 | python3 -
-    import base64
-    from nacl.public import PrivateKey
-
-    def b64url(b: bytes) -> str:
-        return base64.urlsafe_b64encode(b).decode().rstrip("=")
-
-    sk = PrivateKey.generate()
-    pk = sk.public_key
-    print(b64url(sk.encode()))
-    print(b64url(pk.encode()))
-EOL
-    )"
-    priv_key="$(printf '%s\n' "$out" | sed -n '1p')"
-    pub_key="$(printf '%s\n' "$out" | sed -n '2p')"
-}
-
-derive_pbk() {
-    local priv="$1"
-    [[ -z "$priv" ]] && { echo ""; return; }
-    cat <<'EOL' | indent -4 | python3 - "$priv"
-    import sys, base64
-    from nacl.public import PrivateKey
-
-    p = sys.argv[1].strip()
-    pad = '=' * ((4 - len(p) % 4) % 4)
-    raw = base64.urlsafe_b64decode(p + pad)
-    sk  = PrivateKey(raw)
-    pk  = sk.public_key.encode()
-    print(base64.urlsafe_b64encode(pk).decode().rstrip('='))
-EOL
-}
-
-random_vless_port() {
-    echo $(( vless_port_min + RANDOM % (vless_port_max - vless_port_min + 1) ))
-}
-
-generate_vless_ports() {
-    vision_port="$(random_vless_port)"
-    while :; do
-        xhttp_port="$(random_vless_port)"
-        [[ "$xhttp_port" != "$vision_port" ]] && break
-    done
-}
-
-encode_vless_path() {
-    local raw_path="${1:-/}"
-    raw_path="${raw_path#/}"
-    if [[ -z "$raw_path" ]]; then
-        printf '%%2F'
-    else
-        printf '%%2F%s' "$raw_path"
-    fi
-}
-
-unique_vless_client_ids() {
-    local json="$1"
-    printf '%s' "$json" | jq -r '
-        [.inbounds[]?|select(.protocol=="vless")|.settings.clients[]?.id]
-        | unique[]
-    '
-}
-
-build_combined_config() {
-    local sni="$1"
-    local spx="$2"
-    local vision_port="$3"
-    local xhttp_port="$4"
-    local priv="$5"
-    local sid="$6"
-
-    jq -n         --arg sni "$sni"         --arg spx "$spx"         --arg priv "$priv"         --arg sid "$sid"         --argjson vision_port "$vision_port"         --argjson xhttp_port "$xhttp_port" '
-        {
-          log: { loglevel: "none" },
-          inbounds: [
-            {
-              port: $vision_port,
-              protocol: "vless",
-              settings: { clients: [], decryption: "none" },
-              streamSettings: {
-                network: "tcp",
-                security: "reality",
-                realitySettings: {
-                  dest: ($sni + ":443"),
-                  serverNames: [$sni],
-                  privateKey: $priv,
-                  shortIds: [$sid]
-                }
-              },
-              sniffing: {
-                enabled: true,
-                destOverride: ["http", "tls", "quic"],
-                routeOnly: true
-              }
-            },
-            {
-              port: $xhttp_port,
-              protocol: "vless",
-              settings: { clients: [], decryption: "none" },
-              streamSettings: {
-                network: "xhttp",
-                xhttpSettings: { path: $spx },
-                security: "reality",
-                realitySettings: {
-                  target: ($sni + ":443"),
-                  serverNames: [$sni],
-                  privateKey: $priv,
-                  shortIds: [$sid]
-                }
-              },
-              sniffing: {
-                enabled: true,
-                destOverride: ["http", "tls", "quic"],
-                routeOnly: true
-              }
-            }
-          ],
-          outbounds: [{ protocol: "freedom", tag: "direct" }]
-        }
-    '
-}
-
-# Update shortIds to match clients deterministically (stdin json → stdout json)
-sync_shortids_with_clients() {
-    local json; json="$(cat)"
-    mapfile -t _uuids < <(printf '%s' "$json" \
-        | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[].id')
-    local _sids=() u
-    for u in "${_uuids[@]}"; do _sids+=( "$(short_id_from_uuid "$u")" ); done
-    local sids_json
-    sids_json="$(printf '%s\n' "${_sids[@]}" | jq -R . | jq -s '
-        reduce .[] as $x ([]; if index($x) then . else . + [$x] end)
-    ')"
-    printf '%s' "$json" | jq --argjson sids "$sids_json" '
-        .inbounds |= (
-            map(if .protocol=="vless"
-                then (.streamSettings.realitySettings.shortIds = $sids)
-                else . end)
-        )'
-}
-
-# ────────────────────────────── base vps ──────────────────────────────
-
-base_install_prepare_local() {
-    install_file="$(mktemp)"
-    cat <<-'EOS' | indent -4 > $install_file
-    #!/bin/bash 
-
-    indent() {
-        local arg="${1:-}"
-        local mode
-        local num
-        if [[ "$arg" =~ ^([+-])([0-9]+)$ ]]; then
-            mode="${BASH_REMATCH[1]}"
-            num="${BASH_REMATCH[2]}"
-        else
-            mode="$arg"
-            num="${2:-0}"
-        fi
-        case "$mode" in
-            +) sed "s/^/$(printf '%*s' "$num")/";;
-            -) sed -E "s/^ {0,$num}//";;
-            0) awk '{ $1=$1; print }';;
-            *) return 1;;
-        esac
-    }
-    codename() {
-        local codename=""
-        declare -A codename_count
-        tmp_names=()
-        add_to_temp() { [ -n "$1" ] && tmp_names+=("$1"); }
-        [ -f /etc/os-release ] && add_to_temp "$(grep -oP '(?<=VERSION_CODENAME=)\w+' /etc/os-release 2>/dev/null)"
-        [ -f /boot/grub/grub.cfg ] && add_to_temp "$(grep -oP '(?<=menuentry '\''Debian GNU/Linux )[^ ]+' /boot/grub/grub.cfg | head -n 1 2>/dev/null)"
-        [ -f /etc/apt/sources.list ] && add_to_temp "$(grep -m1 -Po '(?<=/debian/)\w+' /etc/apt/sources.list 2>/dev/null)"
-        [ -f /etc/default/grub ] && add_to_temp "$(grep -oP '(?<=GRUB_DISTRIBUTOR=")[^"]+' /etc/default/grub 2>/dev/null)"
-        add_to_temp "$(grep -oP 'debian[^ ]+' /proc/cmdline 2>/dev/null)"
-        [ -f /boot/config-$(uname -r) ] && add_to_temp "$(grep -oP 'debian[^-]*' /boot/config-$(uname -r) 2>/dev/null)"
-        [ -f /etc/motd ] && add_to_temp "$(grep -oP '(Debian GNU/Linux \K[^ ]+)' /etc/motd 2>/dev/null)"
-        ls /var/lib/apt/lists/*_InRelease >/dev/null 2>&1 && add_to_temp "$(grep -oP '(?<=dists/)[^/ ]+' /var/lib/apt/lists/*_InRelease | head -n 1 2>/dev/null)"
-        for name in "${tmp_names[@]}"; do [ -n "$name" ] && codename_count["$name"]=$((codename_count["$name"]+1)); done
-        for name in "${!codename_count[@]}"; do [ -z "$codename" ] || [ "${codename_count[$name]}" -gt "${codename_count[$codename]}" ] && codename=$name; done
-        [ -z "$codename" ] && { echo "Failed to detect Debian codename";return 1; }
-        echo "$codename"
-    }
-    configure_repo() {
-        local codename="$(codename)"
-        rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
-        cat <<-EOL | indent -4 > /etc/apt/sources.list.d/debian.sources
-        Types: deb deb-src
-        URIs: https://deb.debian.org/debian
-        Suites: ${codename} ${codename}-updates
-        Components: main
-        Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
-        
-        Types: deb deb-src
-        URIs: https://security.debian.org/debian-security
-        Suites: ${codename}-security
-        Components: main
-        Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
-    EOL
-    }
-    install_packages() {
-        export DEBIAN_FRONTEND=noninteractive
-        rm -rf /var/lib/apt/lists/*
-        apt-get update >/dev/null 2>&1 && apt-get -o Dpkg::Options::="--force-confold" upgrade -y --allow-downgrades --allow-remove-essential --allow-change-held-packages >/dev/null 2>&1
-        local packages=("lsb-release" "apt-transport-https" "ca-certificates" "gnupg2" "curl")
-        for pkg in "${packages[@]}"; do apt-get install --no-install-recommends -y $pkg >/dev/null 2>&1; done
-    }
-    install_docker() {
-        install -d -m0755 /etc/apt/keyrings
-        local arch="$(dpkg --print-architecture)"
-        local codename="$(lsb_release -cs 2>/dev/null)"
-        curl -fsSL --proto '=https' --tlsv1.3 https://download.docker.com/linux/debian/gpg | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
-        printf "Types: deb\nURIs: https://download.docker.com/linux/debian\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/docker.gpg\n" "$codename" "$arch" > /etc/apt/sources.list.d/docker.sources
-        printf "Package: *\nPin: origin download.docker.com\nPin-Priority: 900\n" > /etc/apt/preferences.d/docker
-        apt-get update 2>/dev/null
-        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null
-    }
-    install_xray() {
-        mkdir -p /opt/xray/
-        /usr/bin/docker pull ghcr.io/xtls/xray-core:latest
-    }
-    configure_timezone() {
-        timedatectl set-timezone UTC
-    }
-    setup_security_update() {
-        apt-get update >/dev/null 2>&1; apt-get install --no-install-recommends -y unattended-upgrades apt-listchanges >/dev/null 2>&1
-        cat <<-'EOL' | indent -4 > /etc/apt/apt.conf.d/50unattended-upgrades
-        Unattended-Upgrade::Origins-Pattern {
-            "origin=Debian,codename=${distro_codename},label=Debian-Security";
-            "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
-        };
-        Unattended-Upgrade::Remove-Unused-Dependencies "false";
-        Dpkg::Options {
-            "--force-confdef";
-            "--force-confold";
-        };
-    EOL
-        cat <<-'EOL' | indent 0 > /etc/apt/apt.conf.d/20auto-upgrades
-        APT::Periodic::Update-Package-Lists "1";
-        APT::Periodic::Download-Upgradeable-Packages "1";
-        APT::Periodic::AutocleanInterval "7";
-        APT::Periodic::Unattended-Upgrade "1";
-    EOL
-    }
-    configure_os_updater() {
-        cat <<-'EOL' | indent -4 > /usr/local/sbin/os-updater
-        #!/bin/bash
-        set -Eeuo pipefail
-    
-        export DEBIAN_FRONTEND=noninteractive
-        export APT_LISTCHANGES_FRONTEND=none
-        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        LOG=/var/log/apt-auto-upgrade.log
-        exec > >(tee -a "$LOG") 2>&1
-    
-        exec 9>/run/apt-maint.lock
-        if ! flock -n 9; then
-            echo "[INFO] another apt run in progress, exiting"
-            exit 0
-        fi
-    
-        trap 'echo "[ERROR] failed at line $LINENO (exit=$?)"' ERR
-    
-        retry() {
-            local attempts="$1" 
-            local pause="$2" 
-            shift 2
-            local n=1
-            until "$@"; do
-                if (( n >= attempts )); then
-                    echo "[ERROR] after ${attempts} attempts: $*"
-                    return 1
-                fi
-                echo "[WARN] attempt $n failed; retrying in ${pause}s: $*"
-                sleep "$pause"
-                ((n++))
-            done
-        }
-    
-        echo "[INFO] === $(date -Is) start ==="
-    
-        apt-get clean
-        rm -rf /var/lib/apt/lists/*
-    
-        install -m0755 -d /etc/apt/keyrings || true
-        curl -fsSL --tlsv1.3 --http2 --proto '=https' "https://download.docker.com/linux/debian/gpg" | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg || true
-    
-        retry 5 10 apt-get -qq -o Acquire::Retries=3 update
-        retry 3 20 apt-get -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -o DPkg::Lock::Timeout=600 -y dist-upgrade
-    
-        apt-get -y autoremove --purge || true
-        apt-get clean || true
-    
-        need_reboot=false
-        reason=""
-    
-        current_kernel="$(uname -r || true)"
-        latest_installed_kernel="$(ls -1 /lib/modules 2>/dev/null | sort -V | tail -1 || true)"
-        if [ -n "$latest_installed_kernel" ] && [ "$current_kernel" != "$latest_installed_kernel" ]; then
-            need_reboot=true
-            reason="kernel $current_kernel -> $latest_installed_kernel"
-        fi
-    
-        if [ -f /run/reboot-required ] || [ -f /var/run/reboot-required ]; then
-            need_reboot=true
-            if [ -z "$reason" ]; then
-                reason="reboot-required flag"
-            else
-                reason="$reason + reboot-required flag"
-            fi
-        fi
-    
-        if $need_reboot; then
-            echo "[INFO] rebooting: $reason"
-            if command -v systemctl >/dev/null 2>&1; then
-                systemctl reboot || /sbin/reboot
-            else
-                /sbin/reboot
-            fi
-        else
-            echo "[INFO] reboot not required"
-        fi
-    
-        echo "[INFO] === $(date -Is) end ==="
-    EOL
-    
-        chmod 0755 /usr/local/sbin/os-updater
-        chown root:root /usr/local/sbin/os-updater
-    
-        cat <<-'EOL' | indent -4 > /etc/systemd/system/os-updater.service
-        [Unit]
-        Description=Safe unattended apt dist-upgrade (kernel-aware)
-        Documentation=man:apt-get(8)
-        After=network-online.target
-        Wants=network-online.target
-    
-        [Service]
-        Type=oneshot
-        ExecStart=/bin/bash /usr/local/sbin/os-updater
-        Nice=10
-        TimeoutStartSec=2h
-        Environment=DEBIAN_FRONTEND=noninteractive
-        Environment=APT_LISTCHANGES_FRONTEND=none
-    
-        [Install]
-        WantedBy=multi-user.target
-    EOL
-    
-        cat <<-'EOL' | indent -4 > /etc/systemd/system/os-updater.timer
-        [Unit]
-        Description=Run os_updater nightly
-    
-        [Timer]
-        OnCalendar=*-*-* 01:00
-        RandomizedDelaySec=13m
-        Persistent=true
-        AccuracySec=1h
-    
-        [Install]
-        WantedBy=timers.target
-    EOL
-    
-        cat <<-'EOL' | indent -4 > /etc/logrotate.d/os_updater
-        /var/log/apt-auto-upgrade.log {
-          daily
-          rotate 8
-          size 512k
-          compress
-          delaycompress
-          dateext
-          missingok
-          notifempty
-          create 0640 root adm
-          su root adm
-        }
-    EOL
-    
-        systemctl daemon-reload
-        systemctl enable --now os-updater.timer
-    }
-    configure_docker_updater() {
-        cat <<-'EOL' | indent -4 > /usr/local/sbin/docker-updater
-        #!/bin/bash
-        set -Eeuo pipefail
-        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        compose_file="/opt/xray/docker-compose.yaml"
-
-        exec 9>/run/docker-updater.lock
-        if ! flock -n 9; then
-            echo "[INFO] another docker_updater run is in progress, exiting"
-            exit 0
-        fi
-    
-        docker pull ghcr.io/xtls/xray-core:latest
-        docker compose -f "$compose_file" down || docker-compose -f "$compose_file" down
-        docker compose -f "$compose_file" up -d --force-recreate || docker-compose -f "$compose_file" up -d --force-recreate
-    
-        docker image prune -f || true
-        docker builder prune -f || true
-    EOL
-    
-        chmod 0755 /usr/local/sbin/docker-updater
-        chown root:root /usr/local/sbin/docker-updater
-    
-        cat <<-'EOL' | indent -4 > /etc/systemd/system/docker-updater.service
-        [Unit]
-        Description=Update xray-core image and restart docker stack
-        After=network-online.target docker.service
-        Wants=network-online.target docker.service
-        ConditionPathExists=/opt/xray/docker-compose.yaml
-    
-        [Service]
-        Type=oneshot
-        ExecStart=/bin/bash /usr/local/sbin/docker-updater
-        TimeoutStartSec=30m
-        Nice=10
-    
-        [Install]
-        WantedBy=multi-user.target
-    EOL
-    
-        cat <<-'EOL' | indent -4 > /etc/systemd/system/docker-updater.timer
-        [Unit]
-        Description=Run docker_updater nightly at 01:30
-    
-        [Timer]
-        OnCalendar=*-*-* 02:00
-        Persistent=true
-        AccuracySec=1min
-    
-        [Install]
-        WantedBy=timers.target
-    EOL
-    
-        systemctl daemon-reload
-        systemctl enable --now docker-updater.timer
-    }
-    
-    configure_repo
-    install_packages
-    install_docker
-    install_xray
-    configure_timezone
-    setup_security_update
-    configure_os_updater
-    configure_docker_updater
-    touch /tmp/.base_install_done
-EOS
-}
-
-base_install_push_and_start() {
-    cat "${install_file}" | ssh_pipe \
-      'cat > /tmp/install.sh; sleep 3; nohup bash /tmp/install.sh >/dev/null 2>&1 & echo $! > /tmp/install.pid; sleep 3; ps -p $(cat /tmp/install.pid) >/dev/null'
-}
-
-wait_for_base_install() {
-    local deadline=$((SECONDS + 1800))
-    while (( SECONDS < deadline )); do
-        if ssh_run "test -f '${base_mark}'"; then
-            return 0
-        fi
-        if ssh_run "command -v docker >/dev/null 2>&1 && (docker compose version >/dev/null 2>&1 || docker-compose -v >/dev/null 2>&1)"; then
-            return 0
-        fi
-        sleep 20
-    done
+    unset value
+    printf '%s\n' "Invalid password. Use printable ASCII characters with the English keyboard layout." >&2
+    sleep 1
+    clear_screen
     return 1
 }
 
-ensure_bootstrap_remote() {
-    local need_bootstrap=1
-    ssh_run '
-        ok=0
-        if command -v docker >/dev/null 2>&1 && ( docker compose version >/dev/null 2>&1 || docker-compose -v >/dev/null 2>&1 ); then
-            if [ -d "/opt/xray" ]; then
-                if systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx os-updater.timer \
-                   && systemctl list-unit-files --no-legend | awk "{print \$1}" | grep -qx docker-updater.timer; then
-                    ok=1
-                fi
-            fi
+create_vault_password_file() {
+    local password password_confirm attempt
+    attempt=0
+    while ((attempt < 3)); do
+        attempt=$((attempt + 1))
+        clear_screen
+        printf '%s\n' "An encrypted Vault will be created on this computer." >&2
+        printf '%s\n' "It will store your VPS access data and VPN keys." >&2
+        printf '%s\n' "Create and remember a strong Vault password." >&2
+        printf '\n' >&2
+        if ! read_ascii_secret "Create Vault password (attempt ${attempt}/3): "; then
+            continue
         fi
-        exit $(( ok ? 0 : 1 ))
-    ' && need_bootstrap=0 || need_bootstrap=1
-
-    if (( need_bootstrap )); then
-        base_install_prepare_local
-        ui_lock "/ installing..."
-        base_install_push_and_start || true
-        wait_for_base_install || true
-        ui_unlock
-    fi
-}
-
-# ─────────────────────────── remote file writers ───────────────────────────
-
-write_remote_dc_with_ports() {
-    local min_port=65535
-    local port_lines=""
-    local p
-
-    for p in "$@"; do
-        printf -v port_lines '%s          - "%s:%s/tcp"
-' "$port_lines" "$p" "$p"
-        (( p < min_port )) && min_port="$p"
-    done
-
-    local sysctl_block=""
-    if (( min_port < 1024 )); then
-        sysctl_block=$(printf '        sysctls:
-          net.ipv4.ip_unprivileged_port_start: %s' "$min_port")
-    fi
-
-    ssh_run "mkdir -p '${remote_dir}'"
-
-    cat <<EOL | indent -4 | ssh_pipe "cat > '${remote_dc}'"
-    services:
-      xray:
-        image: ghcr.io/xtls/xray-core:latest
-        container_name: xray
-${sysctl_block}
-        cap_drop: [ "ALL" ]
-        security_opt:
-          - no-new-privileges:true
-        read_only: true
-        tmpfs:
-          - /tmp:rw,nosuid,nodev,noexec,mode=1777
-        pids_limit: 512
-        mem_limit: 512m
-        ulimits:
-          nofile: 262144
-        volumes:
-          - ./config.json:/etc/xray/config.json:ro
-        command: ["run", "-c", "/etc/xray/config.json"]
-        restart: unless-stopped
-        ports:
-$(printf '%b' "$port_lines")
-        logging:
-          driver: none
-EOL
-}
-
-get_remote_json_or_empty() {
-    if ssh_run "test -f '${remote_cfg}'"; then
-        ssh_cat "${remote_cfg}"
-    else
-        echo '{}'
-    fi
-}
-
-send_config_and_restart() {
-    set +e
-    local remote_cmd="cat > '${remote_cfg}' && (docker compose -f '${remote_dc}' up -d && docker compose -f '${remote_dc}' restart xray || docker-compose -f '${remote_dc}' restart) >/dev/null 2>&1 || true"
-    cat config.json | ssh_pipe "${remote_cmd}" || true
-    set -e
-}
-
-# ─────────────────────────────── cache (in-mem) ───────────────────────────────
-_json_cache=''
-_json_cache_valid=0
-
-cache_set_json() {
-    _json_cache="$1"
-    _json_cache_valid=1
-}
-
-cache_invalidate() {
-    _json_cache=''
-    _json_cache_valid=0
-}
-
-get_remote_json_cached() {
-    if (( _json_cache_valid )); then
-        printf '%s' "$_json_cache"
-    else
-        local j; j="$(get_remote_json_or_empty)"
-        _json_cache="$j"
-        _json_cache_valid=1
-        printf '%s' "$j"
-    fi
-}
-
-server_exists() { ssh_run "test -f '${remote_cfg}'"; }
-server_exists_cached() {
-    if (( _json_cache_valid )); then
-        [[ "$_json_cache" != '{}' ]]
-        return
-    fi
-    server_exists
-}
-
-# ─────────────────────────────── ui screens ───────────────────────────────
-
-# Build VLESS links; SID is derived per-client via short_id_from_uuid(UUID).
-build_links_array() {
-    local json="$1"
-    local vless_sni vision_port xhttp_port priv_key pbk raw_path path_enc
-
-    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
-    vision_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="tcp")|.port // empty' | head -n1)"
-    xhttp_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.port // empty' | head -n1)"
-    priv_key="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey // empty' | head -n1)"
-    raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
-
-    [[ -z "$vless_sni" || -z "$priv_key" ]] && { echo "(none)"; return; }
-    [[ -z "$vision_port" && -z "$xhttp_port" ]] && { echo "(none)"; return; }
-
-    pbk="$(derive_pbk "$priv_key")"
-    [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
-    path_enc="$(encode_vless_path "$raw_path")"
-
-    mapfile -t ids < <(unique_vless_client_ids "$json")
-    ((${#ids[@]}==0)) && { echo "(none)"; return; }
-
-    local u sid
-    for u in "${ids[@]}"; do
-        sid="$(short_id_from_uuid "$u")"
-        if [[ -n "$vision_port" ]]; then
-            echo "vless://${u}@${host}:${vision_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
+        password="$REPLY"
+        if ! read_ascii_secret "Confirm Vault password (attempt ${attempt}/3): "; then
+            unset password
+            continue
         fi
-        if [[ -n "$xhttp_port" ]]; then
-            echo "vless://${u}@${host}:${xhttp_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
+        password_confirm="$REPLY"
+        if [[ "$password" != "$password_confirm" ]]; then
+            unset password password_confirm
+            clear_screen
+            printf '%s\n' "Vault passwords do not match. Please try again." >&2
+            sleep 1.5
+            continue
         fi
-    done
-}
-
-print_server_protocols() {
-    local json="$1"
-    local vless_sni vision_port xhttp_port raw_path
-
-    vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0] // empty' | head -n1)"
-    vision_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="tcp")|.port // empty' | head -n1)"
-    xhttp_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.port // empty' | head -n1)"
-    raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
-
-    if [[ -n "$vision_port" ]]; then
-        printf '%-12s %s
-' "Protocol:" "xtls-rprx-vision"
-        printf '%-12s %s
-' "Server Name:" "${vless_sni}:${vision_port}"
-        echo
-    fi
-
-    if [[ -n "$xhttp_port" ]]; then
-        printf '%-12s %s
-' "Protocol:" "vless-xhttp-reality"
-        printf '%-12s %s
-' "Server Name:" "${vless_sni}:${xhttp_port}"
-        printf '%-12s %s
-' "Path:" "${raw_path:-/}"
-        echo
-    fi
-}
-
-# ── server info ──
-render_server_info_screen() {
-    header "xray › server › info"
-    ui_lock "loading..."
-    local json; json="$(get_remote_json_cached)"
-    ui_unlock
-    if [[ "$json" == '{}' ]]; then
-        echo "none"
-        echo
+        VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
+        chmod 600 "$VAULT_PASSWORD_FILE"
+        printf '%s\n' "$password" >"$VAULT_PASSWORD_FILE"
+        unset password password_confirm
         return 0
-    fi
-    print_server_protocols "$json"
-}
-print_server_info_screen() {
-    render_server_info_screen
-    nav_print
-    nav_wait_bx_redraw render_server_info_screen
+    done
+    printf '%s\n' "Vault password setup failed after 3 attempts." >&2
+    sleep 2.5
+    return 1
 }
 
-# ── server create ──
-server_create_interactive() {
-    header "xray › server › create"
+ensure_vault_password_file() {
+    local password attempt checked_state vault_view_status
+    [[ -n "$VAULT_PASSWORD_FILE" && -f "$VAULT_PASSWORD_FILE" ]] && return 0
 
-    local exists=1; if server_exists_cached; then exists=0; fi
-    if (( exists == 0 )); then
-        ui_lock "loading..."
-        local json; json="$(get_remote_json_cached)"
-        ui_unlock
-
-        print_server_protocols "$json"
-        echo "You already have an Xray Server created."
-        echo
-        nav_print
-        nav_wait_bx_redraw server_create_interactive
+    if [[ ! -f "$VAULT_FILE" ]]; then
+        create_vault_password_file || return 1
+        clear_screen
         return 0
     fi
 
-    printf "Enter SNI (default %s): " "$vless_sni_default"; read -r sni; [[ -z "${sni:-}" ]] && sni="$vless_sni_default"
-    printf "Enter path (default %s): " "$vless_spider_x_default"; read -r spx; [[ -z "${spx:-}" ]] && spx="$vless_spider_x_default"
-
-    ui_lock "creating server..."
-    ensure_bootstrap_remote
-    ui_set "creating server..."
-
-    xray_keys
-    local sid; sid="$(short_id_from_uuid "$(uuid)")"
-    local vision_port xhttp_port json
-    generate_vless_ports
-    json="$(build_combined_config "$sni" "$spx" "$vision_port" "$xhttp_port" "$priv_key" "$sid")"
-
-    write_remote_dc_with_ports "$vision_port" "$xhttp_port"
-    printf '%s' "$json" > config.json
-    cache_set_json "$json"
-
-    ui_set "applying..."
-    send_config_and_restart
-    ui_unlock
-
-    render_server_create_result() {
-        header "xray › server › create"
-        print_server_protocols "$json"
-    }
-    render_server_create_result
-    nav_print
-    nav_wait_bx_redraw render_server_create_result
-}
-
-# ── server restart ──
-render_server_restart_done() {
-    header "xray › server › restart"
-    echo "done"
-    echo
-}
-server_restart() {
-    header "xray › server › restart"
-    ui_lock "restarting..."
-    set +e
-    ssh_run "(docker compose -f '${remote_dc}' restart xray || docker-compose -f '${remote_dc}' restart) >/dev/null 2>&1" || true
-    set -e
-    ui_unlock
-    render_server_restart_done
-    nav_print
-    nav_wait_bx_redraw render_server_restart_done
-}
-
-# ── server remove ──
-render_server_remove_none() {
-    header "xray › server › remove"
-    echo "none"
-    echo
-}
-
-render_server_remove_done() {
-    header "xray › server › remove"
-    echo "done"
-    echo
-}
-
-render_server_remove_confirm() {
-    header "xray › server › remove"
-    ui_lock "loading..."
-    local json; json="$(get_remote_json_cached)"
-    ui_unlock
-
-    if [[ "$json" == '{}' ]]; then
-        echo "none"
-        echo
-        return 1
+    if ! vault_ciphertext_valid; then
+        rm -f "$VAULT_FILE" "$VAULT_PASSWORD_FILE"
+        VAULT_PASSWORD_FILE=""
+        clear_screen
+        printf '%s\n' "The existing Vault is damaged and was removed." >&2
+        printf '%s\n' "A new encrypted Vault will be created now." >&2
+        sleep 2.5
+        create_vault_password_file || return 1
+        clear_screen
+        return 0
     fi
 
-    print_server_protocols "$json"
-    echo "Do you want to remove this Xray server (y/n)?"
-    echo
-    return 0
-}
-
-server_remove() {
-    if ! server_exists_cached; then
-        render_server_remove_none
-        nav_print
-        nav_wait_bx_redraw render_server_remove_none
-        return
-    fi
-
-    while :; do
-        if ! render_server_remove_confirm; then
-            nav_print
-            nav_wait_bx_redraw render_server_remove_none
-            return
+    attempt=0
+    while ((attempt < 3)); do
+        attempt=$((attempt + 1))
+        clear_screen
+        printf '%s\n' "An encrypted Vault was found on this computer." >&2
+        printf '%s\n' "It contains saved VPS access data and VPN keys." >&2
+        printf '%s\n' "Enter the Vault password to unlock it." >&2
+        printf '\n' >&2
+        VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
+        chmod 600 "$VAULT_PASSWORD_FILE"
+        if ! read_ascii_secret "Vault password (attempt ${attempt}/3): "; then
+            rm -f "$VAULT_PASSWORD_FILE"
+            VAULT_PASSWORD_FILE=""
+            continue
         fi
-        nav_print
-        read -r ans
-        case "$(first_token_lower "$ans")" in
-            b) return 0 ;;
-            x) echo "Bye."; exit 0 ;;
-            y)
-                ui_lock "removing..."
-                ssh_run "(docker compose -f '${remote_dc}' down -v --remove-orphans || docker-compose -f '${remote_dc}' down -v) >/dev/null 2>&1" || true
-                ssh_run '
-                    for unit in os-updater docker-updater; do
-                        systemctl disable --now "${unit}.timer" >/dev/null 2>&1 || true
-                        systemctl disable --now "${unit}.service" >/dev/null 2>&1 || true
-                    done
-                    systemctl daemon-reload >/dev/null 2>&1 || true
-                ' || true
-
-                ssh_run '
-                    rm -f /etc/systemd/system/os-updater.service \
-                          /etc/systemd/system/os-updater.timer \
-                          /etc/systemd/system/docker-updater.service \
-                          /etc/systemd/system/docker-updater.timer
-                    rm -f /usr/local/sbin/os-updater \
-                          /usr/local/sbin/docker-updater \
-                          /var/log/apt-auto-upgrade.log
-                    systemctl daemon-reload >/dev/null 2>&1 || true
-                ' || true
-
-                ssh_run "rm -f '${remote_cfg}' '${remote_dc}'" || true
-                ssh_run "rm -rf '${remote_dir}'" || true
-                ui_unlock
-                cache_set_json '{}'
-                render_server_remove_done
-                nav_print
-                nav_wait_bx_redraw render_server_remove_done
-                return
-                ;;
-            n)
+        password="$REPLY"
+        printf '%s\n' "$password" >"$VAULT_PASSWORD_FILE"
+        unset password
+        checked_state="$(mktemp /tmp/xray-vault-check.XXXXXX)"
+        vault_view_status=0
+        ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" >"$checked_state" 2>/dev/null || vault_view_status=$?
+        if [[ "$vault_view_status" == 0 ]]; then
+            if json_file_valid "$checked_state"; then
+                rm -f "$checked_state"
+                clear_screen
                 return 0
-                ;;
-            *)
-                nav_invalid_inline
-                ;;
-        esac
-    done
-}
-
-# ── keys list ──
-render_keys_list_screen() {
-    header "xray › keys › list"
-    ui_lock "loading..."
-    local json; json="$(get_remote_json_cached)"
-    json="$(printf '%s' "$json" | sync_shortids_with_clients)"
-    local links=()
-    mapfile -t links < <(build_links_array "$json" || true)
-    ui_unlock
-
-    if ((${#links[@]} == 0)) || [[ "${links[0]-}" == "(none)" ]]; then
-        echo "none"
-        echo
-    else
-        local l
-        for l in "${links[@]}"; do
-            printf '%s\n\n' "$l"
-        done
-    fi
-}
-keys_list_screen() {
-    render_keys_list_screen
-    nav_print
-    nav_wait_bx_redraw render_keys_list_screen
-}
-
-# ── keys add ──
-render_keys_add_prompt() {
-    header "xray › keys › add"
-    echo "How many access keys do you need?"
-    echo "Enter a number (e.g., 1–100)."
-    echo
-}
-keys_add_screen() {
-    local count
-    while :; do
-        render_keys_add_prompt
-        nav_print
-        IFS= read -r ans
-        if [[ "$(first_token_lower "$ans")" == "b" ]]; then return 0; fi
-        if [[ "$(first_token_lower "$ans")" == "x" ]]; then echo "Bye."; exit 0; fi
-        if [[ "$ans" =~ ^[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
-            count="${BASH_REMATCH[1]}"
-            if (( count >= 1 && count <= 100 )); then
-                break
             fi
-        fi
-        nav_invalid_inline
-    done
-
-    ui_lock "preparing..."
-    local json; json="$(get_remote_json_cached)"
-    if [[ "$json" == '{}' ]]; then
-        ensure_bootstrap_remote
-        xray_keys
-        local sni="$vless_sni_default"
-        local spx="$vless_spider_x_default"
-        local sid_boot="$(short_id_from_uuid "$(uuid)")"
-        local vision_port xhttp_port
-        generate_vless_ports
-        json="$(build_combined_config "$sni" "$spx" "$vision_port" "$xhttp_port" "$priv_key" "$sid_boot")"
-        write_remote_dc_with_ports "$vision_port" "$xhttp_port"
-    fi
-
-    declare -a new_uuids=()
-    local i
-    for i in $(seq 1 "$count"); do new_uuids+=( "$(uuid)" ); done
-    local u
-    for u in "${new_uuids[@]}"; do
-        json="$(printf '%s' "$json" | jq --arg uuid "$u" '
-            .inbounds |= map(
-                if .protocol=="vless" then
-                    if .streamSettings.network=="tcp" then
-                        (.settings.clients += [{"id":$uuid,"flow":"xtls-rprx-vision"}])
-                    else
-                        (.settings.clients += [{"id":$uuid}])
-                    end
-                else .
-                end
-            )
-        ')"
-    done
-
-    json="$(printf '%s' "$json" | sync_shortids_with_clients)"
-
-    printf '%s' "$json" > config.json
-    cache_set_json "$json"
-    ui_unlock
-    ui_lock "applying..."
-    send_config_and_restart
-    ui_unlock
-
-    render_keys_add_result() {
-        header "xray › keys › add"
-        local vless_sni vision_port xhttp_port priv_key_local pbk raw_path path_enc
-        vless_sni="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.serverNames[0]' | head -n1)"
-        vision_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="tcp")|.port // empty' | head -n1)"
-        xhttp_port="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.port // empty' | head -n1)"
-        priv_key_local="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless")|.streamSettings.realitySettings.privateKey' | head -n1)"
-        raw_path="$(printf '%s' "$json" | jq -r '.inbounds[]?|select(.protocol=="vless" and .streamSettings.network=="xhttp")|.streamSettings.xhttpSettings.path // "/"' | head -n1)"
-
-        pbk="$(derive_pbk "$priv_key_local")"
-        [[ -z "$pbk" && -n "${pub_key-}" ]] && pbk="$pub_key"
-        path_enc="$(encode_vless_path "$raw_path")"
-
-        local uu sid
-        for uu in "${new_uuids[@]}"; do
-            sid="$(short_id_from_uuid "$uu")"
-            if [[ -n "$vision_port" ]]; then
-                echo "vless://${uu}@${host}:${vision_port}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}#vless-vision-reality"
-                echo
-            fi
-            if [[ -n "$xhttp_port" ]]; then
-                echo "vless://${uu}@${host}:${xhttp_port}?type=xhttp&encryption=none&security=reality&sni=${vless_sni}&fp=chrome&pbk=${pbk}&sid=${sid}&path=${path_enc}#vless-xhttp-reality"
-                echo
-            fi
-        done
-    }
-    render_keys_add_result
-    nav_print
-    nav_wait_bx_redraw render_keys_add_result
-}
-
-# ── keys remove menu ──
-render_keys_remove_menu() {
-    header "xray › keys › remove"
-    echo "1.   Remove all keys"
-    echo "2.   Remove a single key"
-    echo
-}
-keys_remove_menu() {
-    while :; do
-        render_keys_remove_menu
-        nav_print
-        read -r ans
-        case "$(first_token_lower "$ans")" in
-            1) keys_remove_all ;;
-            2) keys_remove_one ;;
-            b) return 0 ;;
-            x) echo "Bye."; exit 0 ;;
-            *) nav_invalid_inline ;;
-        esac
-    done
-}
-
-# ── keys remove all ──
-render_keys_remove_all_confirm() {
-    header "xray › keys › remove › all"
-    echo "Do you want to remove all keys (y/n)?"
-    echo
-}
-keys_remove_all() {
-    while :; do
-        render_keys_remove_all_confirm
-        nav_print
-        read -r ans
-        case "$(first_token_lower "$ans")" in
-            b) return 0 ;;
-            x) echo "Bye."; exit 0 ;;
-            y)
-                ui_lock "removing..."
-                local json; json="$(get_remote_json_cached)"
-                json="$(
-                    jq '
-                      .inbounds |= map(
-                        if .protocol=="vless"
-                        then (.settings.clients = []
-                              | .streamSettings.realitySettings.shortIds = [])
-                        else .
-                        end
-                      )
-                    ' <<< "$json"
-                )"
-                printf '%s' "$json" > config.json
-                cache_set_json "$json"
-                send_config_and_restart
-                ui_unlock
-
-                header "xray › keys › remove › all"
-                echo "none"
-                echo
-                nav_print
-                nav_wait_bx_redraw render_keys_remove_all_confirm
-                return 0
-                ;;
-            n) return 0 ;;
-            *) nav_invalid_inline ;;
-        esac
-    done
-}
-
-# ── keys remove one ──
-render_keys_remove_one_pick() {
-    header "xray › keys › remove › one"
-    ui_lock "loading..."
-    local json; json="$(get_remote_json_cached)"
-    mapfile -t uuids < <(printf '%s' "$json" \
-        | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
-    ui_unlock
-
-    if ((${#uuids[@]}==0)); then
-        echo "none"
-        echo
-        return 1
-    fi
-
-    local i
-    for i in "${!uuids[@]}"; do
-        printf '%d.   %s\n' "$((i+1))" "${uuids[$i]}"
-    done
-    echo
-    return 0
-}
-keys_remove_one() {
-    while :; do
-        if render_keys_remove_one_pick; then
-            nav_print
-            read -r pick_raw
-            local pick="$(first_token_lower "$pick_raw")"
-            case "$pick" in
-                b) return 0 ;;
-                x) echo "Bye."; exit 0 ;;
-                *)
-                    if [[ "$pick_raw" =~ ^[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
-                        local idx=$((BASH_REMATCH[1]-1))
-                        ui_lock "loading..."
-                        local json; json="$(get_remote_json_cached)"
-                        mapfile -t uuids < <(printf '%s' "$json" \
-                            | jq -r '(.inbounds[]?|select(.protocol=="vless")|.settings.clients // [])[] | .id')
-                        ui_unlock
-                        (( idx<0 || idx>=${#uuids[@]} )) && { nav_invalid_inline; continue; }
-                        local target="${uuids[$idx]}"
-
-                        render_keys_remove_one_confirm() {
-                            header "xray › keys › remove › one"
-                            echo "$target"
-                            echo "Do you want to remove this key (y/n)?"
-                            echo
-                        }
-                        while :; do
-                            render_keys_remove_one_confirm
-                            nav_print
-                            read -r yn
-                            case "$(first_token_lower "$yn")" in
-                                b) break ;;
-                                x) echo "Bye."; exit 0 ;;
-                                y)
-                                    ui_lock "removing..."
-                                    local json2; json2="$(get_remote_json_cached)"
-                                    json2="$(printf '%s' "$json2" \
-                                        | jq --arg uuid "$target" '
-                                            (.inbounds[]|select(.protocol=="vless")|.settings.clients)
-                                            |= map(select(.id != $uuid))
-                                        ')"
-                                    json2="$(printf '%s' "$json2" | sync_shortids_with_clients)"
-                                    printf '%s' "$json2" > config.json
-                                    cache_set_json "$json2"
-                                    send_config_and_restart
-                                    ui_unlock
-                                    break
-                                    ;;
-                                n) break ;;
-                                *) nav_invalid_inline ;;
-                            esac
-                        done
-                    else
-                        nav_invalid_inline
-                        continue
-                    fi
-                    ;;
-            esac
-        else
-            nav_print
-            nav_wait_bx_redraw render_keys_remove_one_pick
+            rm -f "$checked_state"
+            rm -f "$VAULT_PASSWORD_FILE"
+            VAULT_PASSWORD_FILE=""
+            rm -f "$VAULT_FILE"
+            clear_screen
+            printf '%s\n' "The existing Vault state is damaged and was removed." >&2
+            printf '%s\n' "A new encrypted Vault will be created now." >&2
+            sleep 2.5
+            create_vault_password_file || return 1
+            clear_screen
             return 0
         fi
+        rm -f "$checked_state"
+        rm -f "$VAULT_PASSWORD_FILE"
+        VAULT_PASSWORD_FILE=""
+        clear_screen
+        if [[ "$attempt" -lt 3 ]]; then
+            printf '%s\n' "The Vault password is incorrect. Please try again." >&2
+            sleep 1.5
+            clear_screen
+        fi
+    done
+    printf '%s\n' "Vault password verification failed after 3 attempts." >&2
+    sleep 2.5
+    return 1
+}
+
+valid_ipv4() {
+    local address="$1" part
+    local -a octets
+    IFS=. read -r -a octets <<<"$address"
+    [[ "${#octets[@]}" == 4 ]] || return 1
+    for part in "${octets[@]}"; do
+        [[ "$part" =~ ^[0-9]+$ ]] || return 1
+        ((10#$part <= 255)) || return 1
     done
 }
 
-# ─────────────────────────────── menus ───────────────────────────────
-
-render_home() {
-    header "xray › menu"
-
-    echo "1. Server"
-    echo "2. Keys"
-    echo
-    echo "x. exit"
-}
-
-render_server_menu() {
-    header "xray › server"
-
-    echo "1. Install"
-    echo "2. Remove"
-    echo "3. Restart"
-    echo "4. Status"
-    echo
-    echo "b. back"
-    echo "m. main"
-    echo "x. exit"
-}
-
-menu_server() {
-    while :; do
-        render_server_menu
-        menu_prompt
-        read -r ans
-        case "$(first_token_lower "$ans")" in
-            1) server_create_interactive ;;
-            2) server_remove ;;
-            3) server_restart ;;
-            4) print_server_info_screen ;;
-            b|m) return 0 ;;
-            x) echo "Bye."; exit 0 ;;
-            *) nav_invalid_inline ;;
-        esac
+valid_server_name() {
+    local value="$1" label
+    local -a labels
+    [[ -n "$value" && ${#value} -le 253 ]] || return 1
+    [[ "$value" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$ ]] || return 1
+    IFS=. read -r -a labels <<<"$value"
+    for label in "${labels[@]}"; do
+        (( ${#label} <= 63 )) || return 1
     done
 }
 
-render_keys_menu() {
-    header "xray › keys"
+json_file_valid() {
+    python3 - "$1" <<'PY'
+import json
+import sys
 
-    echo "1. List"
-    echo "2. Add"
-    echo "3. Remove"
-    echo
-    echo "b. back"
-    echo "m. main"
-    echo "x. exit"
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        state = json.load(stream)
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+if not isinstance(state, dict) or not isinstance(state.get("nodes"), dict):
+    raise SystemExit(1)
+PY
 }
 
-menu_keys() {
-    while :; do
-        render_keys_menu
-        menu_prompt
-        read -r ans
-        case "$(first_token_lower "$ans")" in
-            1) keys_list_screen ;;
-            2) keys_add_screen ;;
-            3) keys_remove_menu ;;
-            b|m) return 0 ;;
-            x) echo "Bye."; exit 0 ;;
-            *) nav_invalid_inline ;;
-        esac
-    done
+vault_ciphertext_valid() {
+    [[ -s "$VAULT_FILE" ]] || return 1
+    awk '
+        NR == 1 {
+            fields = split($0, header, ";")
+            if (fields != 3 || header[1] != "$ANSIBLE_VAULT" ||
+                header[2] !~ /^[0-9]+[.][0-9]+$/ ||
+                header[3] !~ /^[A-Za-z0-9_-]+$/) bad = 1
+            next
+        }
+        {
+            if ($0 !~ /^[0-9A-Fa-f]+$/ || length($0) % 2 != 0) bad = 1
+            payload = 1
+        }
+        END { exit (bad || !payload) ? 1 : 0 }
+    ' "$VAULT_FILE"
 }
 
-menu_xray() {
-    while :; do
-        render_home
-        menu_prompt
-        read -r ans
-        case "$(first_token_lower "$ans")" in
-            1) menu_server ;;
-            2) menu_keys ;;
-            x) echo "Bye."; exit 0 ;;
-            *) nav_invalid_inline ;;
-        esac
-    done
-}
-
-# ──────────────────────── bootstrap: auth & run ───────────────────────
-
-print_attempt() { header "[Check VPS]"; }
-
-mkdir -p /tmp && : > /tmp/known_hosts
-
-for i in {1..3}; do
-    print_attempt "$i"
-    while :; do
-        printf "%-22s" "Enter VPS IP address: " >&2
-        read -r host
-        [[ -z "$host" ]] && { echo "IP address can't be empty." >&2; continue; }
-        break
-    done
-    printf "%-22s" "Enter VPS port (default 22): " >&2
-    read -r port; [[ -z "$port" ]] && port=22
-    while :; do
-        printf "%-22s" "Enter VPS password: " >&2
-        read -rs password; printf "\n"
-        [[ -z "$password" ]] && { echo "Password can't be empty." >&2; continue; }
-        break
-    done
-    if test_login "$host" "$port" "$password"; then
-        header "[ok]"
-        sleep 0.8
-        break
+vault_view() {
+    if [[ -f "$VAULT_FILE" ]]; then
+        local output
+        if ! ensure_vault_password_file; then
+            return 1
+        fi
+        if [[ ! -f "$VAULT_FILE" ]]; then
+            printf '{"nodes":{}}\n'
+            return 0
+        fi
+        output="$(mktemp "$STATE_DIR/.view.XXXXXX")"
+        if ! ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" >"$output"; then
+            rm -f "$output"
+            return 1
+        fi
+        if ! json_file_valid "$output"; then
+            rm -f "$output"
+            printf '%s\n' "The encrypted Vault contains invalid state and was not changed." >&2
+            return 1
+        fi
+        cat "$output"
+        rm -f "$output"
     else
-        printf "Incorrect IP, port or password. Try again.\n" >&2
-        sleep 1
+        printf '{"nodes":{}}\n'
     fi
-    [[ $i -eq 3 ]] && { printf "The maximum number of attempts has been reached.\nPlease try again later\n" >&2; exit 1; }
+}
+
+read_vault_state() {
+    local output="$1"
+    if ! vault_view >"$output"; then
+        rm -f "$output"
+        clear_screen
+        printf '%s\n' "Unable to read the encrypted Vault state."
+        printf '%s\n' "Restore a valid backup or delete the invalid Vault before continuing."
+        printf '%s\n' "The Vault was not changed."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
+}
+
+vault_state_command() {
+    local state command_status
+    state="$(mktemp "$STATE_DIR/.read.XXXXXX")"
+    if ! read_vault_state "$state"; then
+        rm -f "$state"
+        return 1
+    fi
+    if "$@" <"$state"; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    rm -f "$state"
+    return "$command_status"
+}
+
+vault_save() {
+    local input="$1" encrypted checked
+    if ! ensure_vault_password_file; then
+        return 1
+    fi
+    if ! json_file_valid "$input"; then
+        printf '%s\n' "Refusing to save invalid Vault state." >&2
+        return 1
+    fi
+    encrypted="$(mktemp "$STATE_DIR/.vault.XXXXXX")"
+    checked="$(mktemp "$STATE_DIR/.decrypted.XXXXXX")"
+    chmod 600 "$encrypted" "$checked"
+    if ! ansible-vault encrypt "$input" --output "$encrypted" --vault-password-file "$VAULT_PASSWORD_FILE"; then
+        rm -f "$encrypted" "$checked"
+        return 1
+    fi
+    if ! ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$encrypted" >"$checked" || ! json_file_valid "$checked"; then
+        rm -f "$encrypted" "$checked"
+        printf '%s\n' "Refusing to install an invalid encrypted Vault." >&2
+        return 1
+    fi
+    mv -f "$encrypted" "$VAULT_FILE"
+    chmod 600 "$VAULT_FILE"
+    rm -f "$checked"
+}
+
+state_mutate() {
+    local action="$1"; shift
+    local before after
+    before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
+    after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
+    read_vault_state "$before" || { rm -f "$before" "$after"; return 1; }
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" "$action" "$@" <"$before" >"$after"; then
+        rm -f "$before" "$after"
+        return 1
+    fi
+    if ! vault_save "$after"; then
+        rm -f "$before" "$after"
+        clear_screen
+        printf '%s\n' "The Vault was not changed."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
+    rm -f "$before" "$after"
+}
+
+initialize_vault() {
+    local temp
+    temp="$(mktemp "$STATE_DIR/.initial-state.XXXXXX")"
+    printf '{"nodes":{}}\n' >"$temp"
+    if ! vault_save "$temp"; then
+        rm -f "$temp"
+        printf '%s\n' "Vault creation failed."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
+    rm -f "$temp"
+    printf '%s\n' "Vault created."
+    read -r -p "Press Enter to continue" _
+}
+
+delete_vault() {
+    local confirm
+    while true; do
+        clear_screen
+        echo
+        menu_heading "Delete Vault:"
+        echo
+        printf '%s\n' "This will delete the Vault, its backups, and all saved VPS/VPN access data."
+        echo
+        printf '%s\n' "Are you sure you want to delete the Vault? (y/n)"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        read -r -e -p '?: ' confirm
+        case "$confirm" in
+            [Yy]) break ;;
+            [Nn]|b) return 0 ;;
+            m) MAIN_MENU_REQUESTED=1; return 0 ;;
+            i) show_info vault ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+    rm -f "$VAULT_FILE" "$STATE_DIR/vault.json.backup" "$VAULT_PASSWORD_FILE"
+    rm -rf "$STATE_DIR/backups"
+    rm -f "$STATE_DIR"/vault.json.restore.*
+    VAULT_PASSWORD_FILE=""
+    printf '%s\n' "Vault deleted."
+    read -r -p "Press Enter to continue" _
+}
+
+has_vault_backups() {
+    compgen -G "$STATE_DIR/backups/vault-*.tar.gz" >/dev/null
+}
+
+backup_vault() {
+    local backup_dir backup_file
+    backup_dir="$STATE_DIR/backups"
+    mkdir -p "$backup_dir"
+    chmod 700 "$backup_dir"
+    backup_file="$backup_dir/vault-$(date -u '+%Y%m%dT%H%M%SZ').tar.gz"
+    if ! tar -C "$STATE_DIR" -czf "$backup_file" "$(basename "$VAULT_FILE")"; then
+        rm -f "$backup_file"
+        printf '%s\n' "Could not create the encrypted Vault backup."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
+    chmod 600 "$backup_file"
+    printf '%s\n' "Encrypted Vault backup created:"
+    printf '%s\n' "$backup_file"
+    read -r -p "Press Enter to continue" _
+}
+
+restore_vault() {
+    local archive tmpdir entry restored current_backup
+    read -r -e -p 'Encrypted Vault backup path: ' archive
+    if [[ ! -f "$archive" ]]; then
+        printf '%s\n' "Backup file not found."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
+    entry="$(tar -tzf "$archive" 2>/dev/null | awk '$0 == "vault.json" { print; exit }')"
+    if [[ -z "$entry" ]]; then
+        printf '%s\n' "Invalid backup: vault.json was not found."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
+    tmpdir="$(mktemp -d /tmp/xray-vault-restore.XXXXXX)"
+    if ! tar -xzf "$archive" -C "$tmpdir" "$entry"; then
+        rm -rf "$tmpdir"
+        printf '%s\n' "Could not extract the encrypted Vault backup."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
+    restored="$tmpdir/$entry"
+    if [[ ! -s "$restored" ]]; then
+        rm -rf "$tmpdir"
+        printf '%s\n' "Invalid backup: the encrypted Vault is empty."
+        read -r -p "Press Enter to continue" _
+        return 1
+    fi
+    if [[ -f "$VAULT_FILE" ]]; then
+        current_backup="$STATE_DIR/vault.json.restore.$(date -u '+%Y%m%dT%H%M%SZ')"
+        mv "$VAULT_FILE" "$current_backup"
+        chmod 600 "$current_backup"
+    fi
+    mv "$restored" "$VAULT_FILE"
+    chmod 600 "$VAULT_FILE"
+    rm -rf "$tmpdir"
+    rm -f "$VAULT_PASSWORD_FILE"
+    VAULT_PASSWORD_FILE=""
+    printf '%s\n' "Encrypted Vault restored."
+    read -r -p "Press Enter to continue" _
+}
+
+prompt_nav() {
+    echo
+    menu_control b back
+    menu_control m main
+    menu_control i info
+    menu_control x exit
+    echo
+    read -r -e -p '?: ' REPLY
+}
+
+menu_heading() {
+    printf '%s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET"
+}
+
+menu_option() {
+    printf '%s%s.%s %s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET" "$COLOR_TEXT" "$2" "$COLOR_RESET"
+}
+
+menu_control() {
+    printf '%s%s.%s %s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET" "$COLOR_TEXT" "$2" "$COLOR_RESET"
+}
+
+show_info() {
+    local topic="${1:-general}"
+    local reset="$COLOR_RESET" blue="$COLOR_LINE" gray="$COLOR_MUTED"
+    local green=$'\033[92m' yellow=$'\033[93m' red=$'\033[91m'
+
+    if [[ ! -t 1 ]]; then
+        reset=''
+        blue=''
+        gray=''
+        green=''
+        yellow=''
+        red=''
+    fi
+
+    clear_screen
+    echo
+    case "$topic" in
+        status)
+            printf '%b  Status:%b\n' "$blue" "$reset"
+            printf '    %bActive%b           %bXray is running and both VPN ports are reachable.%b\n' "$green" "$reset" "$gray" "$reset"
+            printf '    %bPartial%b          %bXray is running and only one VPN port is reachable.%b\n' "$yellow" "$reset" "$gray" "$reset"
+            printf '    %bVPN unavailable%b  %bThe VPS responded, but Xray is not confirmed running.%b\n' "$red" "$reset" "$gray" "$reset"
+            printf '    %bUnreachable%b      %bNo VPN or management port responded; DPI or a provider firewall may be involved.%b\n' "$red" "$reset" "$gray" "$reset"
+            ;;
+        access_keys)
+            printf '%b  Access keys:%b\n' "$blue" "$reset"
+            printf '%s\n' "    Each access key contains one Vision UUID and one XHTTP UUID."
+            printf '%s\n' "    Both UUIDs are deployed together and removed together."
+            printf '%s\n' "    You can add up to 50 access keys at once."
+            printf '%s\n' "    In the remove screen, enter a key number or the last number to remove all keys."
+            ;;
+        server)
+            printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
+            printf '%s\n' "    Check the VPS connection, Xray container, and VPN ports."
+            printf '%s\n' "    Restart the Xray VPN service when it is not responding."
+            printf '%s\n' "    Rotate the SSH management key without changing VPN access keys."
+            printf '%s\n' "    Removing a server cleans up the remote installation before changing the Vault."
+            ;;
+        vault)
+            printf '%b  Vault:%b\n' "$blue" "$reset"
+            printf '%s\n' "    The Vault is encrypted local storage for VPS access data and VPN keys."
+            printf '%s\n' "    It is unlocked only when an operation needs the saved data."
+            printf '%s\n' "    Keep the Vault password safe: it cannot be recovered from the file."
+            ;;
+        removal)
+            printf '%b  Remote cleanup:%b\n' "$blue" "$reset"
+            printf '%s\n' "    Xray, Docker, updater services, and the deploy user are removed from the VPS."
+            printf '%s\n' "    The original SSH configuration is restored from its backup."
+            printf '%s\n' "    The server stays in the Vault if remote cleanup fails."
+            ;;
+        *)
+            printf '%b  Xray TUI:%b\n' "$blue" "$reset"
+            printf '%s\n' "    This tool installs and manages your Xray VPN servers."
+            printf '%s\n' "    VPS access data and VPN keys are kept in the encrypted Vault."
+            echo
+            printf '%b  Main menu:%b\n' "$blue" "$reset"
+            echo
+            printf '%s\n' "  1. VPN servers"
+            printf '%s\n' "     - View the VPN servers saved in the Vault."
+            printf '%s\n' "     - Check the VPS, SSH, Xray, and VPN port status."
+            printf '%s\n' "     - Select a server to manage it."
+            printf '%s\n' "     - If there are no servers, add one with option 2 first."
+            echo
+            printf '%s\n' "     Selected server menu:"
+            printf '%s\n' "     1. Manage VPN server"
+            printf '%s\n' "        Check status, restart Xray, rotate the SSH key, or remove the server."
+            printf '%s\n' "     2. Manage access keys"
+            printf '%s\n' "        Show, add, or remove VPN access keys for this server."
+            echo
+            printf '%s\n' "  2. Add VPN server"
+            printf '%s\n' "     - Enter the VPS IP address, SSH user, SSH port, and password."
+            printf '%s\n' "     - Enter a Reality camouflage domain, or use github.com by default."
+            printf '%s\n' "     - Install Docker, Xray, automatic updates, and SSH hardening."
+            printf '%s\n' "     - Generate VPN access keys and save all connection data in the Vault."
+            printf '%s\n' "     - Repeating setup for the same VPS is safe and idempotent."
+            echo
+            printf '%s\n' "  3. Vault"
+            printf '%s\n' "     1. Change encryption password"
+            printf '%s\n' "        Change the password protecting the local Vault."
+            printf '%s\n' "     2. Backup encrypted state"
+            printf '%s\n' "        Create a backup containing the encrypted Vault file."
+            printf '%s\n' "     3. Restore encrypted state"
+            printf '%s\n' "        Replace the current Vault with a selected encrypted backup."
+            printf '%s\n' "     4. Delete Vault"
+            printf '%s\n' "        Delete local VPS access data, VPN keys, and Vault backups."
+            echo
+            printf '%s\n' "  Manage VPN server"
+            printf '%s\n' "     1. Check VPN status"
+            printf '%s\n' "        Test SSH access, the Xray container, and both VPN ports."
+            printf '%s\n' "     2. Restart VPN server"
+            printf '%s\n' "        Restart the Xray Docker stack without changing access keys."
+            printf '%s\n' "     3. Rotate SSH key"
+            printf '%s\n' "        Generate a new deploy SSH key and revoke the old one."
+            printf '%s\n' "     4. Remove VPN server"
+            printf '%s\n' "        Remove the Xray installation and clean up the VPS."
+            printf '%s\n' "        The Vault is changed only after remote cleanup succeeds."
+            echo
+            printf '%s\n' "  Manage access keys"
+            printf '%s\n' "     1. Show"
+            printf '%s\n' "        Display the Vision and XHTTP connection links for each key."
+            printf '%s\n' "     2. Add"
+            printf '%s\n' "        Add from 1 to 50 access keys and deploy them to the VPS."
+            printf '%s\n' "     3. Remove"
+            printf '%s\n' "        Select a key by number and remove both protocol UUIDs together."
+            printf '%s\n' "        Choose the last number to remove every access key at once."
+            echo
+            printf '%b  Navigation:%b\n' "$blue" "$reset"
+            printf '%s\n' "  b. back   Return to the previous menu."
+            printf '%s\n' "  m. main   Return to the main menu."
+            printf '%s\n' "  i. info   Show help for the current screen."
+            printf '%s\n' "  x. exit   Exit Xray TUI and clear the screen."
+            ;;
+    esac
+    echo
+    read -r -e -p "Press Enter to return" _
+}
+
+clear_screen() {
+    printf '\033[H\033[2J\033[3J' >&2
+}
+
+wait_action_return() {
+    local key
+    [[ -t 0 ]] || return 0
+    while true; do
+        printf '\n\033[90mPress Enter or Space to return to the menu.\033[0m'
+        IFS= read -r -s -n 1 key || return 0
+        case "$key" in
+            ""|" ")
+                echo
+                return 0
+                ;;
+            x|X)
+                exit_tui
+                ;;
+        esac
+    done
+}
+
+exit_tui() {
+    clear_screen
+    exit 0
+}
+
+invalid_choice() {
+    printf '%s\n' "Invalid input. Use the English keyboard layout."
+    sleep 1
+    clear_screen
+}
+
+show_nodes() {
+    local state
+    state="$(mktemp "$STATE_DIR/.nodes.XXXXXX")"
+    if materialize_vault_state "$state"; then
+        python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
+    fi
+    rm -f "$state"
+}
+
+materialize_vault_state() {
+    local state="$1" normalized
+    normalized="$(mktemp "$STATE_DIR/.normalized.XXXXXX")"
+    if ! read_vault_state "$state"; then
+        rm -f "$normalized"
+        return 1
+    fi
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" normalize <"$state" >"$normalized"; then
+        rm -f "$normalized"
+        printf '%s\n' "Unable to normalize the encrypted Vault state." >&2
+        return 1
+    fi
+    if ! cmp -s "$state" "$normalized"; then
+        if ! vault_save "$normalized"; then
+            rm -f "$normalized"
+            printf '%s\n' "The encrypted Vault could not be updated." >&2
+            return 1
+        fi
+    fi
+    mv -f "$normalized" "$state"
+}
+
+show_node_status() {
+    local node="$1" state
+    state="$(mktemp "$STATE_DIR/.node.XXXXXX")"
+    if materialize_vault_state "$state"; then
+        python3 "$ROOT_DIR/scripts/render_nodes.py" --check --node "$node" <"$state"
+    fi
+    rm -f "$state"
+}
+
+yaml_scalar() {
+    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
+run_ansible_playbook() {
+    local log rc
+    LAST_ANSIBLE_OUTPUT=""
+    log="$(mktemp "$STATE_DIR/.ansible.XXXXXX")"
+    if ansible-playbook "$@" 2>&1 | tee "$log"; then
+        rc=0
+    else
+        rc="${PIPESTATUS[0]}"
+    fi
+    if ((rc != 0)); then
+        LAST_ANSIBLE_OUTPUT="$(tail -n 24 "$log")"
+        echo
+        printf '%s\n' "Ansible failed with exit code ${rc}. Last output:"
+        printf '%s\n' "$LAST_ANSIBLE_OUTPUT"
+    fi
+    rm -f "$log"
+    return "$rc"
+}
+
+find_node_by_connection() {
+    local state_file="$1" host="$2" port="$3"
+    python3 - "$state_file" "$host" "$port" <<'PY'
+import json
+import sys
+
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+host, port = sys.argv[2:]
+for name, node in state.get("nodes", {}).items():
+    saved_host = str(node.get("host", ""))
+    saved_ports = {
+        str(node.get("management_port", "")),
+        str(node.get("ssh_port", "")),
+        str(node.get("bootstrap_ssh_port", "")),
+    }
+    if not node.get("bootstrap_ssh_port"):
+        saved_ports.add("22")
+    if saved_host == host and port in saved_ports:
+        print(name)
+        break
+PY
+}
+
+retry_existing_node_with_bootstrap() {
+    local node="$1" state_file="$2" host="$3" user="$4" port="$5" use_saved_password="${6:-0}"
+    local password retry_state saved_password
+
+    clear_screen
+    printf '%s\n' "Ansible will verify the VPS address, SSH port, user, and password."
+    echo
+    saved_password="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_password", ""), end="")' "$node" <"$state_file")"
+    if [[ "$use_saved_password" == 1 && -n "$saved_password" ]]; then
+        password="$saved_password"
+        printf '%s\n' "Using the encrypted initial SSH password from the Vault."
+        sleep 1
+    else
+        if ! read_ascii_secret 'VPS password: '; then
+            return 1
+        fi
+        password="$REPLY"
+    fi
+    retry_state="$(mktemp "$STATE_DIR/.retry.XXXXXX")"
+    if ! XRAY_BOOTSTRAP_PASSWORD="$password" python3 "$ROOT_DIR/scripts/state_cli.py" set-bootstrap "$node" "$user" "$port" <"$state_file" >"$retry_state"; then
+        unset password
+        rm -f "$retry_state"
+        return 1
+    fi
+    unset password
+    if ! deploy_node "$node" "$retry_state" "" 1; then
+        rm -f "$retry_state"
+        return 1
+    fi
+    if ! vault_save "$retry_state"; then
+        rm -f "$retry_state"
+        return 1
+    fi
+    rm -f "$retry_state"
+    return 0
+}
+
+retry_existing_node_with_saved_key() {
+    local node="$1" state_file="$2" connect_port="$3" recovery_state key_file host user target_port management_port bootstrap_port probe_port recovery_rc
+    recovery_state="$(mktemp "$STATE_DIR/.recovery.XXXXXX")"
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" ensure-ssh-port "$node" "$connect_port" <"$state_file" >"$recovery_state"; then
+        rm -f "$recovery_state"
+        return 1
+    fi
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$recovery_state")"
+    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$recovery_state")"
+    target_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_port"])' "$node" <"$recovery_state")"
+    management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("management_port", ""))' "$node" <"$recovery_state")"
+    bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", ""))' "$node" <"$recovery_state")"
+    key_file="$(mktemp "$STATE_DIR/.probe.XXXXXX")"
+    python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$recovery_state" >"$key_file"
+    chmod 600 "$key_file"
+
+    if [[ ! -s "$key_file" ]]; then
+        rm -f "$recovery_state" "$key_file"
+        return "$NO_SAVED_SSH_ACCESS"
+    fi
+
+    for probe_port in "$management_port" "$target_port" "$connect_port" "$bootstrap_port"; do
+        [[ -n "$probe_port" ]] || continue
+        if ssh -i "$key_file" -p "$probe_port" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=5 \
+            -o ConnectionAttempts=1 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR \
+            "$user@$host" true; then
+            if deploy_node "$node" "$recovery_state" "$probe_port"; then
+                rm -f "$key_file"
+                if vault_save "$recovery_state"; then
+                    rm -f "$recovery_state"
+                    return 0
+                fi
+                rm -f "$recovery_state"
+                return 1
+            else
+                recovery_rc=$?
+                rm -f "$recovery_state" "$key_file"
+                return "$recovery_rc"
+            fi
+        fi
+    done
+    rm -f "$recovery_state" "$key_file"
+    return "$NO_SAVED_SSH_ACCESS"
+}
+
+add_node() {
+    local name host server_name bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port
+    clear_screen
+    read -r -e -p 'VPS IP address: ' host
+    if ! valid_ipv4 "$host"; then
+        printf '%s\n' "Invalid VPS IP address. Enter an IPv4 address."
+        sleep 1.5
+        return 1
+    fi
+    read -r -e -p 'VPS user (press Enter to use root): ' bootstrap_user
+    bootstrap_user="${bootstrap_user:-root}"
+    read -r -e -p 'VPS SSH port (press Enter to use 22): ' bootstrap_port
+    bootstrap_port="${bootstrap_port:-22}"
+    if [[ ! "$bootstrap_port" =~ ^[0-9]+$ ]] || ((10#$bootstrap_port < 1 || 10#$bootstrap_port > 65535)); then
+        printf '%s\n' "Invalid VPS SSH port. Enter a number from 1 to 65535."
+        sleep 1.5
+        return 1
+    fi
+    before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
+    after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
+    if ! read_vault_state "$before"; then
+        rm -f "$before" "$after"
+        return 1
+    fi
+
+    existing_node="$(find_node_by_connection "$before" "$host" "$bootstrap_port")"
+    if [[ -n "$existing_node" ]]; then
+        saved_bootstrap_user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_user", "root"), end="")' "$existing_node" <"$before")"
+        saved_bootstrap_port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_ssh_port", 22), end="")' "$existing_node" <"$before")"
+        if [[ "$bootstrap_user" != "$saved_bootstrap_user" || "$bootstrap_port" != "$saved_bootstrap_port" ]]; then
+            clear_screen
+            printf '%s\n' "A VPN server for this IP address and SSH port already exists in the Vault."
+            printf '%s\n' "The saved server uses SSH user ${saved_bootstrap_user} on port ${saved_bootstrap_port}."
+            printf '%s\n' "The entered user and port will be used to recover or redeploy this server."
+            echo
+            if retry_existing_node_with_bootstrap "$existing_node" "$before" "$host" "$bootstrap_user" "$bootstrap_port"; then
+                rm -f "$before" "$after"
+                printf '%s\n' "VPN server already exists in Vault. Bootstrap deployment completed idempotently."
+            else
+                rm -f "$before" "$after"
+                printf '%s\n' "Deployment failed. The existing Vault was not changed."
+            fi
+            wait_action_return
+            return 0
+        fi
+        if deploy_node "$existing_node" "$before"; then
+            if vault_save "$before"; then
+                rm -f "$before" "$after"
+                printf '%s\n' "VPN server already exists in Vault. Deployment completed idempotently."
+            else
+                rm -f "$before" "$after"
+                printf '%s\n' "The VPN server was deployed, but the encrypted Vault could not be updated."
+            fi
+        elif retry_existing_node_with_saved_key "$existing_node" "$before" "$bootstrap_port"; then
+            rm -f "$before" "$after"
+            printf '%s\n' "VPN server already exists in Vault. SSH access recovered on the bootstrap port."
+        else
+            recovery_rc=$?
+            if ((recovery_rc == NO_SAVED_SSH_ACCESS)) && retry_existing_node_with_bootstrap "$existing_node" "$before" "$host" "$bootstrap_user" "$bootstrap_port" 1; then
+                rm -f "$before" "$after"
+                printf '%s\n' "VPN server already exists in Vault. Bootstrap deployment completed idempotently."
+            else
+                rm -f "$before" "$after"
+                printf '%s\n' "Deployment failed. The existing Vault was not changed."
+            fi
+        fi
+        wait_action_return
+        return 0
+    fi
+
+    clear_screen
+    printf '%s\n' "Reality camouflage domain (SNI)"
+    printf '%s\n' "Enter a public HTTPS domain without https:// or a path."
+    printf '%s\n' "Press Enter to use github.com, or type another domain."
+    echo
+    read -r -e -p 'Domain: ' server_name
+    server_name="${server_name:-github.com}"
+    if ! valid_server_name "$server_name"; then
+        printf '%s\n' "Invalid domain. Use an ASCII HTTPS hostname such as github.com."
+        sleep 1.5
+        rm -f "$before" "$after"
+        wait_action_return
+        return 1
+    fi
+    server_name="${server_name,,}"
+
+    clear_screen
+    printf '%s\n' "Ansible will verify the VPS address, SSH port, user, and password."
+    echo
+    if ! read_ascii_secret 'VPS password: '; then
+        rm -f "$before" "$after"
+        wait_action_return
+        return 1
+    fi
+    bootstrap_password="$REPLY"
+
+    name="auto"
+    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" add-node "$name" "$host" <"$before" >"$after"; then
+        rm -f "$before" "$after"
+        return 1
+    fi
+    unset bootstrap_password
+    name="$(python3 - "$before" "$after" <<'PY'
+import json
+import sys
+
+before = json.load(open(sys.argv[1], encoding="utf-8"))
+after = json.load(open(sys.argv[2], encoding="utf-8"))
+print(next(name for name in after["nodes"] if name not in before.get("nodes", {})))
+PY
+)"
+    rm -f "$before"
+    if ! deploy_node "$name" "$after" "" 1; then
+        rm -f "$after"
+        printf '%s\n' "Initial deployment failed. The VPN server was not added."
+        wait_action_return
+        return 1
+    fi
+    if ! vault_save "$after"; then
+        rm -f "$after"
+        printf '%s\n' "The VPN server was deployed, but the encrypted Vault could not be saved."
+        printf '%s\n' "The server was not added to the local menu."
+        wait_action_return
+        return 1
+    fi
+    rm -f "$after"
+    printf '%s\n' "VPN server installed and added to the encrypted Vault."
+    wait_action_return
+}
+
+deploy_node() {
+    local node="$1" state_file="${2:-}" connect_port="${3:-}" bootstrap_mode="${4:-0}" before extra inventory inventory_dir key_file user host port target_port management_port legacy_port bootstrap_port bootstrap bootstrap_password bootstrap_user rc marked migrated_state
+    before="$(mktemp)"
+    extra="$(mktemp)"
+    inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    if [[ -n "$state_file" ]]; then
+        cp "$state_file" "$before"
+    else
+        read_vault_state "$before" || { rm -f "$before" "$extra"; rm -rf "$inventory_dir"; return 1; }
+    fi
+    legacy_port="$(python3 -c 'import json,sys; value=json.load(sys.stdin)["nodes"][sys.argv[1]].get("ssh_port"); print(value if value is not None else "")' "$node" <"$before")"
+    bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", 22))' "$node" <"$before")"
+    if [[ -z "$legacy_port" || "$legacy_port" == "22" || "$legacy_port" == "$bootstrap_port" ]]; then
+        migrated_state="$(mktemp "$STATE_DIR/.migrated.XXXXXX")"
+        if ! python3 "$ROOT_DIR/scripts/state_cli.py" ensure-ssh-port "$node" "$bootstrap_port" <"$before" >"$migrated_state"; then
+            rm -f "$before" "$extra" "$migrated_state"; rm -rf "$inventory_dir"
+            return 1
+        fi
+        mv -f "$migrated_state" "$before"
+        connect_port="${connect_port:-$bootstrap_port}"
+    fi
+    python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    target_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_port"])' "$node" <"$before")"
+    management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("management_port", ""))' "$node" <"$before")"
+    port="${connect_port:-${management_port:-$target_port}}"
+    key_file="$(mktemp)"
+    bootstrap="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_private_key", ""), end="")' "$node" <"$before")"
+    bootstrap_password="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_password", ""), end="")' "$node" <"$before")"
+    if [[ "$bootstrap_mode" != 1 ]]; then
+        bootstrap_password=""
+    fi
+    bootstrap_user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_user", "root"), end="")' "$node" <"$before")"
+    if [[ -n "$bootstrap_password" ]]; then
+        user="$bootstrap_user"
+        port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", 22))' "$node" <"$before")"
+        bootstrap_password="$(yaml_scalar "$bootstrap_password")"
+        printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: $user" "          ansible_port: $port" "          ansible_password: $bootstrap_password" "          ansible_become_password: $bootstrap_password" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o PubkeyAuthentication=no -o PreferredAuthentications=password'" >"$inventory"
+    elif [[ -n "$bootstrap" ]]; then
+        user="$bootstrap_user"
+        printf '%s' "$bootstrap" >"$key_file"
+        printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: $user" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    else
+        user=deploy
+        python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
+        printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: $user" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    fi
+    chmod 600 "$key_file"
+    if [[ -n "$bootstrap_password" ]]; then
+        if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/bootstrap.yml"; then
+            :
+        else
+            rc=$?
+            rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+            return "$rc"
+        fi
+    else
+        if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/bootstrap.yml" --private-key "$key_file"; then
+            :
+        else
+            rc=$?
+            rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+            return "$rc"
+        fi
+    fi
+    if [[ -n "$bootstrap_password" || -n "$bootstrap" ]]; then
+        python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
+        chmod 600 "$key_file"
+    fi
+
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/harden_ssh.yml" --private-key "$key_file"; then
+        :
+    else
+        rc=$?
+        rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+        return "$rc"
+    fi
+
+    local verify_attempt
+    for verify_attempt in {1..12}; do
+        if ssh -i "$key_file" -p "$target_port" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=8 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR \
+            deploy@"$host" true; then
+            break
+        fi
+        if ((verify_attempt < 12)); then
+            sleep 5
+        fi
+    done
+    if ((verify_attempt == 12)); then
+        printf '%s\n' "Deployment completed, but the generated SSH port could not be verified: $target_port."
+        rm -f "$before" "$extra" "$key_file"
+        rm -rf "$inventory_dir"
+        return 1
+    fi
+    ssh -i "$key_file" -p "$target_port" \
+        -o IdentitiesOnly=yes \
+        -o BatchMode=yes \
+        -o ConnectTimeout=8 \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR \
+        deploy@"$host" \
+        'sudo -n sh -c "systemctl stop xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true; systemctl reset-failed xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true"' \
+        || true
+
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $target_port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/site.yml" --private-key "$key_file"; then
+        :
+    else
+        rc=$?
+        rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+        return "$rc"
+    fi
+
+    if [[ -n "$state_file" || "$user" == root || -n "$bootstrap" || -n "$bootstrap_password" ]]; then
+        marked="$(mktemp "$STATE_DIR/.marked.XXXXXX")"
+        if ! python3 "$ROOT_DIR/scripts/state_cli.py" mark-deployed "$node" <"$before" >"$marked"; then
+            rm -f "$before" "$extra" "$key_file" "$marked"; rm -rf "$inventory_dir"
+            return 1
+        fi
+        mv -f "$marked" "$before"
+        if [[ -n "$state_file" ]]; then
+            cp "$before" "$state_file"
+        else
+            if ! vault_save "$before"; then
+                rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+                return 1
+            fi
+        fi
+    fi
+    rm -f "$before" "$extra" "$key_file"
+    rm -rf "$inventory_dir"
+}
+
+run_node_playbook() {
+    local node="$1" playbook="$2" state_file="${3:-}" before extra inventory inventory_dir key_file host port rc
+    before="$(mktemp)"
+    extra="$(mktemp)"
+    inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    key_file="$(mktemp)"
+    if [[ -n "$state_file" ]]; then
+        cp "$state_file" "$before"
+    else
+        read_vault_state "$before" || { rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"; return 1; }
+    fi
+    python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node["ssh_port"])))' "$node" <"$before")"
+    python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    chmod 600 "$key_file"
+    if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/$playbook" --private-key "$key_file"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    rm -f "$before" "$extra" "$key_file"
+    rm -rf "$inventory_dir"
+    return "$rc"
+}
+
+run_remove_with_bootstrap() {
+    local node="$1" before extra inventory inventory_dir host user port password password_yaml rc
+    before="$(mktemp)"
+    extra="$(mktemp)"
+    inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    if ! read_vault_state "$before"; then
+        rm -f "$before" "$extra"
+        rm -rf "$inventory_dir"
+        return 1
+    fi
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_user", "root"))' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_ssh_port", node.get("initial_port", 22)))' "$node" <"$before")"
+    password="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_password", ""), end="")' "$node" <"$before")"
+    python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
+
+    clear_screen
+    printf '%s\n' "Remote cleanup needs the initial SSH credentials."
+    printf '%s\n' "VPS address: ${host}"
+    printf '%s\n' "SSH user: ${user}"
+    printf '%s\n' "SSH port: ${port}"
+    echo
+    if [[ -n "$password" ]]; then
+        printf '%s\n' "Using the encrypted initial SSH password from the Vault."
+    else
+        if ! read_ascii_secret 'Initial SSH password: '; then
+            rm -f "$before" "$extra"
+            rm -rf "$inventory_dir"
+            return 1
+        fi
+        password="$REPLY"
+    fi
+    password_yaml="$(yaml_scalar "$password")"
+    unset password
+    printf '%s\n' \
+        "---" \
+        "all:" \
+        "  children:" \
+        "    xray_nodes:" \
+        "      hosts:" \
+        "        $node:" \
+        "          ansible_host: $host" \
+        "          ansible_user: $user" \
+        "          ansible_port: $port" \
+        "          ansible_password: $password_yaml" \
+        "          ansible_become_password: $password_yaml" \
+        "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o PubkeyAuthentication=no -o PreferredAuthentications=password'" \
+        >"$inventory"
+    unset password_yaml
+    chmod 600 "$inventory"
+
+    if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    rm -f "$before" "$extra"
+    rm -rf "$inventory_dir"
+    return "$rc"
+}
+
+mutate_access_keys_and_deploy() {
+    local node="$1" action="$2" key_id="${3:-}" before after
+    before="$(mktemp)"
+    after="$(mktemp)"
+    if ! read_vault_state "$before"; then
+        rm -f "$before" "$after"
+        return 1
+    fi
+    if [[ "$action" == "remove-key" || "$action" == "add-keys" ]]; then
+        python3 "$ROOT_DIR/scripts/state_cli.py" "$action" "$node" "$key_id" <"$before" >"$after" || {
+            rm -f "$before" "$after"
+            return 1
+        }
+    else
+        python3 "$ROOT_DIR/scripts/state_cli.py" "$action" "$node" <"$before" >"$after" || {
+            rm -f "$before" "$after"
+            return 1
+        }
+    fi
+    if ! run_node_playbook "$node" site.yml "$after"; then
+        rm -f "$before" "$after"
+        printf '%s\n' "Access key change failed. The existing Vault was not changed."
+        return 1
+    fi
+    if ! vault_save "$after"; then
+        rm -f "$before" "$after"
+        printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
+        printf '%s\n' "The existing Vault was not changed."
+        return 1
+    fi
+    rm -f "$before" "$after"
+    return 0
+}
+
+add_access_keys_menu() {
+    local node="$1" count
+    while true; do
+        clear_screen
+        echo
+        menu_heading "Add access keys:"
+        echo
+        printf '%s\n' "How many access keys do you want to add?"
+        printf '%s\n' "Enter a number from 1 to 50."
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        read -r -e -p '?: ' count
+        case "$count" in
+            b) return 0 ;;
+            m) MAIN_MENU_REQUESTED=1; return 0 ;;
+            i) show_info access_keys ;;
+            x) exit_tui ;;
+            ''|*[!0-9]*)
+                printf '%s\n' "Invalid number. Enter a whole number from 1 to 50."
+                sleep 1
+                clear_screen
+                ;;
+            *)
+                if ((10#$count < 1 || 10#$count > 50)); then
+                    printf '%s\n' "Invalid number. Enter a whole number from 1 to 50."
+                    sleep 1
+                    clear_screen
+                    continue
+                fi
+                clear_screen
+                if mutate_access_keys_and_deploy "$node" add-keys "$count"; then
+                    printf '%s\n' "Access keys added: $count."
+                fi
+                read -r -p "Press Enter to continue" _
+                return 0
+                ;;
+        esac
+    done
+}
+
+remove_access_key_menu() {
+    local node="$1" state key_list selection key_id vision_id xhttp_id confirm key_count remove_all_selection
+    state="$(mktemp "$STATE_DIR/.keys.XXXXXX")"
+    if ! read_vault_state "$state"; then
+        rm -f "$state"
+        return 1
+    fi
+
+    while true; do
+        clear_screen
+        echo
+        menu_heading "Remove access key:"
+        echo
+        key_list="$(python3 - "$node" "$state" <<'PY'
+import json
+import sys
+
+node = json.load(open(sys.argv[2], encoding="utf-8")).get("nodes", {}).get(sys.argv[1])
+if node is None:
+    raise SystemExit("node not found")
+for index, key in enumerate(node.get("xray", {}).get("access_keys", []), 1):
+    print(f"{index}\t{key['key_id']}\t{key['vision_uuid']}\t{key['xhttp_uuid']}")
+PY
+)"
+        if [[ -z "$key_list" ]]; then
+            key_count=0
+            remove_all_selection=1
+            printf '%s\n' "  No access keys configured."
+        else
+            key_count="$(printf '%s\n' "$key_list" | awk 'END {print NR}')"
+            remove_all_selection=$((key_count + 1))
+            while IFS=$'\t' read -r selection key_id vision_id xhttp_id; do
+                printf '  %s%s.%s %sKey id:%s %s\n' "$COLOR_LINE" "$selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET" "$key_id"
+                printf '     Vision ID: %s\n' "$vision_id"
+                printf '     XHTTP ID: %s\n' "$xhttp_id"
+            done <<<"$key_list"
+            echo
+            printf '  %s%s.%s %sremove all access keys%s\n' "$COLOR_LINE" "$remove_all_selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET"
+        fi
+        echo
+        prompt_nav
+        case "$REPLY" in
+            i) show_info access_keys ;;
+            "$remove_all_selection")
+                if [[ -z "$key_list" ]]; then
+                    invalid_choice
+                    continue
+                fi
+                while true; do
+                    clear_screen
+                    echo
+                    menu_heading "Remove all access keys:"
+                    echo
+                    printf '%s\n' "This will remove every Vision and XHTTP access key from the VPS."
+                    printf '%s\n' "Are you sure you want to remove all access keys? (y/n)"
+                    echo
+                    menu_control b back
+                    menu_control m main
+                    menu_control i info
+                    menu_control x exit
+                    echo
+                    read -r -e -p '?: ' confirm
+                    case "$confirm" in
+                        [Yy])
+                            clear_screen
+                            if mutate_access_keys_and_deploy "$node" remove-all-keys; then
+                                printf '%s\n' "All access keys removed."
+                            fi
+                            read -r -p "Press Enter to continue" _
+                            rm -f "$state"
+                            return 0
+                            ;;
+                        [Nn]|b) break ;;
+                        m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return 0 ;;
+                        i) show_info access_keys ;;
+                        x) exit_tui ;;
+                        *) invalid_choice ;;
+                    esac
+                done
+                ;;
+            b) rm -f "$state"; return 0 ;;
+            m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return 0 ;;
+            x) rm -f "$state"; exit_tui ;;
+            ''|*[!0-9]*) invalid_choice ;;
+            *)
+                if [[ -z "$key_list" ]]; then
+                    invalid_choice
+                    continue
+                fi
+                key_list="$(python3 - "$node" "$REPLY" "$state" <<'PY'
+import json
+import sys
+
+node = json.load(open(sys.argv[3], encoding="utf-8")).get("nodes", {}).get(sys.argv[1])
+index = int(sys.argv[2])
+keys = node.get("xray", {}).get("access_keys", []) if node else []
+if 1 <= index <= len(keys):
+    key = keys[index - 1]
+    print(f"{key['key_id']}\t{key['vision_uuid']}\t{key['xhttp_uuid']}")
+PY
+)"
+                if [[ -z "$key_list" ]]; then
+                    invalid_choice
+                    continue
+                fi
+                IFS=$'\t' read -r key_id vision_id xhttp_id <<<"$key_list"
+                while true; do
+                    clear_screen
+                    echo
+                    menu_heading "Remove access key:"
+                    echo
+                    printf '%s\n' "  Key id: $key_id"
+                    printf '%s\n' "  Vision ID: $vision_id"
+                    printf '%s\n' "  XHTTP ID: $xhttp_id"
+                    echo
+                    printf '%s\n' "  Are you sure you want to remove this access key? (y/n)"
+                    echo
+                    menu_control b back
+                    menu_control m main
+                    menu_control i info
+                    menu_control x exit
+                    echo
+                    read -r -e -p '  ?: ' confirm
+                    case "$confirm" in
+                        [Yy])
+                            clear_screen
+                            if mutate_access_keys_and_deploy "$node" remove-key "$key_id"; then
+                                printf '%s\n' "Access key removed."
+                            fi
+                            read -r -p "Press Enter to continue" _
+                            rm -f "$state"
+                            return 0
+                            ;;
+                        [Nn]|b) break ;;
+                        m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return 0 ;;
+                        i) show_info access_keys ;;
+                        x) rm -f "$state"; exit_tui ;;
+                        *) invalid_choice ;;
+                    esac
+                done
+                ;;
+        esac
+    done
+}
+
+rotate_ssh_key() {
+    local node="$1" before extra inventory inventory_dir key_dir old_key new_key new_pub rotated_state host old_pub port rc
+    before="$(mktemp)"
+    extra="$(mktemp)"
+    inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    key_dir="$(mktemp -d "$STATE_DIR/.ssh-rotate.XXXXXX")"
+    old_key="$key_dir/old"
+    new_key="$key_dir/new"
+    new_pub="${new_key}.pub"
+    rotated_state="$(mktemp "$STATE_DIR/.rotated-state.XXXXXX")"
+    read_vault_state "$before" || { rm -f "$before" "$extra" "$rotated_state"; rm -rf "$inventory_dir" "$key_dir"; return 1; }
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node["ssh_port"])))' "$node" <"$before")"
+    old_pub="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_authorized_key", node.get("deploy_authorized_key", "")), end="")' "$node" <"$before")"
+    python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$old_key"
+    chmod 600 "$old_key"
+    ssh-keygen -q -t ed25519 -N "" -f "$new_key"
+
+    python3 - "$before" "$node" "$new_pub" "$old_pub" >"$extra" <<'PY'
+import json
+import sys
+
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+node = state["nodes"][sys.argv[2]]
+data = {
+    "xray_state": node["xray"],
+    "xray_public_host": node["host"],
+    "deploy_user": "deploy",
+    "deploy_authorized_key": node.get("management_authorized_key", node.get("deploy_authorized_key", "")),
+    "old_deploy_authorized_key": sys.argv[4],
+    "new_deploy_authorized_key": open(sys.argv[3], encoding="utf-8").read().strip(),
+}
+json.dump(data, sys.stdout, indent=2)
+print()
+PY
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    if ! run_ansible_playbook -i "$inventory" -e "@$extra" -e rotate_remove_old_key=false "$ROOT_DIR/ansible/rotate-ssh.yml" --private-key "$old_key"; then
+        rm -f "$before" "$extra" "$rotated_state"
+        rm -rf "$inventory_dir" "$key_dir"
+        return 1
+    fi
+    if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR deploy@"$host" true; then
+        printf '%s\n' "The new SSH key could not be verified. The old key remains active."
+        rm -f "$before" "$extra" "$rotated_state"
+        rm -rf "$inventory_dir" "$key_dir"
+        return 1
+    fi
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" set-deploy-key "$node" "$new_key" "$new_pub" <"$before" >"$rotated_state"; then
+        rm -f "$before" "$extra" "$rotated_state"
+        rm -rf "$inventory_dir" "$key_dir"
+        return 1
+    fi
+    if ! vault_save "$rotated_state"; then
+        printf '%s\n' "The new SSH key is active, but the encrypted Vault was not changed. The old key remains active."
+        rm -f "$before" "$extra" "$rotated_state"
+        rm -rf "$inventory_dir" "$key_dir"
+        return 1
+    fi
+
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_private_key_file: $new_key" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    if ! run_ansible_playbook -i "$inventory" -e "@$extra" -e rotate_remove_old_key=true "$ROOT_DIR/ansible/rotate-ssh.yml" --private-key "$new_key"; then
+        printf '%s\n' "The new SSH key is stored in the Vault, but the old key could not be revoked."
+        rm -f "$before" "$extra" "$rotated_state"
+        rm -rf "$inventory_dir" "$key_dir"
+        return 1
+    fi
+    if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR deploy@"$host" true; then
+        printf '%s\n' "The old key was revoked, but the new SSH key could not be verified afterward."
+        rm -f "$before" "$extra" "$rotated_state"
+        rm -rf "$inventory_dir" "$key_dir"
+        return 1
+    fi
+    rm -f "$before" "$extra" "$rotated_state"
+    rm -rf "$inventory_dir" "$key_dir"
+    printf '%s\n' "SSH key rotated."
+}
+
+manage_keys() {
+    local node="$1"
+    while true; do
+        clear_screen
+        echo
+        menu_heading "Manage access keys:"
+        echo
+        menu_option 1 Show
+        menu_option 2 Add
+        menu_option 3 Remove
+        echo
+        prompt_nav
+        case "$REPLY" in
+            1) clear_screen; vault_state_command python3 "$ROOT_DIR/scripts/render_keys.py" "$node"; read -r -p "Press Enter to continue" _ ;;
+            2) add_access_keys_menu "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            3) remove_access_key_menu "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            i) show_info access_keys ;;
+            b) return ;;
+            m) MAIN_MENU_REQUESTED=1; return ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
+manage_node() {
+    local node="$1"
+    while true; do
+        clear_screen
+        echo
+        show_node_status "$node"
+        echo
+        menu_option 1 "Manage VPN server"
+        menu_option 2 "Manage access keys"
+        echo
+        prompt_nav
+        case "$REPLY" in
+            1) manage_server "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            2) manage_keys "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            i) show_info status ;;
+            b) return ;;
+            m) MAIN_MENU_REQUESTED=1; return ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
+manage_server() {
+    local node="$1"
+    while true; do
+        clear_screen
+        echo
+        menu_heading "Manage VPN server:"
+        echo
+        menu_option 1 "Check VPN status"
+        menu_option 2 "Restart VPN server"
+        menu_option 3 "Rotate SSH key"
+        menu_option 4 "Remove VPN server"
+        echo
+        prompt_nav
+        case "$REPLY" in
+            1) clear_screen; show_node_status "$node"; read -r -p "Press Enter" _ ;;
+            2) clear_screen; run_node_playbook "$node" restart.yml; read -r -p "Press Enter" _ ;;
+            3) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
+            4) clear_screen; remove_node "$node"; return ;;
+            i) show_info server ;;
+            b) return ;;
+            m) MAIN_MENU_REQUESTED=1; return ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
+remove_remote_node() {
+    local node="$1"
+    if ! run_node_playbook "$node" remove.yml; then
+        printf '%s\n' "The management cleanup phase failed; trying the original SSH credentials."
+    fi
+    run_remove_with_bootstrap "$node"
+}
+
+remove_node() {
+    local node="$1" confirm local_confirm
+    clear_screen
+    while true; do
+        clear_screen
+        echo
+        menu_heading "Remove VPN server:"
+        echo
+        printf '%s\n' "Are you sure you want to remove this VPN server? (y/n)"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        read -r -e -p '?: ' confirm
+        case "$confirm" in
+            [Yy]) break ;;
+            [Nn]|b) return 0 ;;
+            m) MAIN_MENU_REQUESTED=1; return 0 ;;
+            i) show_info removal ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+
+    if remove_remote_node "$node"; then
+        state_mutate remove-node "$node"
+        printf '%s\n' "VPN server removed from the VPS and Vault."
+        return 0
+    fi
+
+    while true; do
+        clear_screen
+        echo
+        printf '%s\n' "Remote cleanup failed; the VPN server was not removed from the Vault."
+        printf '%s\n' "The VPS may be unreachable, or the cleanup playbook may have failed."
+        echo
+        if [[ -n "$LAST_ANSIBLE_OUTPUT" ]]; then
+            printf '%s\n' "Last Ansible output:"
+            printf '%s\n' "$LAST_ANSIBLE_OUTPUT"
+            echo
+        fi
+        printf '%s\n' "Remove this VPN server from the local Vault anyway? (y/n)"
+        echo
+        menu_control r "retry remote cleanup with the initial SSH credentials"
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        read -r -e -p '?: ' local_confirm
+        case "$local_confirm" in
+            [Yy])
+                state_mutate remove-node "$node"
+                printf '%s\n' "VPN server removed from the local Vault."
+                break
+                ;;
+            r)
+                if remove_remote_node "$node"; then
+                    state_mutate remove-node "$node"
+                    printf '%s\n' "VPN server removed from the VPS and Vault."
+                    break
+                fi
+                ;;
+            i) show_info removal ;;
+            [Nn]|b) break ;;
+            m) MAIN_MENU_REQUESTED=1; break ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+    read -r -p "Press Enter" _
+}
+
+vpn_servers() {
+    local count names choice node state
+    while true; do
+        clear_screen
+        state="$(mktemp "$STATE_DIR/.servers.XXXXXX")"
+        if ! materialize_vault_state "$state"; then
+            rm -f "$state"
+            return 1
+        fi
+        if ! count="$(python3 "$ROOT_DIR/scripts/state_cli.py" count <"$state")"; then
+            rm -f "$state"
+            return 1
+        fi
+        if [[ "$count" == 0 ]]; then
+            echo
+            menu_heading "VPN servers:"
+            echo
+            printf '%s\n' "  No VPN servers configured."
+            echo
+            menu_option 1 "Add VPN server"
+            echo
+            prompt_nav
+            case "$REPLY" in
+                1) rm -f "$state"; add_node; return ;;
+                i) show_info status; rm -f "$state"; continue ;;
+                b) rm -f "$state"; return ;;
+                m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return ;;
+                x) rm -f "$state"; exit_tui ;;
+                *) invalid_choice; rm -f "$state"; continue ;;
+            esac
+        fi
+        if [[ "$count" == 1 ]]; then
+            if ! node="$(python3 "$ROOT_DIR/scripts/state_cli.py" names <"$state")"; then
+                rm -f "$state"
+                return 1
+            fi
+            rm -f "$state"
+            manage_node "$node"
+            return
+        fi
+        python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
+        echo
+        prompt_nav
+        case "$REPLY" in
+            i) show_info status; rm -f "$state"; continue ;;
+            b) rm -f "$state"; return ;;
+            m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return ;;
+            x) rm -f "$state"; exit_tui ;;
+            *[!0-9]*) invalid_choice; rm -f "$state"; continue ;;
+            *)
+                if ! names="$(python3 "$ROOT_DIR/scripts/state_cli.py" names <"$state")"; then
+                    rm -f "$state"
+                    return 1
+                fi
+                node="$(printf '%s\n' "$names" | sed -n "${REPLY}p")"
+                rm -f "$state"
+                if [[ -n "$node" ]]; then
+                    manage_node "$node"
+                    return
+                fi
+                invalid_choice
+                ;;
+        esac
+    done
+}
+
+secure_state() {
+    while true; do
+        clear_screen
+        echo
+        menu_heading "Vault:"
+        if [[ -f "$VAULT_FILE" ]]; then
+            printf '  %sStatus:%s %sAvailable%s\n' "$COLOR_TEXT" "$COLOR_RESET" "$COLOR_INFO" "$COLOR_RESET"
+            printf '  %sEncrypted storage for VPS access and VPN keys.%s\n' "$COLOR_TEXT" "$COLOR_RESET"
+            printf '  %sLocation:%s %s%s%s\n' "$COLOR_TEXT" "$COLOR_RESET" "$COLOR_TEXT" "$HOST_VAULT_FILE" "$COLOR_RESET"
+            echo
+            menu_option 1 "Change encryption password"
+            menu_option 2 "Backup encrypted state"
+            menu_option 3 "Restore encrypted state"
+            menu_option 4 "Delete Vault"
+        else
+            printf '  %sStatus:%s %sNot initialized%s\n' "$COLOR_TEXT" "$COLOR_RESET" "$COLOR_WARN" "$COLOR_RESET"
+            printf '  %sNo encrypted Vault exists on this computer.%s\n' "$COLOR_TEXT" "$COLOR_RESET"
+            printf '  %sExpected location:%s %s%s%s\n' "$COLOR_TEXT" "$COLOR_RESET" "$COLOR_TEXT" "$HOST_VAULT_FILE" "$COLOR_RESET"
+            echo
+            menu_option 1 "Create Vault"
+            has_vault_backups && menu_option 2 "Restore encrypted state"
+        fi
+        echo
+        prompt_nav
+        case "$REPLY" in
+            1)
+                clear_screen
+                if [[ -f "$VAULT_FILE" ]]; then
+                    if ensure_vault_password_file && [[ -f "$VAULT_FILE" ]]; then
+                        ansible-vault rekey --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE"
+                        rm -f "$VAULT_PASSWORD_FILE"
+                        VAULT_PASSWORD_FILE=""
+                    fi
+                else
+                    initialize_vault
+                fi
+                ;;
+            2)
+                clear_screen
+                if [[ -f "$VAULT_FILE" ]]; then
+                    backup_vault
+                elif has_vault_backups; then
+                    restore_vault
+                else
+                    invalid_choice
+                fi
+                ;;
+            3)
+                clear_screen
+                if [[ -f "$VAULT_FILE" ]]; then
+                    restore_vault
+                else
+                    invalid_choice
+                fi
+                ;;
+            4)
+                clear_screen
+                if [[ -f "$VAULT_FILE" ]]; then
+                    delete_vault
+                    [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return
+                else
+                    invalid_choice
+                fi
+                ;;
+            i) show_info vault ;;
+            b) return ;;
+            m) MAIN_MENU_REQUESTED=1; return ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
+while true; do
+    clear_screen
+    echo
+    menu_option 1 "VPN servers"
+    menu_option 2 "Add VPN server"
+    menu_option 3 Vault
+    echo
+    menu_control i info
+    menu_control x exit
+    echo
+    read -r -e -p '?: ' choice
+    MAIN_MENU_REQUESTED=0
+    case "$choice" in
+        1) vpn_servers ;;
+        2) add_node ;;
+        3) secure_state ;;
+        i) show_info general ;;
+        x) exit_tui ;;
+        *) invalid_choice ;;
+    esac
 done
-
-menu_xray
-EOW
-RUN chmod +x /usr/local/bin/xray.sh
-WORKDIR /app
-USER $APP_UID:$APP_GID
-ENTRYPOINT ["/usr/local/bin/xray.sh"]
-EOF
-
-docker build --pull --label "temp.build.id=${build_id}" -t "${image_name}" -t xray-admin "$workdir"
-sleep 2
-tty_flag="-i"
-if [ -t 0 ]; then
-    tty_flag="-it"
-fi
-
-docker run --rm ${tty_flag} --user 10000:10000 --read-only --workdir /tmp --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 --cap-drop=ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m --cpus 1 "${image_name}"

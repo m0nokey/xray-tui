@@ -1,0 +1,17 @@
+[Unit]
+Description=Safe unattended apt dist-upgrade for Xray TUI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xray-tui-os-updater
+Nice=10
+TimeoutStartSec=2h
+Environment=DEBIAN_FRONTEND=noninteractive
+Environment=APT_LISTCHANGES_FRONTEND=none
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

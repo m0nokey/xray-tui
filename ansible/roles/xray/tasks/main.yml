@@ -1,0 +1,72 @@
+---
+- name: Validate local encrypted runtime state
+  ansible.builtin.assert:
+    that:
+      - xray_state is mapping
+      - xray_state.vision_port is number
+      - xray_state.xhttp_port is number
+      - ssh_port is number
+      - xray_state.reality_private_key | length > 0
+      - xray_state.reality_public_key | length > 0
+      - xray_state.reality_short_id | length > 0
+      - xray_state.access_keys is sequence
+    fail_msg: Pass the encrypted local Xray state and SSH port with -e @state.yml.
+
+- name: Create Xray directory
+  ansible.builtin.file:
+    path: "{{ xray_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Validate access key pairs
+  ansible.builtin.assert:
+    that:
+      - item.key_id is string
+      - item.vision_uuid is string
+      - item.xhttp_uuid is string
+      - item.vision_uuid != item.xhttp_uuid
+    fail_msg: "Every access key must contain two different UUIDs."
+  loop: "{{ xray_state.access_keys }}"
+  loop_control:
+    label: "{{ item.key_id | default('unnamed') }}"
+
+- name: Render Xray configuration
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ xray_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Xray
+
+- name: Render Docker Compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ xray_compose_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart Xray
+
+- name: Validate Xray configuration in a disposable container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - -v
+      - "{{ xray_config_path }}:/etc/xray/config.json:ro"
+      - "{{ xray_image }}"
+      - run
+      - -test
+      - -config=/etc/xray/config.json
+  changed_when: false
+
+- name: Ensure Xray stack is running
+  community.docker.docker_compose_v2:
+    project_src: "{{ xray_dir }}"
+    files:
+      - compose.yml
+    state: present

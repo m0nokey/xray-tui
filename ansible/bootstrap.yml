@@ -1,0 +1,15 @@
+---
+- name: Bootstrap Xray VPN node
+  hosts: xray_nodes
+  become: true
+  pre_tasks:
+    - name: Wait for initial SSH access
+      ansible.builtin.wait_for_connection:
+        delay: 2
+        timeout: 30
+        sleep: 2
+  tasks:
+    - name: Bootstrap deploy access
+      ansible.builtin.import_role:
+        name: system_base
+        tasks_from: bootstrap

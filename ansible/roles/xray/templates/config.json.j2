@@ -1,0 +1,51 @@
+{
+  "log": { "loglevel": "none" },
+  "inbounds": [
+    {
+      "port": {{ xray_state.vision_port }},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+{% for key in xray_state.access_keys %}
+          {"id": "{{ key.vision_uuid }}", "email": "{{ key.key_id }}", "flow": "xtls-rprx-vision"}{% if not loop.last %},{% endif %}
+{% endfor %}
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "{{ xray_server_name }}:443",
+          "serverNames": ["{{ xray_server_name }}"],
+          "privateKey": "{{ xray_state.reality_private_key }}",
+          "shortIds": ["{{ xray_state.reality_short_id }}"]
+        }
+      }
+    },
+    {
+      "port": {{ xray_state.xhttp_port }},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+{% for key in xray_state.access_keys %}
+          {"id": "{{ key.xhttp_uuid }}", "email": "{{ key.key_id }}"}{% if not loop.last %},{% endif %}
+{% endfor %}
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "xhttpSettings": {"path": "{{ xray_xhttp_path }}"},
+        "security": "reality",
+        "realitySettings": {
+          "target": "{{ xray_server_name }}:443",
+          "serverNames": ["{{ xray_server_name }}"],
+          "privateKey": "{{ xray_state.reality_private_key }}",
+          "shortIds": ["{{ xray_state.reality_short_id }}"]
+        }
+      }
+    }
+  ],
+  "outbounds": [{"protocol": "freedom", "tag": "direct"}]
+}

@@ -1,0 +1,206 @@
+---
+- name: Check whether Xray TUI host key was initialized
+  ansible.builtin.stat:
+    path: "{{ system_base_ssh_host_key_marker }}"
+  register: system_base_ssh_host_key_marker_stat
+
+- name: Create Xray TUI backup directory
+  ansible.builtin.file:
+    path: "{{ system_base_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check whether original SSH host keys were backed up
+  ansible.builtin.stat:
+    path: "{{ system_base_ssh_host_keys_backup_marker }}"
+  register: system_base_ssh_host_keys_backup_marker_stat
+
+- name: Create SSH host key backup directory
+  ansible.builtin.file:
+    path: "{{ system_base_ssh_host_keys_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when:
+    - not system_base_ssh_host_key_marker_stat.stat.exists
+    - not system_base_ssh_host_keys_backup_marker_stat.stat.exists
+
+- name: Back up original SSH host keys before one-time rotation
+  ansible.builtin.shell: |
+    set -euo pipefail
+    found=0
+    for key in /etc/ssh/ssh_host_*; do
+      [ -f "$key" ] || continue
+      cp -a "$key" "{{ system_base_ssh_host_keys_backup_dir }}/"
+      found=1
+    done
+    [ "$found" -eq 1 ]
+    touch "{{ system_base_ssh_host_keys_backup_marker }}"
+    chmod 0600 "{{ system_base_ssh_host_keys_backup_marker }}"
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when:
+    - not system_base_ssh_host_key_marker_stat.stat.exists
+    - not system_base_ssh_host_keys_backup_marker_stat.stat.exists
+
+- name: Remove old SSH host keys before one-time rotation
+  ansible.builtin.shell: |
+    find /etc/ssh -maxdepth 1 -type f -name 'ssh_host_*' \
+      ! -name 'ssh_host_ed25519_key' \
+      ! -name 'ssh_host_ed25519_key.pub' \
+      -delete
+    rm -f /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when: not system_base_ssh_host_key_marker_stat.stat.exists
+
+- name: Generate SSH ed25519 host key
+  ansible.builtin.command:
+    cmd: ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/ssh_host_ed25519_key
+  when: not system_base_ssh_host_key_marker_stat.stat.exists
+
+- name: Mark SSH host key initialization complete
+  ansible.builtin.file:
+    path: "{{ system_base_ssh_host_key_marker }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+  when: not system_base_ssh_host_key_marker_stat.stat.exists
+
+- name: Require generated SSH port
+  ansible.builtin.assert:
+    that:
+      - ssh_port is number
+      - ssh_port | int > 1024
+      - ssh_port | int != 22
+    fail_msg: "SSH hardening requires a generated non-default SSH port; refusing to keep port 22."
+
+- name: Detect initial SSH user primary group
+  ansible.builtin.command:
+    argv:
+      - id
+      - -gn
+      - "{{ harden_ssh_initial_user }}"
+  register: system_base_initial_ssh_group
+  changed_when: false
+  failed_when: false
+
+- name: Build SSH AllowGroups
+  ansible.builtin.set_fact:
+    harden_ssh_allow_groups: >-
+      {{
+        deploy_user
+        ~ (
+          (' ' ~ system_base_initial_ssh_group.stdout)
+          if harden_ssh_initial_user != 'root'
+             and (system_base_initial_ssh_group.stdout | default('') | length > 0)
+             and system_base_initial_ssh_group.stdout != deploy_user
+          else ''
+        )
+      }}
+
+- name: Detect controller SSH KEX algorithms
+  ansible.builtin.command:
+    cmd: ssh -Q kex
+  delegate_to: localhost
+  register: harden_ssh_controller_kex_cmd
+  changed_when: false
+
+- name: Detect VPS SSH KEX algorithms
+  ansible.builtin.command:
+    cmd: ssh -Q kex
+  register: harden_ssh_vps_kex_cmd
+  changed_when: false
+
+- name: Select shared hardened SSH KEX algorithms
+  ansible.builtin.set_fact:
+    harden_ssh_kex_algorithms: >-
+      {{
+        harden_ssh_preferred_kex
+        | select('in', harden_ssh_vps_kex_cmd.stdout_lines)
+        | select('in', harden_ssh_controller_kex_cmd.stdout_lines)
+        | join(',')
+      }}
+
+- name: Require shared hardened SSH KEX algorithms
+  ansible.builtin.fail:
+    msg: "No shared hardened SSH KEX algorithm exists between controller and VPS."
+  when: harden_ssh_kex_algorithms | length == 0
+
+- name: Check current sshd_config
+  ansible.builtin.stat:
+    path: /etc/ssh/sshd_config
+  register: system_base_sshd_config
+
+- name: Check whether original sshd_config was backed up
+  ansible.builtin.stat:
+    path: "{{ system_base_ssh_config_backup }}"
+  register: system_base_ssh_config_backup_stat
+
+- name: Backup current sshd_config
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: "{{ system_base_ssh_config_backup }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - system_base_sshd_config.stat.exists | default(false)
+    - not system_base_ssh_config_backup_stat.stat.exists | default(false)
+
+- name: Cancel stale SSH rollback units
+  ansible.builtin.shell: |
+    set -euo pipefail
+    systemctl stop {{ system_base_ssh_rollback_unit }}.timer {{ system_base_ssh_rollback_unit }}.service 2>/dev/null || true
+    systemctl reset-failed {{ system_base_ssh_rollback_unit }}.timer {{ system_base_ssh_rollback_unit }}.service 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Remove obsolete Xray TUI SSH drop-in
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d/90-xray-tui-hardening.conf
+    state: absent
+
+- name: Install complete hardened sshd_config
+  ansible.builtin.template:
+    src: sshd_config.j2
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+
+- name: Start emergency SSH rollback timer
+  ansible.builtin.shell: |
+    set -euo pipefail
+    systemd-run \
+      --unit={{ system_base_ssh_rollback_unit }} \
+      --on-active={{ system_base_ssh_rollback_delay }} \
+      /bin/bash -lc 'cp -a {{ system_base_ssh_config_backup }} /etc/ssh/sshd_config && (systemctl reload ssh || systemctl reload sshd)'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: system_base_sshd_config.stat.exists | default(false)
+
+- name: Reload SSH daemon after hardening
+  ansible.builtin.shell: |
+    set -euo pipefail
+    systemctl reload ssh || systemctl reload sshd
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Verify effective hardened SSH port
+  ansible.builtin.shell:
+    cmd: "sshd -T | awk '$1 == \"port\" { print $2; exit }'"
+  register: system_base_effective_ssh_port
+  changed_when: false
+  failed_when: system_base_effective_ssh_port.stdout | trim != (ssh_port | string)
