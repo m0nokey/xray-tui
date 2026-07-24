@@ -1,0 +1,14 @@
+---
+- name: Check Xray VPN node resources
+  hosts: xray_nodes
+  gather_facts: true
+  tasks:
+    - name: Require Debian
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family == "Debian"
+        fail_msg: "Xray TUI supports Debian only."
+
+    - name: Report VPS resources
+      ansible.builtin.debug:
+        msg: "XRAY_RESOURCE_FACTS vcpus={{ ansible_facts.processor_vcpus }} ram_mb={{ ansible_facts.memtotal_mb }}"

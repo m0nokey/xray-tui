@@ -12,6 +12,29 @@
       - xray_state.access_keys is sequence
     fail_msg: Pass the encrypted local Xray state and SSH port with -e @state.yml.
 
+- name: Select DNS protection profile
+  ansible.builtin.set_fact:
+    xray_dns_profile: "{{ xray_state.dns_filter_profile | default('disabled') }}"
+
+- name: Validate DNS protection profile
+  ansible.builtin.assert:
+    that:
+      - xray_dns_profile in xray_dns_profiles
+    fail_msg: "Unsupported DNS protection profile: {{ xray_dns_profile }}"
+
+- name: Validate VPS resources for DNS protection
+  ansible.builtin.assert:
+    that:
+      - (ansible_facts.processor_vcpus | int) >= (xray_dns_profiles[xray_dns_profile].min_vcpus | int)
+      - (ansible_facts.memtotal_mb | int) >= (xray_dns_profiles[xray_dns_profile].min_memory_mb | int)
+    fail_msg: >-
+      DNS profile '{{ xray_dns_profile }}' requires at least
+      {{ xray_dns_profiles[xray_dns_profile].min_vcpus }} vCPU and
+      {{ xray_dns_profiles[xray_dns_profile].min_memory_mb }} MB RAM.
+      Detected {{ ansible_facts.processor_vcpus }} vCPU and
+      {{ ansible_facts.memtotal_mb }} MB RAM.
+  when: xray_dns_profile != 'disabled'
+
 - name: Create Xray directory
   ansible.builtin.file:
     path: "{{ xray_dir }}"
@@ -19,6 +42,35 @@
     owner: root
     group: root
     mode: "0750"
+
+- name: Create Unbound directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ xray_unbound_dir }}", mode: "0750" }
+  when: xray_dns_profile != 'disabled'
+
+- name: Render Unbound configuration
+  ansible.builtin.template:
+    src: unbound.conf.j2
+    dest: "{{ xray_unbound_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: xray_dns_profile != 'disabled'
+
+- name: Render Unbound Dockerfile
+  ansible.builtin.template:
+    src: unbound.Dockerfile.j2
+    dest: "{{ xray_unbound_dockerfile_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: xray_dns_profile != 'disabled'
 
 - name: Validate access key pairs
   ansible.builtin.assert:
@@ -84,3 +136,4 @@
     files:
       - compose.yml
     state: present
+    remove_orphans: true

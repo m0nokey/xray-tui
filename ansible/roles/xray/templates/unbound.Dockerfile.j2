@@ -1,0 +1,27 @@
+FROM alpine:3.23
+
+ENV TZ=UTC
+
+RUN apk add --no-cache \
+      bind-tools \
+      ca-certificates \
+      tzdata \
+      unbound && \
+    cp /usr/share/zoneinfo/UTC /etc/localtime && \
+    echo "UTC" > /etc/timezone
+
+RUN install -d -m 0750 -o unbound -g unbound /var/lib/unbound && \
+    unbound-anchor -v -a /var/lib/unbound/root.key || true && \
+    test -s /var/lib/unbound/root.key && \
+    cp /var/lib/unbound/root.key /tmp/root.key && \
+    install -D -m 0644 -o unbound -g unbound /tmp/root.key /var/lib/unbound/root.key && \
+    rm -f /tmp/root.key && \
+    install -d -m 0750 -o unbound -g unbound /opt/unbound/etc/unbound/rpz
+
+RUN install -D -m 0755 -o root -g root /dev/stdin /usr/local/bin/healthcheck <<'EOS'
+#!/bin/sh
+drill -Q -p 5353 cloudflare.com @127.0.0.1 >/dev/null 2>&1 || exit 1
+exit 0
+EOS
+
+CMD ["unbound", "-d", "-c", "/opt/unbound/etc/unbound/unbound.conf"]

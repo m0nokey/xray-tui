@@ -1,5 +1,21 @@
 {
   "log": { "loglevel": "none" },
+{% if xray_dns_profile != 'disabled' %}
+  "dns": {
+    "servers": [
+      {
+        "address": "unbound",
+        "port": 5353,
+        "finalQuery": true,
+        "skipFallback": true,
+        "queryStrategy": "UseIPv4",
+        "tag": "dns-out"
+      }
+    ],
+    "queryStrategy": "UseIPv4",
+    "disableFallback": true
+  },
+{% endif %}
   "inbounds": [
     {
       "port": {{ xray_state.vision_port }},
@@ -54,5 +70,19 @@
       }
     }
   ],
-  "outbounds": [{"protocol": "freedom", "tag": "direct"}]
+  "outbounds": [
+    {"protocol": "freedom", "tag": "direct"}
+{% if xray_dns_profile != 'disabled' %}
+    ,{"protocol": "blackhole", "tag": "block"}
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {"type": "field", "inboundTag": ["dns-out"], "outboundTag": "direct"},
+      {"type": "field", "network": "tcp,udp", "port": "53,853", "outboundTag": "block"}
+    ]
+  }
+{% else %}
+  ]
+{% endif %}
 }

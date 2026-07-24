@@ -7,3 +7,54 @@ xray_container_name: xray
 xray_server_name: github.com
 xray_public_host: "{{ ansible_host | default(inventory_hostname) }}"
 xray_xhttp_path: /
+xray_unbound_dir: "{{ xray_dir }}/unbound"
+xray_unbound_dockerfile_path: "{{ xray_unbound_dir }}/Dockerfile"
+xray_unbound_config_path: "{{ xray_unbound_dir }}/unbound.conf"
+xray_dns_profiles:
+  disabled:
+    min_vcpus: 0
+    min_memory_mb: 0
+    recommended_memory_mb: 0
+    rpz: []
+  basic:
+    min_vcpus: 1
+    min_memory_mb: 1024
+    recommended_memory_mb: 1024
+    rpz:
+      - name: urlhaus
+        url: https://urlhaus.abuse.ch/downloads/rpz/
+        zonefile: /opt/unbound/etc/unbound/rpz/urlhaus.rpz
+  balanced:
+    min_vcpus: 1
+    min_memory_mb: 2048
+    recommended_memory_mb: 2048
+    rpz:
+      - name: urlhaus
+        url: https://urlhaus.abuse.ch/downloads/rpz/
+        zonefile: /opt/unbound/etc/unbound/rpz/urlhaus.rpz
+      - name: hagezi-tif-mini
+        url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/tif.mini.txt
+        zonefile: /opt/unbound/etc/unbound/rpz/hagezi-tif-mini.rpz
+  full:
+    min_vcpus: 2
+    min_memory_mb: 2048
+    recommended_memory_mb: 4096
+    rpz:
+      - name: urlhaus
+        url: https://urlhaus.abuse.ch/downloads/rpz/
+        zonefile: /opt/unbound/etc/unbound/rpz/urlhaus.rpz
+      - name: hagezi-doh
+        url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/doh.txt
+        zonefile: /opt/unbound/etc/unbound/rpz/hagezi-doh.rpz
+      - name: adguard-cname-trackers
+        url: https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_trackers_rpz.txt
+        zonefile: /opt/unbound/etc/unbound/rpz/adguard-cname-trackers.rpz
+      - name: adguard-cname-mail
+        url: https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_mail_trackers_rpz.txt
+        zonefile: /opt/unbound/etc/unbound/rpz/adguard-cname-mail.rpz
+      - name: threatfox
+        url: https://threatfox.abuse.ch/downloads/threatfox.rpz
+        zonefile: /opt/unbound/etc/unbound/rpz/threatfox.rpz
+      - name: hagezi-pro-plus
+        url: https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/pro.plus.txt
+        zonefile: /opt/unbound/etc/unbound/rpz/hagezi-pro-plus.rpz

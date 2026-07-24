@@ -22,12 +22,28 @@ The XHTTP server configuration and generated client links use the same
 
 Any VPS provider is supported when the target VPS runs **Debian 12 or newer**.
 
-Ubuntu and other operating systems are not supported. The VPS must have:
+Ubuntu and other operating systems are not supported. The target VPS must have:
 
-- SSH access;
-- an initial user with `sudo` access, usually `root`;
+- Debian 12 or newer;
+- a public IPv4 address or resolvable hostname;
+- an initial SSH user with `sudo` access, usually `root`;
 - password authentication available for the first installation;
-- a public IP address or resolvable hostname.
+- at least 1 vCPU and 1 GB RAM for the VPN itself.
+
+Optional DNS protection is disabled by default. When enabled, it can block DNS
+requests to malicious domains, phishing sites, trackers, advertising,
+telemetry, and command-and-control servers. It uses additional VPS resources
+and may block some legitimate domains. The profile can be enabled or changed
+later.
+
+Available DNS protection profiles have these requirements:
+
+- `Basic`: at least 1 vCPU and 1 GB RAM;
+- `Balanced`: at least 1 vCPU and 2 GB RAM;
+- `Full`: at least 2 vCPU and 2 GB RAM; 4 GB RAM is recommended.
+
+The installer checks the VPS resources before deployment and shows only the
+profiles that fit. DNS protection is optional and can be disabled.
 
 The controller installs Docker, Xray, automatic updates, and SSH hardening on
 the VPS. The initial SSH password is used only during Ansible operations and is
@@ -62,7 +78,8 @@ The setup asks for:
 2. initial SSH user, default `root`;
 3. initial SSH port, default `22`;
 4. initial SSH password;
-5. Reality camouflage domain, default `github.com`.
+5. Reality camouflage domain, default `github.com`;
+6. DNS protection profile, selected from the profiles supported by the VPS.
 
 After a successful deployment, the controller generates the VPN ports, REALITY
 keys, paired access keys, and a new deploy SSH key. All sensitive connection
@@ -105,8 +122,9 @@ x. exit
 ```text
 1. Check VPN status
 2. Restart VPN server
-3. Rotate SSH key
-4. Remove VPN server
+3. DNS protection
+4. Rotate SSH key
+5. Remove VPN server
 ```
 
 The status check tests management SSH access, the Xray container, and both VPN
@@ -121,6 +139,10 @@ Unreachable      No VPN or management port responded; DPI or a provider firewall
 
 `Rotate SSH key` creates a new deploy key, verifies it, and then revokes the
 old key. The VPN access keys are not changed.
+
+`DNS protection` checks the VPS resources and lets you enable, disable, or
+change the DNS protection profile later. The change is applied through Ansible
+and saved to the Vault only after a successful deployment.
 
 `Remove VPN server` removes the Xray installation, Docker stack, automatic
 updaters, and the deploy account from the VPS. It restores the original SSH
@@ -181,13 +203,36 @@ steps:
 - generates a random non-default SSH management port;
 - applies hardened SSH settings and rotates the SSH host key;
 - runs Xray in Docker;
+- optionally runs Unbound in a separate hardened Docker container with RPZ
+  blocklists and DNS-over-TLS upstreams;
 - installs automatic Debian security updates;
-- installs a scheduled Docker image updater for the Xray `:latest` image;
+- installs a scheduled updater for the Xray `:latest` image and the optional
+  Unbound image;
 - validates the REALITY camouflage hostname before starting the Xray stack.
 
 The Xray configuration is rendered on the VPS from the state supplied by the
 local controller. The local Vault is the source of truth for managing nodes
 and keys; no separate key database is created by the controller.
+
+### DNS Protection
+
+When enabled, Xray sends DNS queries through the private Unbound container.
+Unbound uses DNS-over-TLS upstreams and RPZ blocklists. The Xray container has
+no direct DNS fallback, and direct outbound DNS ports are blocked by routing.
+
+Profiles:
+
+- `Disabled`: no blocklists and the lowest resource usage;
+- `Basic`: URLhaus malware-delivery domains;
+- `Balanced`: URLhaus plus HaGeZi TIF Mini for malware, phishing, scams,
+  cryptojacking, and command-and-control domains;
+- `Full`: URLhaus, HaGeZi DoH, AdGuard CNAME tracker lists, ThreatFox, and
+  HaGeZi Pro Plus.
+
+The `Full` profile can run on a 2 GB VPS, but 4 GB RAM is recommended because
+large RPZ lists consume more memory while loading and updating. Blocked names
+return `NXDOMAIN`, and aggressive lists can occasionally block legitimate
+domains.
 
 ## Repository Layout
 

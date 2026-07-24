@@ -504,10 +504,28 @@ show_info() {
             printf '%s\n' "    You can add up to 50 access keys at once."
             printf '%s\n' "    In the remove screen, enter a key number or the last number to remove all keys."
             ;;
+        dns)
+            printf '%b  DNS protection profiles:%b\n' "$blue" "$reset"
+            printf '%s\n' "    Disabled: no DNS blocklists; lowest memory usage."
+            printf '%s\n' "    Basic: URLhaus blocks known malware delivery domains."
+            printf '%s\n' "    Balanced: URLhaus plus HaGeZi TIF Mini for malware, phishing,"
+            printf '%s\n' "    scams, cryptojacking, and command-and-control domains."
+            printf '%s\n' "    Full: six RPZ blocklists:"
+            printf '%s\n' "      - URLhaus: malware delivery domains."
+            printf '%s\n' "      - HaGeZi DoH: encrypted DNS bypass services."
+            printf '%s\n' "      - AdGuard CNAME Trackers: trackers hidden behind CNAMEs."
+            printf '%s\n' "      - AdGuard CNAME Mail: email tracking domains."
+            printf '%s\n' "      - ThreatFox: malware and botnet C2 domains."
+            printf '%s\n' "      - HaGeZi Pro Plus: ads, trackers, telemetry, phishing,"
+            printf '%s\n' "        scams, malware, and cryptojacking."
+            printf '%s\n' "    Blocked domains return NXDOMAIN. Aggressive lists may block"
+            printf '%s\n' "    some legitimate domains and use more memory during updates."
+            ;;
         server)
             printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
             printf '%s\n' "    Check the VPS connection, Xray container, and VPN ports."
             printf '%s\n' "    Restart the Xray VPN service when it is not responding."
+            printf '%s\n' "    Enable, disable, or change optional DNS protection profiles."
             printf '%s\n' "    Rotate the SSH management key without changing VPN access keys."
             printf '%s\n' "    Removing a server cleans up the remote installation before changing the Vault."
             ;;
@@ -545,6 +563,8 @@ show_info() {
             printf '%s\n' "  2. Add VPN server"
             printf '%s\n' "     - Enter the VPS IP address, SSH user, SSH port, and password."
             printf '%s\n' "     - Enter a Reality camouflage domain, or use github.com by default."
+            printf '%s\n' "     - Choose optional DNS protection, disabled by default."
+            printf '%s\n' "       It can block malicious domains, phishing, trackers, and advertising."
             printf '%s\n' "     - Install Docker, Xray, automatic updates, and SSH hardening."
             printf '%s\n' "     - Generate VPN access keys and save all connection data in the Vault."
             printf '%s\n' "     - Repeating setup for the same VPS is safe and idempotent."
@@ -564,9 +584,11 @@ show_info() {
             printf '%s\n' "        Test SSH access, the Xray container, and both VPN ports."
             printf '%s\n' "     2. Restart VPN server"
             printf '%s\n' "        Restart the Xray Docker stack without changing access keys."
-            printf '%s\n' "     3. Rotate SSH key"
+            printf '%s\n' "     3. DNS protection"
+            printf '%s\n' "        Enable, disable, or change the DNS blocklist profile."
+            printf '%s\n' "     4. Rotate SSH key"
             printf '%s\n' "        Generate a new deploy SSH key and revoke the old one."
-            printf '%s\n' "     4. Remove VPN server"
+            printf '%s\n' "     5. Remove VPN server"
             printf '%s\n' "        Remove the Xray installation and clean up the VPS."
             printf '%s\n' "        The Vault is changed only after remote cleanup succeeds."
             echo
@@ -665,6 +687,153 @@ show_node_status() {
 
 yaml_scalar() {
     python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
+probe_vps_resources() {
+    local host="$1" user="$2" port="$3" password="$4"
+    local inventory_dir inventory log password_yaml facts_line
+    inventory_dir="$(mktemp -d /tmp/xray-preflight.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    log="$inventory_dir/ansible.log"
+    password_yaml="$(yaml_scalar "$password")"
+    printf '%s\n' \
+        "---" \
+        "all:" \
+        "  children:" \
+        "    xray_nodes:" \
+        "      hosts:" \
+        "        preflight:" \
+        "          ansible_host: $host" \
+        "          ansible_user: $user" \
+        "          ansible_port: $port" \
+        "          ansible_password: $password_yaml" \
+        "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o PubkeyAuthentication=no -o PreferredAuthentications=password'" \
+        >"$inventory"
+    chmod 600 "$inventory"
+    unset password password_yaml
+
+    clear_screen
+    printf '%s\n' "Checking VPS resources..."
+    if ! ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1; then
+        cat "$log"
+        rm -rf "$inventory_dir"
+        printf '%s\n' "The VPS resources could not be checked. Deployment was not started."
+        wait_action_return
+        return 1
+    fi
+    facts_line="$(grep -o 'XRAY_RESOURCE_FACTS vcpus=[0-9][0-9]* ram_mb=[0-9][0-9]*' "$log" | tail -n 1 || true)"
+    if [[ ! "$facts_line" =~ vcpus=([0-9]+)[[:space:]]ram_mb=([0-9]+) ]]; then
+        cat "$log"
+        rm -rf "$inventory_dir"
+        printf '%s\n' "The VPS resource report was invalid. Deployment was not started."
+        wait_action_return
+        return 1
+    fi
+    VPS_VCPUS="${BASH_REMATCH[1]}"
+    VPS_RAM_MB="${BASH_REMATCH[2]}"
+    rm -rf "$inventory_dir"
+    return 0
+}
+
+probe_vps_resources_with_key() {
+    local host="$1" user="$2" port="$3" private_key="$4"
+    local inventory_dir inventory key_file log facts_line
+    inventory_dir="$(mktemp -d /tmp/xray-preflight.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    key_file="$inventory_dir/id_ed25519"
+    log="$inventory_dir/ansible.log"
+    printf '%s' "$private_key" >"$key_file"
+    chmod 600 "$key_file"
+    printf '%s\n' \
+        "---" \
+        "all:" \
+        "  children:" \
+        "    xray_nodes:" \
+        "      hosts:" \
+        "        preflight:" \
+        "          ansible_host: $host" \
+        "          ansible_user: $user" \
+        "          ansible_port: $port" \
+        "          ansible_ssh_private_key_file: $key_file" \
+        "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" \
+        >"$inventory"
+    chmod 600 "$inventory"
+
+    clear_screen
+    printf '%s\n' "Checking VPS resources..."
+    if ! ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1; then
+        cat "$log"
+        rm -rf "$inventory_dir"
+        printf '%s\n' "The VPS resources could not be checked. The DNS profile was not changed."
+        wait_action_return
+        return 1
+    fi
+    facts_line="$(grep -o 'XRAY_RESOURCE_FACTS vcpus=[0-9][0-9]* ram_mb=[0-9][0-9]*' "$log" | tail -n 1 || true)"
+    if [[ ! "$facts_line" =~ vcpus=([0-9]+)[[:space:]]ram_mb=([0-9]+) ]]; then
+        cat "$log"
+        rm -rf "$inventory_dir"
+        printf '%s\n' "The VPS resource report was invalid. The DNS profile was not changed."
+        wait_action_return
+        return 1
+    fi
+    VPS_VCPUS="${BASH_REMATCH[1]}"
+    VPS_RAM_MB="${BASH_REMATCH[2]}"
+    rm -rf "$inventory_dir"
+    return 0
+}
+
+select_dns_profile() {
+    local choice
+    while true; do
+        clear_screen
+        printf '%s\n' "Optional DNS protection"
+        printf '%s\n' "Disabled by default."
+        printf '%s\n' "Blocks DNS requests to malicious domains, phishing sites,"
+        printf '%s\n' "trackers, advertising, telemetry, and command-and-control servers."
+        printf '%s\n' "Uses additional VPS resources and may block some legitimate domains."
+        printf '%s\n' "You can enable or change it later."
+        echo
+        if [[ -n "${DNS_FILTER_CURRENT_PROFILE:-}" ]]; then
+            printf '%s\n' "Current profile: ${DNS_FILTER_CURRENT_PROFILE}"
+        fi
+        printf '%s\n' "Detected VPS resources: ${VPS_VCPUS} vCPU, $((VPS_RAM_MB / 1024)) GB RAM"
+        echo
+        menu_option 1 "Disabled - no DNS blocklists"
+        if ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 1024)); then
+            menu_option 2 "Basic - URLhaus malware protection"
+        fi
+        if ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 2048)); then
+            menu_option 3 "Balanced - URLhaus and HaGeZi TIF Mini"
+        fi
+        if ((VPS_VCPUS >= 2 && VPS_RAM_MB >= 2048)); then
+            menu_option 4 "Full - six RPZ blocklists"
+            if ((VPS_RAM_MB < 4096)); then
+                printf '%s\n' "  Full is available, but 4 GB RAM is recommended."
+            fi
+        fi
+        echo
+        prompt_nav
+        case "$REPLY" in
+            1) DNS_FILTER_PROFILE=disabled; return 0 ;;
+            2)
+                ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 1024)) && { DNS_FILTER_PROFILE=basic; return 0; }
+                invalid_choice
+                ;;
+            3)
+                ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 2048)) && { DNS_FILTER_PROFILE=balanced; return 0; }
+                invalid_choice
+                ;;
+            4)
+                ((VPS_VCPUS >= 2 && VPS_RAM_MB >= 2048)) && { DNS_FILTER_PROFILE=full; return 0; }
+                invalid_choice
+                ;;
+            i) show_info dns ;;
+            b) return 1 ;;
+            m) MAIN_MENU_REQUESTED=1; return 1 ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
 }
 
 run_ansible_playbook() {
@@ -798,7 +967,7 @@ retry_existing_node_with_saved_key() {
 }
 
 add_node() {
-    local name host server_name bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port
+    local name host server_name dns_profile bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port
     clear_screen
     read -r -e -p 'VPS IP address: ' host
     if ! valid_ipv4 "$host"; then
@@ -893,8 +1062,21 @@ add_node() {
     fi
     bootstrap_password="$REPLY"
 
+    if ! probe_vps_resources "$host" "$bootstrap_user" "$bootstrap_port" "$bootstrap_password"; then
+        unset bootstrap_password
+        rm -f "$before" "$after"
+        return 1
+    fi
+    unset DNS_FILTER_CURRENT_PROFILE
+    if ! select_dns_profile; then
+        unset bootstrap_password
+        rm -f "$before" "$after"
+        return 1
+    fi
+    dns_profile="$DNS_FILTER_PROFILE"
+
     name="auto"
-    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" add-node "$name" "$host" <"$before" >"$after"; then
+    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" --dns-profile "$dns_profile" add-node "$name" "$host" <"$before" >"$after"; then
         rm -f "$before" "$after"
         return 1
     fi
@@ -1460,6 +1642,71 @@ PY
     printf '%s\n' "SSH key rotated."
 }
 
+manage_dns_protection() {
+    local node="$1" before after host user port private_key current_profile selected_profile
+    before="$(mktemp)"
+    if ! read_vault_state "$before"; then
+        rm -f "$before"
+        return 1
+    fi
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$before")"
+    private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before")"
+    current_profile="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("xray", {}).get("dns_filter_profile", "disabled"), end="")' "$node" <"$before")"
+    if [[ -z "$private_key" ]]; then
+        rm -f "$before"
+        clear_screen
+        printf '%s\n' "No management SSH key is available for this VPN server."
+        wait_action_return
+        return 1
+    fi
+    if ! probe_vps_resources_with_key "$host" "$user" "$port" "$private_key"; then
+        rm -f "$before"
+        return 1
+    fi
+
+    DNS_FILTER_CURRENT_PROFILE="$current_profile"
+    if ! select_dns_profile; then
+        unset DNS_FILTER_CURRENT_PROFILE
+        rm -f "$before"
+        return 0
+    fi
+    selected_profile="$DNS_FILTER_PROFILE"
+    unset DNS_FILTER_CURRENT_PROFILE
+    if [[ "$selected_profile" == "$current_profile" ]]; then
+        clear_screen
+        printf '%s\n' "DNS protection profile was not changed."
+        wait_action_return
+        rm -f "$before"
+        return 0
+    fi
+
+    after="$(mktemp)"
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" set-dns-profile "$node" "$selected_profile" <"$before" >"$after"; then
+        rm -f "$before" "$after"
+        return 1
+    fi
+    clear_screen
+    printf '%s\n' "Applying DNS protection profile: ${selected_profile}"
+    if ! run_node_playbook "$node" site.yml "$after"; then
+        rm -f "$before" "$after"
+        printf '%s\n' "DNS protection change failed. The existing Vault was not changed."
+        wait_action_return
+        return 1
+    fi
+    if ! vault_save "$after"; then
+        rm -f "$before" "$after"
+        printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
+        printf '%s\n' "The existing DNS profile remains recorded in the Vault."
+        wait_action_return
+        return 1
+    fi
+    rm -f "$before" "$after"
+    printf '%s\n' "DNS protection profile updated: ${selected_profile}."
+    wait_action_return
+}
+
 manage_keys() {
     local node="$1"
     while true; do
@@ -1517,15 +1764,17 @@ manage_server() {
         echo
         menu_option 1 "Check VPN status"
         menu_option 2 "Restart VPN server"
-        menu_option 3 "Rotate SSH key"
-        menu_option 4 "Remove VPN server"
+        menu_option 3 "DNS protection"
+        menu_option 4 "Rotate SSH key"
+        menu_option 5 "Remove VPN server"
         echo
         prompt_nav
         case "$REPLY" in
             1) clear_screen; show_node_status "$node"; read -r -p "Press Enter" _ ;;
             2) clear_screen; run_node_playbook "$node" restart.yml; read -r -p "Press Enter" _ ;;
-            3) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
-            4) clear_screen; remove_node "$node"; return ;;
+            3) manage_dns_protection "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            4) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
+            5) clear_screen; remove_node "$node"; return ;;
             i) show_info server ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
