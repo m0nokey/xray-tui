@@ -71,7 +71,11 @@
     }
   ],
   "outbounds": [
-    {"protocol": "freedom", "tag": "direct"}
+    {
+      "protocol": "freedom",
+      "settings": {"domainStrategy": "UseIPv4"},
+      "tag": "direct"
+    }
 {% if xray_dns_profile != 'disabled' %}
     ,{"protocol": "blackhole", "tag": "block"}
   ],
