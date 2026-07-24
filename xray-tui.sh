@@ -527,6 +527,7 @@ show_info() {
             printf '%s\n' "    Restart the Xray VPN service when it is not responding."
             printf '%s\n' "    Enable, disable, or change optional DNS protection profiles."
             printf '%s\n' "    Rotate the SSH management key without changing VPN access keys."
+            printf '%s\n' "    Open an SSH session using the saved Vault credentials."
             printf '%s\n' "    Removing a server cleans up the remote installation before changing the Vault."
             ;;
         vault)
@@ -683,6 +684,57 @@ show_node_status() {
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check --node "$node" <"$state"
     fi
     rm -f "$state"
+}
+
+open_node_ssh_session() {
+    local node="$1" state host user port private_key key_file ssh_status
+    state="$(mktemp "$STATE_DIR/.ssh-session.XXXXXX")"
+    if ! read_vault_state "$state"; then
+        rm -f "$state"
+        return 1
+    fi
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$state")"
+    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$state")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$state")"
+    private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$state")"
+    rm -f "$state"
+
+    if [[ -z "$host" || -z "$user" || -z "$port" || -z "$private_key" ]]; then
+        clear_screen
+        printf '%s\n' "Saved SSH management credentials are incomplete for this VPN server."
+        wait_action_return
+        return 1
+    fi
+
+    key_file="$(mktemp /tmp/xray-ssh-session.XXXXXX)"
+    chmod 600 "$key_file"
+    printf '%s\n' "$private_key" >"$key_file"
+    unset private_key
+
+    clear_screen
+    printf '%s\n' "Opening SSH session to ${user}@${host}:${port}."
+    printf '%s\n' "Exit the remote shell to return to Xray TUI."
+    echo
+    if ssh -i "$key_file" -p "$port" \
+        -o IdentitiesOnly=yes \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=8 \
+        -o ConnectionAttempts=1 \
+        "$user@$host"; then
+        ssh_status=0
+    else
+        ssh_status=$?
+    fi
+    rm -f "$key_file"
+    echo
+    if ((ssh_status != 0)); then
+        printf '%s\n' "SSH session ended with exit code ${ssh_status}."
+    else
+        printf '%s\n' "SSH session closed."
+    fi
+    wait_action_return
+    return 0
 }
 
 yaml_scalar() {
@@ -1767,6 +1819,7 @@ manage_server() {
         menu_option 3 "DNS protection"
         menu_option 4 "Rotate SSH key"
         menu_option 5 "Remove VPN server"
+        menu_option 6 "Open SSH session"
         echo
         prompt_nav
         case "$REPLY" in
@@ -1775,6 +1828,7 @@ manage_server() {
             3) manage_dns_protection "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             4) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
             5) clear_screen; remove_node "$node"; return ;;
+            6) open_node_ssh_session "$node" ;;
             i) show_info server ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
