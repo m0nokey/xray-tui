@@ -16,7 +16,8 @@ RUN install -d -m 0750 -o unbound -g unbound /var/lib/unbound && \
     cp /var/lib/unbound/root.key /tmp/root.key && \
     install -D -m 0644 -o unbound -g unbound /tmp/root.key /var/lib/unbound/root.key && \
     rm -f /tmp/root.key && \
-    install -d -m 0750 -o unbound -g unbound /opt/unbound/etc/unbound/rpz
+    install -d -m 0750 -o unbound -g unbound /opt/unbound/etc/unbound/rpz && \
+    install -d -m 0750 -o unbound -g unbound /run/unbound
 
 RUN install -D -m 0755 -o root -g root /dev/stdin /usr/local/bin/healthcheck <<'EOS'
 #!/bin/sh

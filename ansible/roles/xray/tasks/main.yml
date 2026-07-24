@@ -102,6 +102,22 @@
     mode: "0600"
   notify: Restart Xray
 
+- name: Validate Unbound configuration
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --file
+      - "{{ xray_compose_path }}"
+      - run
+      - --rm
+      - --no-deps
+      - unbound
+      - unbound-checkconf
+      - /opt/unbound/etc/unbound/unbound.conf
+  changed_when: false
+  when: xray_dns_profile != 'disabled'
+
 - name: Validate Xray configuration in a disposable container
   ansible.builtin.command:
     argv:

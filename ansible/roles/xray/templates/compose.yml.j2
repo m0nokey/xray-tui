@@ -7,14 +7,9 @@ services:
     container_name: unbound
     restart: unless-stopped
     init: true
-    read_only: true
-    cap_drop: ["ALL"]
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 256
-    mem_limit: {{ '1g' if xray_dns_profile == 'full' else '512m' }}
+    dns_search: []
     tmpfs:
-      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
     volumes:
       - ./unbound/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
       - xray_unbound_rpz:/opt/unbound/etc/unbound/rpz
@@ -22,10 +17,12 @@ services:
       - "5353"
     healthcheck:
       test: ["CMD", "/usr/local/bin/healthcheck"]
-      interval: 15s
+      interval: 30s
       timeout: 5s
-      retries: 6
+      retries: 3
       start_period: 20s
+    logging:
+      driver: none
 
 {% endif %}
   xray:
