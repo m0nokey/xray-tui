@@ -742,7 +742,7 @@ probe_vps_resources_with_key() {
     inventory="$inventory_dir/hosts.yml"
     key_file="$inventory_dir/id_ed25519"
     log="$inventory_dir/ansible.log"
-    printf '%s' "$private_key" >"$key_file"
+    printf '%s\n' "$private_key" >"$key_file"
     chmod 600 "$key_file"
     printf '%s\n' \
         "---" \
