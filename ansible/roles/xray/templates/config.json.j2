@@ -16,7 +16,7 @@
         "network": "tcp",
         "security": "reality",
         "realitySettings": {
-          "dest": "{{ xray_server_name }}:443",
+          "target": "{{ xray_server_name }}:443",
           "serverNames": ["{{ xray_server_name }}"],
           "privateKey": "{{ xray_state.reality_private_key }}",
           "shortIds": ["{{ xray_state.reality_short_id }}"]
@@ -38,7 +38,11 @@
         "network": "xhttp",
         "xhttpSettings": {
           "path": "{{ xray_xhttp_path }}",
-          "mode": "packet-up"
+          "mode": "packet-up",
+          "extra": {
+            "scMaxEachPostBytes": 1000000,
+            "scMaxBufferedPosts": 30
+          }
         },
         "security": "reality",
         "realitySettings": {

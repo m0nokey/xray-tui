@@ -64,6 +64,20 @@
       - -config=/etc/xray/config.json
   changed_when: false
 
+- name: Validate REALITY target
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - host
+      - "{{ xray_image }}"
+      - tls
+      - ping
+      - "{{ xray_server_name }}"
+  changed_when: false
+
 - name: Ensure Xray stack is running
   community.docker.docker_compose_v2:
     project_src: "{{ xray_dir }}"

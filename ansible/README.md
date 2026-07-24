@@ -123,6 +123,9 @@ the VPS.
 The controller asks for the Reality camouflage hostname (SNI) when a new node
 is added. It stores that value in the encrypted node state and uses it for the
 Xray `serverNames`, Reality destination, and both generated client links.
+Before the stack starts, Ansible validates the hostname with the Xray TLS
+probe. Xray runs from `ghcr.io/xtls/xray-core:latest`; the scheduled updater
+pulls that tag and refreshes the Xray container.
 The initial SSH address, port, user, and password remain encrypted in the
 Vault for bootstrap recovery, reinstall, and removal fallback, then disappear
 when the node record is deleted.

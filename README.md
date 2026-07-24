@@ -182,7 +182,8 @@ steps:
 - applies hardened SSH settings and rotates the SSH host key;
 - runs Xray in Docker;
 - installs automatic Debian security updates;
-- installs a scheduled Docker image updater for Xray.
+- installs a scheduled Docker image updater for the Xray `:latest` image;
+- validates the REALITY camouflage hostname before starting the Xray stack.
 
 The Xray configuration is rendered on the VPS from the state supplied by the
 local controller. The local Vault is the source of truth for managing nodes
