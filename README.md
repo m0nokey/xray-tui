@@ -20,11 +20,11 @@ The XHTTP server configuration and generated client links use the same
 
 ## Supported VPS
 
-Any VPS provider is supported when the target VPS runs **Debian 12 or newer**.
+The VPS provider does not matter. The target VPS must run **Debian 12 or
+newer**. Only Debian 12+ VPS are supported.
 
-Ubuntu and other operating systems are not supported. The target VPS must have:
+The target VPS must also meet all of these requirements:
 
-- Debian 12 or newer;
 - a public IPv4 address or resolvable hostname;
 - an initial SSH user with `sudo` access, usually `root`;
 - password authentication available for the first installation;
@@ -45,9 +45,16 @@ Available DNS protection profiles have these requirements:
 The installer checks the VPS resources before deployment and shows only the
 profiles that fit. DNS protection is optional and can be disabled.
 
-The controller installs Docker, Xray, automatic updates, and SSH hardening on
-the VPS. The initial SSH password is used only during Ansible operations and is
-stored locally only inside the encrypted Vault.
+During deployment, the controller:
+
+- installs Docker and Xray;
+- configures automatic operating-system and Docker updates;
+- applies VPS SSH hardening;
+- generates VPN ports, REALITY keys, access keys, and a management SSH key;
+- stores sensitive VPS and VPN data locally inside the encrypted Vault.
+
+The initial SSH password is used only during Ansible operations. It is not
+stored on the VPS.
 
 ## Requirements On Your Computer
 
@@ -56,7 +63,10 @@ You need:
 - Docker with Docker Compose;
 - Bash;
 - an interactive terminal;
-- `curl` for checking the Docker base image version.
+- `git` to clone the repository, or `curl` and `tar` to download it without Git.
+
+Debian 12+ is required for the VPS, not for the local computer. The local
+computer can be macOS or Linux.
 
 You do not need to install Ansible, Python, SSH tools, or Xray on your
 computer. They run inside the local Alpine-based controller container.
@@ -65,6 +75,17 @@ computer. They run inside the local Alpine-based controller container.
 
 ```sh
 git clone https://github.com/m0nokey/xray-tui.git
+cd xray-tui
+bash run.sh
+```
+
+If Git is not installed, download the repository archive with `curl` and
+extract it with `tar`:
+
+```sh
+curl -fsSL https://github.com/m0nokey/xray-tui/archive/refs/heads/main.tar.gz \
+  | tar -xz
+mv xray-tui-main xray-tui
 cd xray-tui
 bash run.sh
 ```
