@@ -44,7 +44,7 @@ for index, key in enumerate(keys, 1):
         f"?type=xhttp&encryption=none&security=reality"
         f"&sni={server_name}&fp=chrome"
         f"&pbk={xray['reality_public_key']}&sid={xray['reality_short_id']}"
-        f"&path={quote(xray.get('xhttp_path', '/'), safe='')}#vless-xhttp-reality"
+        f"&path={quote(xray.get('xhttp_path', '/'), safe='')}&mode=packet-up#vless-xhttp-reality"
     )
     if index != len(keys):
         print()

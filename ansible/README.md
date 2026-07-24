@@ -17,7 +17,7 @@ separate Xray server account. Each profile contains two independent Xray
 clients:
 
 - `vision_uuid` for VLESS TCP Vision;
-- `xhttp_uuid` for VLESS XHTTP.
+- `xhttp_uuid` for VLESS XHTTP in `packet-up` mode.
 
 Both entries carry the same `key_id` in Xray's `email` field. That field pairs
 the two credentials so a revoke operation removes exactly one profile from

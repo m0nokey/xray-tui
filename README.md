@@ -13,7 +13,10 @@ individually without changing keys that are already in use.
 The VPS runs Xray in Docker with two protocols:
 
 - VLESS TCP with Vision and REALITY;
-- VLESS XHTTP with REALITY.
+- VLESS XHTTP with REALITY in `packet-up` mode.
+
+The XHTTP server configuration and generated client links use the same
+`packet-up` transport mode.
 
 ## Supported VPS
 

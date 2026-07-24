@@ -36,7 +36,10 @@
       },
       "streamSettings": {
         "network": "xhttp",
-        "xhttpSettings": {"path": "{{ xray_xhttp_path }}"},
+        "xhttpSettings": {
+          "path": "{{ xray_xhttp_path }}",
+          "mode": "packet-up"
+        },
         "security": "reality",
         "realitySettings": {
           "target": "{{ xray_server_name }}:443",

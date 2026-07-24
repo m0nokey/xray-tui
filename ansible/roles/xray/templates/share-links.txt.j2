@@ -1,7 +1,7 @@
 {%- for key in xray_state.access_keys %}
 {{ loop.index }}.
 vless://{{ key.vision_uuid }}@{{ xray_public_host }}:{{ xray_state.vision_port }}?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality&sni={{ xray_server_name }}&fp=chrome&pbk={{ xray_state.reality_public_key }}&sid={{ xray_state.reality_short_id }}#vless-vision-reality
-vless://{{ key.xhttp_uuid }}@{{ xray_public_host }}:{{ xray_state.xhttp_port }}?type=xhttp&encryption=none&security=reality&sni={{ xray_server_name }}&fp=chrome&pbk={{ xray_state.reality_public_key }}&sid={{ xray_state.reality_short_id }}&path={{ xray_xhttp_path | urlencode }}#vless-xhttp-reality
+vless://{{ key.xhttp_uuid }}@{{ xray_public_host }}:{{ xray_state.xhttp_port }}?type=xhttp&encryption=none&security=reality&sni={{ xray_server_name }}&fp=chrome&pbk={{ xray_state.reality_public_key }}&sid={{ xray_state.reality_short_id }}&path={{ xray_xhttp_path | urlencode }}&mode=packet-up#vless-xhttp-reality
 {% if not loop.last %}
 {% endif %}
 {%- endfor %}
