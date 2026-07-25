@@ -573,24 +573,28 @@ show_info() {
             show_dns_profile_matrix
             echo
             printf '%b  List descriptions:%b\n' "$blue" "$reset"
-            printf '    %-27s - %s\n' "URLhaus" "malware delivery and malicious website domains."
-            printf '    %-27s - %s\n' "Threat Intelligence Feeds" "malware, phishing, scams and attacker infrastructure."
-            printf '    %-27s - %s\n' "Encrypted DNS" "known DoH and DoT resolver domains."
-            printf '    %-27s - %s\n' "DNS/VPN/Proxy Bypass" "known service domains used to bypass DNS filtering."
-            printf '    %-27s - %s\n' "CNAME Trackers" "trackers hidden behind CNAME DNS records."
-            printf '    %-27s - %s\n' "Mail Trackers" "tracking pixels and link-tracking domains in emails."
-            printf '    %-27s - %s\n' "ThreatFox" "malware indicators and command-and-control domains."
-            printf '    %-27s - %s\n' "Pro++" "ads, trackers, telemetry, malware, phishing and scams."
-            printf '    %-27s - %s\n' "Ultimate" "aggressive privacy and security filtering with higher false positives."
-            printf '    %-27s - %s\n' "Dynamic DNS Threats" "suspicious dynamic DNS used by malware and phishing."
-            printf '    %-27s - %s\n' "Suspicious Spam TLDs" "selected high-abuse TLDs; legitimate sites may be blocked."
-            printf '    %-27s - %s\n' "Pop-up Ads" "known pop-up and aggressive advertising domains."
-            printf '    %-27s - %s\n' "Adult Content" "adult and NSFW domains; not a complete parental-control system."
-            printf '    %-27s - %s\n' "Gambling" "betting, casino and gambling domains."
-            printf '    %-27s - %s\n' "Social Networks" "selected social media domains."
-            printf '    %-27s - %s\n' "SafeSearch" "helps enforce safer search endpoints."
-            printf '    %-27s - %s\n' "Anti Piracy" "torrent, warez and known piracy domains."
-            printf '    %-27s : %s\n' "Source repository" "https://github.com/hagezi/dns-blocklists"
+            printf '    %-32s - %s\n' "URLhaus" "malware delivery and malicious website domains."
+            printf '    %-32s - %s\n' "Threat Intelligence Feeds Mini" "malware, phishing, scams and attacker infrastructure."
+            printf '    %-32s - %s\n' "Encrypted DNS" "known DoH and DoT resolver domains."
+            printf '    %-32s - %s\n' "DNS/VPN/Proxy Bypass" "known DoH, VPN and proxy service domains; not all exit-node IPs."
+            printf '    %-32s - %s\n' "CNAME Trackers" "trackers hidden behind CNAME DNS records."
+            printf '    %-32s - %s\n' "Mail Trackers" "tracking pixels and link-tracking domains in emails."
+            printf '    %-32s - %s\n' "ThreatFox" "malware indicators and command-and-control domains."
+            printf '    %-32s - %s\n' "Pro++" "ads, trackers, telemetry, malware, phishing and scams."
+            printf '    %-32s - %s\n' "Ultimate" "aggressive privacy and security filtering with higher false positives."
+            printf '    %-32s - %s\n' "Threat Intelligence Feeds Medium" "a larger malware, phishing, scam and attacker infrastructure feed."
+            printf '    %-32s - %s\n' "Threat Intelligence IPs" "IP-related threat indicators in RPZ form; not an IP firewall."
+            printf '    %-32s - %s\n' "Dynamic DNS Threats" "suspicious dynamic DNS used by malware and phishing."
+            printf '    %-32s - %s\n' "Suspicious Spam TLDs" "selected high-abuse TLDs; legitimate sites may be blocked."
+            printf '    %-32s - %s\n' "Pop-up Ads" "known pop-up and aggressive advertising domains."
+            printf '    %-32s - %s\n' "Adult Content" "adult and NSFW domains; not a complete parental-control system."
+            printf '    %-32s - %s\n' "Gambling Mini" "selected betting, casino and gambling domains."
+            printf '    %-32s - %s\n' "Gambling Medium" "a broader betting, casino and gambling domain list."
+            printf '    %-32s - %s\n' "Gambling Full" "the broadest betting, casino and gambling domain list."
+            printf '    %-32s - %s\n' "Social Networks" "selected social media domains."
+            printf '    %-32s - %s\n' "SafeSearch" "helps enforce safer search endpoints."
+            printf '    %-32s - %s\n' "Anti Piracy" "torrent, warez and known piracy domains."
+            printf '    %-32s : %s\n' "Source repository" "https://github.com/hagezi/dns-blocklists"
             ;;
         server)
             printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
@@ -995,7 +999,6 @@ dns_custom_has_source() {
 
 dns_custom_toggle_source() {
     local source="$1" current="${DNS_FILTER_LISTS:-}" updated
-    [[ "$source" == "urlhaus" ]] && return 0
     if dns_custom_has_source "$source"; then
         updated=",${current},"
         updated="${updated/,${source},/,}"
@@ -1085,13 +1088,13 @@ select_custom_dns_profile() {
     if [[ "${DNS_FILTER_CURRENT_PROFILE:-}" == "custom" && -n "${DNS_FILTER_CURRENT_LISTS:-}" ]]; then
         DNS_FILTER_LISTS="$DNS_FILTER_CURRENT_LISTS"
     else
-        DNS_FILTER_LISTS="urlhaus"
+        DNS_FILTER_LISTS=""
     fi
     while true; do
         clear_screen
         printf '%s\n' "Custom DNS protection"
-        printf '%s\n' "URLhaus is always enabled as the security base."
-        printf '%s\n' "Choose additional categories. Large threat feeds are mutually exclusive in practice."
+        printf '%s\n' "Choose any lists you need. Select at least one list."
+        printf '%s\n' "Large threat feeds are mutually exclusive in practice."
         echo
         for index in "${!sources[@]}"; do
             source="${sources[$index]}"
@@ -1119,7 +1122,11 @@ select_custom_dns_profile() {
         prompt_nav
         case "$REPLY" in
             a|A)
-                dns_custom_has_source urlhaus || { invalid_choice; continue; }
+                if [[ -z "${DNS_FILTER_LISTS:-}" ]]; then
+                    printf '%s\n' "Select at least one list, or use Disabled for no lists."
+                    wait_action_return
+                    continue
+                fi
                 if ! dns_custom_validate; then
                     wait_action_return
                     continue

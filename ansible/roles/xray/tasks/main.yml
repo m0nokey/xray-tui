@@ -32,9 +32,8 @@
   ansible.builtin.assert:
     that:
       - xray_dns_profile != 'custom' or (xray_dns_source_names | length > 0)
-      - xray_dns_profile != 'custom' or ('urlhaus' in xray_dns_source_names)
     fail_msg: >-
-      Custom DNS protection must include URLhaus and at least one source.
+      Custom DNS protection must include at least one source.
 
 - name: Validate DNS protection source names
   ansible.builtin.assert:
