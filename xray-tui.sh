@@ -1105,7 +1105,7 @@ select_custom_dns_profile() {
         echo
         printf '%s\n' "Approx. selected entries: ${entries}"
         printf '%s\n' "Estimated RPZ memory: ~${rpz_memory} MB"
-        printf '%s\n' "Required VPS memory: ${memory} MB RAM"
+        printf '%s\n' "VPS memory: ${VPS_RAM_MB} MB RAM | Required: ${memory} MB RAM"
         if ((VPS_RAM_MB < memory)); then
             printf '%s\n' "Status: NOT AVAILABLE on this VPS"
         else
