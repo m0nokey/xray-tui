@@ -755,12 +755,6 @@ show_info() {
             printf '%s\n' "     3. Remove"
             info_desc "        Select a key by number and remove both protocol UUIDs together."
             info_desc "        Choose the last number to remove every access key at once."
-            echo
-            printf '%b  Navigation:%b\n' "$blue" "$reset"
-            info_desc "b. back   Return to the previous menu."
-            info_desc "m. main   Return to the main menu."
-            info_desc "i. info   Show help for the current screen."
-            info_desc "x. exit   Exit Xray TUI and clear the screen."
             ;;
     esac
     echo
