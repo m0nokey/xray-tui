@@ -49,12 +49,31 @@
   ansible.builtin.set_fact:
     xray_dns_selected_sources: "{{ xray_dns_source_names | map('extract', xray_dns_sources) | list }}"
 
+- name: Calculate selected DNS protection entries
+  ansible.builtin.set_fact:
+    xray_dns_selected_entries: >-
+      {{ xray_dns_selected_sources
+         | map(attribute='entries')
+         | map('regex_replace', '[^0-9]', '')
+         | map('int')
+         | list
+         | sum }}
+
+- name: Estimate DNS protection memory
+  ansible.builtin.set_fact:
+    xray_dns_estimated_rpz_memory_mb: >-
+      {{ ((xray_dns_selected_entries | int) * (xray_dns_reference_memory_mb | int)
+          / (xray_dns_reference_entries | int)) | round(0, 'ceil') | int }}
+    xray_dns_runtime_memory_mb: >-
+      {{ (xray_dns_estimated_rpz_memory_mb | int) + (xray_dns_memory_headroom_mb | int) }}
+
 - name: Calculate DNS protection resource floor
   ansible.builtin.set_fact:
     xray_dns_required_vcpus: "{{ xray_dns_profiles[xray_dns_profile].min_vcpus | int }}"
     xray_dns_required_memory_mb: >-
       {{ [xray_dns_profiles[xray_dns_profile].min_memory_mb | int,
-          (xray_dns_selected_sources | map(attribute='min_memory_mb') | list | max | default(0, true) | int)] | max }}
+          (((xray_dns_runtime_memory_mb | int) + (xray_dns_memory_round_mb | int) - 1)
+           // (xray_dns_memory_round_mb | int)) * (xray_dns_memory_round_mb | int)] | max }}
 
 - name: Validate VPS resources for DNS protection
   ansible.builtin.assert:
@@ -65,6 +84,8 @@
       DNS profile '{{ xray_dns_profile }}' requires at least
       {{ xray_dns_required_vcpus }} vCPU and
       {{ xray_dns_required_memory_mb }} MB RAM.
+      The selected sources contain approximately {{ xray_dns_selected_entries }} entries
+      and require about {{ xray_dns_estimated_rpz_memory_mb }} MB for RPZ data.
       Detected {{ ansible_facts.processor_vcpus }} vCPU and
       {{ ansible_facts.memtotal_mb }} MB RAM.
   when: xray_dns_profile != 'disabled'

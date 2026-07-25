@@ -959,17 +959,6 @@ dns_source_entries() {
     esac
 }
 
-dns_source_min_memory() {
-    case "$1" in
-        urlhaus) printf '%s' 768 ;;
-        hagezi-tif-mini) printf '%s' 1536 ;;
-        hagezi-doh|adguard-cname-trackers|adguard-cname-mail|threatfox|hagezi-pro-plus|hagezi-social|hagezi-safesearch) printf '%s' 1800 ;;
-        hagezi-bypass|hagezi-gambling-medium) printf '%s' 3072 ;;
-        hagezi-ultimate|hagezi-tif-medium|hagezi-tif-ips|hagezi-gambling-full) printf '%s' 3072 ;;
-        *) printf '%s' 2048 ;;
-    esac
-}
-
 dns_profile_min_vcpus() {
     case "$1" in
         disabled) printf '%s' 0 ;;
@@ -982,10 +971,10 @@ dns_profile_min_vcpus() {
 dns_profile_min_memory() {
     case "$1" in
         disabled) printf '%s' 0 ;;
-        minimal) printf '%s' 768 ;;
-        optimal) printf '%s' 1536 ;;
-        full) printf '%s' 1800 ;;
-        maximum) printf '%s' 3072 ;;
+        minimal) printf '%s' 1280 ;;
+        optimal) printf '%s' 1280 ;;
+        full) printf '%s' 1792 ;;
+        maximum) printf '%s' 2304 ;;
         custom) printf '%s' 768 ;;
         *) printf '%s' 999999 ;;
     esac
@@ -993,7 +982,11 @@ dns_profile_min_memory() {
 
 dns_profile_is_available() {
     local profile="$1"
-    ((VPS_VCPUS >= $(dns_profile_min_vcpus "$profile") && VPS_RAM_MB >= $(dns_profile_min_memory "$profile")))
+    if [[ "$profile" == "custom" && -n "${DNS_FILTER_LISTS:-}" ]]; then
+        ((VPS_VCPUS >= $(dns_profile_min_vcpus "$profile") && VPS_RAM_MB >= $(dns_custom_memory_floor)))
+    else
+        ((VPS_VCPUS >= $(dns_profile_min_vcpus "$profile") && VPS_RAM_MB >= $(dns_profile_min_memory "$profile")))
+    fi
 }
 
 dns_custom_has_source() {
@@ -1044,20 +1037,43 @@ dns_custom_entries() {
     printf '%s' "$total"
 }
 
+dns_custom_reference_entries() {
+    printf '%s' 520600
+}
+
+dns_custom_reference_memory_mb() {
+    printf '%s' 600
+}
+
+dns_custom_memory_headroom_mb() {
+    printf '%s' 1024
+}
+
+dns_custom_memory_round_mb() {
+    printf '%s' 256
+}
+
+dns_custom_estimated_rpz_memory() {
+    local entries="$(dns_custom_entries)"
+    local reference_entries="$(dns_custom_reference_entries)"
+    local reference_memory="$(dns_custom_reference_memory_mb)"
+    local estimate=$(( (entries * reference_memory + reference_entries - 1) / reference_entries ))
+    ((estimate < 1)) && estimate=1
+    printf '%s' "$estimate"
+}
+
 dns_custom_memory_floor() {
-    local floor=768 source
-    IFS=',' read -r -a selected <<<"${DNS_FILTER_LISTS:-}"
-    for source in "${selected[@]}"; do
-        [[ -n "$source" ]] || continue
-        local required
-        required="$(dns_source_min_memory "$source")"
-        ((required > floor)) && floor="$required"
-    done
+    local estimated="$(dns_custom_estimated_rpz_memory)"
+    local headroom="$(dns_custom_memory_headroom_mb)"
+    local round="$(dns_custom_memory_round_mb)"
+    local required=$((estimated + headroom))
+    local floor=$(( ((required + round - 1) / round) * round ))
+    ((floor < 768)) && floor=768
     printf '%s' "$floor"
 }
 
 select_custom_dns_profile() {
-    local choice source index status entries memory
+    local choice source index status entries memory rpz_memory
     local -a sources=(
         urlhaus hagezi-tif-mini hagezi-doh hagezi-bypass
         adguard-cname-trackers adguard-cname-mail threatfox hagezi-pro-plus
@@ -1084,10 +1100,12 @@ select_custom_dns_profile() {
                 "$((index + 1))" "$(dns_source_label "$source")" "$status" "$(dns_source_entries "$source")"
         done
         entries="$(dns_custom_entries)"
+        rpz_memory="$(dns_custom_estimated_rpz_memory)"
         memory="$(dns_custom_memory_floor)"
         echo
         printf '%s\n' "Approx. selected entries: ${entries}"
-        printf '%s\n' "Required resource floor: ${memory} MB RAM"
+        printf '%s\n' "Estimated RPZ memory: ~${rpz_memory} MB"
+        printf '%s\n' "Required VPS memory: ${memory} MB RAM"
         if ((VPS_RAM_MB < memory)); then
             printf '%s\n' "Status: NOT AVAILABLE on this VPS"
         else
@@ -1148,7 +1166,7 @@ select_dns_profile() {
         printf '  %s6.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Custom" "Choose protection categories" "$(dns_profile_is_available custom && printf available || printf 'not available')"
         echo
         if ! dns_profile_is_available maximum; then
-            printf '%s\n' "  Maximum requires at least 2 vCPU and 3 GB RAM."
+            printf '%s\n' "  Maximum requires at least 2 vCPU and $(dns_profile_min_memory maximum) MB RAM."
         fi
         printf '%s\n' "  4 GB RAM is recommended for large feeds; Custom can disable encrypted DNS for TVs."
         echo
@@ -1165,7 +1183,12 @@ select_dns_profile() {
                 printf '%s\n' "This profile does not fit the detected VPS resources."
                 wait_action_return
                 ;;
-            6) select_custom_dns_profile ;;
+            6)
+                if select_custom_dns_profile; then
+                    return 0
+                fi
+                [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return 1
+                ;;
             i) show_info dns ;;
             b) return 1 ;;
             m) MAIN_MENU_REQUESTED=1; return 1 ;;
@@ -1407,6 +1430,7 @@ add_node() {
         return 1
     fi
     unset DNS_FILTER_CURRENT_PROFILE
+    unset DNS_FILTER_LISTS
     if ! select_dns_profile; then
         unset bootstrap_password
         rm -f "$before" "$after"

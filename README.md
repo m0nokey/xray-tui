@@ -38,12 +38,18 @@ later.
 
 Available DNS protection profiles have these requirements:
 
-- `Minimal`: at least 1 vCPU and 768 MB RAM;
-- `Optimal`: at least 1 vCPU and 1536 MB RAM;
-- `Full`: at least 2 vCPU and 1800 MB RAM; 4 GB RAM is recommended;
-- `Maximum`: at least 2 vCPU and 3072 MB RAM; 4 GB RAM is recommended;
+- `Minimal`: at least 1 vCPU and 1280 MB RAM;
+- `Optimal`: at least 1 vCPU and 1280 MB RAM;
+- `Full`: at least 2 vCPU and 1792 MB RAM; 4 GB RAM is recommended;
+- `Maximum`: at least 2 vCPU and 2304 MB RAM; 4 GB RAM is recommended;
 - `Custom`: starts with URLhaus and checks every selected source against the
   detected VPS resource floor.
+
+The Custom resource estimate uses the selected entry count. It is calibrated
+against the Full source set: approximately 520,600 entries used about 600 MB
+of Unbound RSS in the Nitka deployment. The estimate adds 1 GB of headroom for
+Xray and the operating system, then rounds the VPS requirement to 256 MB. It
+is a planning estimate, not a memory limit.
 
 The installer checks the VPS resources before deployment and marks profiles
 that do not fit. DNS protection is optional and can be disabled.
