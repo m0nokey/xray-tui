@@ -122,8 +122,13 @@ parser.add_argument("--bootstrap-key")
 parser.add_argument("--server-name", default="github.com")
 parser.add_argument(
     "--dns-profile",
-    choices=("disabled", "basic", "balanced", "full"),
+    choices=("disabled", "minimal", "optimal", "full", "maximum", "custom"),
     default="disabled",
+)
+parser.add_argument(
+    "--dns-lists",
+    default="",
+    help="comma-separated DNS source names for the custom profile",
 )
 opts = parser.parse_args()
 state = read_state()
@@ -139,6 +144,7 @@ elif opts.action == "normalize":
     for node in nodes.values():
         node.setdefault("xray", {}).setdefault("server_name", "github.com")
         node.setdefault("xray", {}).setdefault("dns_filter_profile", "disabled")
+        node.setdefault("xray", {}).setdefault("dns_filter_lists", [])
         bootstrap_port = int(node.get("bootstrap_ssh_port", node.get("initial_port", 22)))
         target_port = int(
             node.get(
@@ -181,6 +187,7 @@ elif opts.action == "extract":
         "xray_state": node["xray"],
         "xray_server_name": node["xray"].get("server_name", "github.com"),
         "xray_dns_profile": node["xray"].get("dns_filter_profile", "disabled"),
+        "xray_dns_lists": node["xray"].get("dns_filter_lists", []),
         "xray_public_host": node["host"],
         "management_user": node.get("management_user", node.get("deploy_user", "deploy")),
         "management_authorized_key": node.get(
@@ -262,9 +269,14 @@ elif opts.action == "set-dns-profile":
     if len(opts.args) != 2 or opts.args[0] not in nodes:
         raise SystemExit("set-dns-profile requires NODE PROFILE")
     profile = opts.args[1]
-    if profile not in ("disabled", "basic", "balanced", "full"):
+    if profile not in ("disabled", "minimal", "optimal", "full", "maximum", "custom"):
         raise SystemExit("unsupported DNS protection profile")
-    nodes[opts.args[0]].setdefault("xray", {})["dns_filter_profile"] = profile
+    node_xray = nodes[opts.args[0]].setdefault("xray", {})
+    node_xray["dns_filter_profile"] = profile
+    if profile == "custom":
+        node_xray["dns_filter_lists"] = [item for item in opts.dns_lists.split(",") if item]
+    else:
+        node_xray.pop("dns_filter_lists", None)
 elif opts.action == "remove-node":
     if len(opts.args) != 1 or opts.args[0] not in nodes:
         raise SystemExit("remove-node requires NODE")
@@ -330,6 +342,7 @@ elif opts.action == "add-node":
             "reality_short_id": secrets.token_hex(8),
             "server_name": server_name,
             "dns_filter_profile": opts.dns_profile,
+            "dns_filter_lists": [item for item in opts.dns_lists.split(",") if item],
             "access_keys": [{
                 "key_id": "key-" + vision_uuid.replace("-", "")[:8],
                 "vision_uuid": vision_uuid,

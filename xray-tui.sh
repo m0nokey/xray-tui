@@ -473,6 +473,61 @@ menu_control() {
     printf '%s%s.%s %s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET" "$COLOR_TEXT" "$2" "$COLOR_RESET"
 }
 
+show_dns_profile_matrix() {
+    local separator
+    separator="    $(printf '%*s' 104 '' | tr ' ' '-')"
+    printf '%s\n' "PROFILE LIST MATRIX"
+    printf '%s\n' ""
+    printf '%s\n' "    List                                      Minimal    Optimal        Full     Maximum   Approx. entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    URLhaus                                       ON         ON          ON          ON      ~611 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    HaGeZi Threat Intelligence Feeds Mini         -         ON           -           -      160,610 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    HaGeZi Encrypted DNS                          -          -          ON           -      3,423 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    HaGeZi Encrypted DNS/VPN/Proxy Bypass         -          -           -          ON      17,591 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    AdGuard CNAME Trackers                        -          -          ON          ON      ~100,087 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    AdGuard Mail Trackers                         -          -          ON          ON      ~98,595 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    ThreatFox                                     -          -          ON          ON      ~45,617 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    HaGeZi Pro++                                  -          -          ON           -      272,267 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    HaGeZi Ultimate                               -          -           -          ON      294,364 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    HaGeZi Threat Intelligence Feeds Medium       -          -           -          ON      417,094 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Threat Intelligence IPs                       -          -           -          ON      ~54,609 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Dynamic DNS Threats                           -          -      optional          ON      1,524 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Suspicious Spam TLDs                          -          -           -      optional   ~129 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' ""
+    printf '%s\n' "    Custom-only sources"
+    printf '%s\n' "    Pop-up Ads                                    -      optional  included  included    56,598 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Adult Content                                 -      optional  optional  optional    110,004 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Gambling Mini                                 -      optional  optional  optional    94,060 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Gambling Medium                               -          -      optional  optional    155,276 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Gambling Full                                 -          -      optional  optional    357,251 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Social Networks                               -          -      optional  optional    898 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    SafeSearch                                    -          -      optional  optional    206 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' "    Anti Piracy                                   -          -      optional  optional    36,844 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' ""
+    printf '%s\n' "    Counts are upstream list values and may change when sources update."
+}
+
 show_info() {
     local topic="${1:-general}"
     local reset="$COLOR_RESET" blue="$COLOR_LINE" gray="$COLOR_MUTED"
@@ -505,21 +560,36 @@ show_info() {
             printf '%s\n' "    In the remove screen, enter a key number or the last number to remove all keys."
             ;;
         dns)
-            printf '%b  DNS protection profiles:%b\n' "$blue" "$reset"
-            printf '%s\n' "    Disabled: no DNS blocklists; lowest memory usage."
-            printf '%s\n' "    Basic: URLhaus blocks known malware delivery domains."
-            printf '%s\n' "    Balanced: URLhaus plus HaGeZi TIF Mini for malware, phishing,"
-            printf '%s\n' "    scams, cryptojacking, and command-and-control domains."
-            printf '%s\n' "    Full: six RPZ blocklists:"
-            printf '%s\n' "      - URLhaus: malware delivery domains."
-            printf '%s\n' "      - HaGeZi DoH: encrypted DNS bypass services."
-            printf '%s\n' "      - AdGuard CNAME Trackers: trackers hidden behind CNAMEs."
-            printf '%s\n' "      - AdGuard CNAME Mail: email tracking domains."
-            printf '%s\n' "      - ThreatFox: malware and botnet C2 domains."
-            printf '%s\n' "      - HaGeZi Pro Plus: ads, trackers, telemetry, phishing,"
-            printf '%s\n' "        scams, malware, and cryptojacking."
-            printf '%s\n' "    Blocked domains return NXDOMAIN. Aggressive lists may block"
-            printf '%s\n' "    some legitimate domains and use more memory during updates."
+            printf '%b  DNS protection:%b\n' "$blue" "$reset"
+            printf '%s\n' "    Minimal: malware and malicious websites."
+            printf '%s\n' "    Optimal: malware, phishing, scams and selected trackers."
+            printf '%s\n' "    Full: ads, tracking, telemetry and malware."
+            printf '%s\n' "    Maximum: broad threat protection and known DNS bypass services."
+            printf '%s\n' "    Custom: choose extra categories within the VPS resource limit."
+            printf '%s\n' "    Full includes Encrypted DNS protection; Custom can disable it for TV compatibility."
+            printf '%s\n' "    Blocked domains return NXDOMAIN. DNS filtering does not replace a firewall."
+            echo
+            show_dns_profile_matrix
+            echo
+            printf '%b  List descriptions:%b\n' "$blue" "$reset"
+            printf '%s\n' "    URLhaus: malware delivery and malicious website domains."
+            printf '%s\n' "    Threat Intelligence Feeds: malware, phishing, scams and C2 infrastructure."
+            printf '%s\n' "    Encrypted DNS: known DoH and DoT resolver domains."
+            printf '%s\n' "    DNS/VPN/Proxy Bypass: known service domains used to bypass DNS filtering."
+            printf '%s\n' "    CNAME Trackers: trackers hidden behind CNAME DNS records."
+            printf '%s\n' "    Mail Trackers: tracking pixels and link-tracking domains in emails."
+            printf '%s\n' "    ThreatFox: malware indicators and command-and-control domains."
+            printf '%s\n' "    Pro++: ads, trackers, telemetry, malware, phishing and scams."
+            printf '%s\n' "    Ultimate: aggressive privacy and security filtering with higher false positives."
+            printf '%s\n' "    Dynamic DNS Threats: suspicious dynamic DNS used by malware and phishing."
+            printf '%s\n' "    Suspicious Spam TLDs: selected high-abuse TLDs; legitimate sites may be blocked."
+            printf '%s\n' "    Pop-up Ads: known pop-up and aggressive advertising domains."
+            printf '%s\n' "    Adult Content: adult and NSFW domains; not a complete parental-control system."
+            printf '%s\n' "    Gambling: betting, casino and gambling domains."
+            printf '%s\n' "    Social Networks: selected social media domains."
+            printf '%s\n' "    SafeSearch: helps enforce safer search endpoints."
+            printf '%s\n' "    Anti Piracy: torrent, warez and known piracy domains."
+            printf '%s\n' "    Source repository: https://github.com/hagezi/dns-blocklists"
             ;;
         server)
             printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
@@ -564,8 +634,8 @@ show_info() {
             printf '%s\n' "  2. Add VPN server"
             printf '%s\n' "     - Enter the VPS IP address, SSH user, SSH port, and password."
             printf '%s\n' "     - Enter a Reality camouflage domain, or use github.com by default."
-            printf '%s\n' "     - Choose optional DNS protection, disabled by default."
-            printf '%s\n' "       It can block malicious domains, phishing, trackers, and advertising."
+            printf '%s\n' "     - Choose Minimal, Optimal, Full, Maximum, or Custom DNS protection."
+            printf '%s\n' "       The menu checks VPS resources before allowing a profile."
             printf '%s\n' "     - Install Docker, Xray, automatic updates, and SSH hardening."
             printf '%s\n' "     - Generate VPN access keys and save all connection data in the Vault."
             printf '%s\n' "     - Repeating setup for the same VPS is safe and idempotent."
@@ -834,16 +904,241 @@ probe_vps_resources_with_key() {
     return 0
 }
 
+dns_source_label() {
+    case "$1" in
+        urlhaus) printf '%s' "URLhaus" ;;
+        hagezi-tif-mini) printf '%s' "HaGeZi Threat Intelligence Feeds Mini" ;;
+        hagezi-doh) printf '%s' "HaGeZi Encrypted DNS" ;;
+        hagezi-bypass) printf '%s' "HaGeZi Encrypted DNS/VPN/Proxy Bypass" ;;
+        adguard-cname-trackers) printf '%s' "AdGuard CNAME Trackers" ;;
+        adguard-cname-mail) printf '%s' "AdGuard Mail Trackers" ;;
+        threatfox) printf '%s' "ThreatFox" ;;
+        hagezi-pro-plus) printf '%s' "HaGeZi Pro++" ;;
+        hagezi-ultimate) printf '%s' "HaGeZi Ultimate" ;;
+        hagezi-tif-medium) printf '%s' "HaGeZi Threat Intelligence Feeds Medium" ;;
+        hagezi-tif-ips) printf '%s' "Threat Intelligence IPs" ;;
+        hagezi-dyndns) printf '%s' "Dynamic DNS Threats" ;;
+        hagezi-spam-tlds) printf '%s' "Suspicious Spam TLDs" ;;
+        hagezi-popup-ads) printf '%s' "Pop-up Ads" ;;
+        hagezi-nsfw) printf '%s' "Adult Content" ;;
+        hagezi-gambling-mini) printf '%s' "Gambling Mini" ;;
+        hagezi-gambling-medium) printf '%s' "Gambling Medium" ;;
+        hagezi-gambling-full) printf '%s' "Gambling Full" ;;
+        hagezi-social) printf '%s' "Social Networks" ;;
+        hagezi-safesearch) printf '%s' "SafeSearch" ;;
+        hagezi-anti-piracy) printf '%s' "Anti Piracy" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+dns_source_entries() {
+    case "$1" in
+        urlhaus) printf '%s' 611 ;;
+        hagezi-tif-mini) printf '%s' 160610 ;;
+        hagezi-doh) printf '%s' 3423 ;;
+        hagezi-bypass) printf '%s' 17591 ;;
+        adguard-cname-trackers) printf '%s' 100087 ;;
+        adguard-cname-mail) printf '%s' 98595 ;;
+        threatfox) printf '%s' 45617 ;;
+        hagezi-pro-plus) printf '%s' 272267 ;;
+        hagezi-ultimate) printf '%s' 294364 ;;
+        hagezi-tif-medium) printf '%s' 417094 ;;
+        hagezi-tif-ips) printf '%s' 54609 ;;
+        hagezi-dyndns) printf '%s' 1524 ;;
+        hagezi-spam-tlds) printf '%s' 129 ;;
+        hagezi-popup-ads) printf '%s' 56598 ;;
+        hagezi-nsfw) printf '%s' 110004 ;;
+        hagezi-gambling-mini) printf '%s' 94060 ;;
+        hagezi-gambling-medium) printf '%s' 155276 ;;
+        hagezi-gambling-full) printf '%s' 357251 ;;
+        hagezi-social) printf '%s' 898 ;;
+        hagezi-safesearch) printf '%s' 206 ;;
+        hagezi-anti-piracy) printf '%s' 36844 ;;
+        *) printf '%s' 0 ;;
+    esac
+}
+
+dns_source_min_memory() {
+    case "$1" in
+        urlhaus) printf '%s' 768 ;;
+        hagezi-tif-mini) printf '%s' 1536 ;;
+        hagezi-doh|adguard-cname-trackers|adguard-cname-mail|threatfox|hagezi-pro-plus|hagezi-social|hagezi-safesearch) printf '%s' 1800 ;;
+        hagezi-bypass|hagezi-gambling-medium) printf '%s' 3072 ;;
+        hagezi-ultimate|hagezi-tif-medium|hagezi-tif-ips|hagezi-gambling-full) printf '%s' 3072 ;;
+        *) printf '%s' 2048 ;;
+    esac
+}
+
+dns_profile_min_vcpus() {
+    case "$1" in
+        disabled) printf '%s' 0 ;;
+        minimal|optimal|custom) printf '%s' 1 ;;
+        full|maximum) printf '%s' 2 ;;
+        *) printf '%s' 99 ;;
+    esac
+}
+
+dns_profile_min_memory() {
+    case "$1" in
+        disabled) printf '%s' 0 ;;
+        minimal) printf '%s' 768 ;;
+        optimal) printf '%s' 1536 ;;
+        full) printf '%s' 1800 ;;
+        maximum) printf '%s' 3072 ;;
+        custom) printf '%s' 768 ;;
+        *) printf '%s' 999999 ;;
+    esac
+}
+
+dns_profile_is_available() {
+    local profile="$1"
+    ((VPS_VCPUS >= $(dns_profile_min_vcpus "$profile") && VPS_RAM_MB >= $(dns_profile_min_memory "$profile")))
+}
+
+dns_custom_has_source() {
+    [[ ",${DNS_FILTER_LISTS:-}," == *",$1,"* ]]
+}
+
+dns_custom_toggle_source() {
+    local source="$1" current="${DNS_FILTER_LISTS:-}" updated
+    [[ "$source" == "urlhaus" ]] && return 0
+    if dns_custom_has_source "$source"; then
+        updated=",${current},"
+        updated="${updated/,${source},/,}"
+        updated="${updated#,}"
+        updated="${updated%,}"
+        DNS_FILTER_LISTS="$updated"
+    else
+        DNS_FILTER_LISTS="${current:+$current,}$source"
+    fi
+}
+
+dns_custom_validate() {
+    local gambling_count=0 source
+    dns_custom_has_source hagezi-pro-plus && dns_custom_has_source hagezi-ultimate && {
+        printf '%s\n' "Choose either HaGeZi Pro++ or HaGeZi Ultimate, not both."
+        return 1
+    }
+    dns_custom_has_source hagezi-tif-mini && dns_custom_has_source hagezi-tif-medium && {
+        printf '%s\n' "Choose either TIF Mini or TIF Medium, not both."
+        return 1
+    }
+    for source in hagezi-gambling-mini hagezi-gambling-medium hagezi-gambling-full; do
+        dns_custom_has_source "$source" && gambling_count=$((gambling_count + 1))
+    done
+    if ((gambling_count > 1)); then
+        printf '%s\n' "Choose one Gambling list size."
+        return 1
+    fi
+    return 0
+}
+
+dns_custom_entries() {
+    local total=0 source
+    IFS=',' read -r -a selected <<<"${DNS_FILTER_LISTS:-}"
+    for source in "${selected[@]}"; do
+        [[ -n "$source" ]] || continue
+        total=$((total + $(dns_source_entries "$source")))
+    done
+    printf '%s' "$total"
+}
+
+dns_custom_memory_floor() {
+    local floor=768 source
+    IFS=',' read -r -a selected <<<"${DNS_FILTER_LISTS:-}"
+    for source in "${selected[@]}"; do
+        [[ -n "$source" ]] || continue
+        local required
+        required="$(dns_source_min_memory "$source")"
+        ((required > floor)) && floor="$required"
+    done
+    printf '%s' "$floor"
+}
+
+select_custom_dns_profile() {
+    local choice source index status entries memory
+    local -a sources=(
+        urlhaus hagezi-tif-mini hagezi-doh hagezi-bypass
+        adguard-cname-trackers adguard-cname-mail threatfox hagezi-pro-plus
+        hagezi-ultimate hagezi-tif-medium hagezi-tif-ips hagezi-dyndns
+        hagezi-spam-tlds hagezi-popup-ads hagezi-nsfw hagezi-gambling-mini
+        hagezi-gambling-medium hagezi-gambling-full hagezi-social
+        hagezi-safesearch hagezi-anti-piracy
+    )
+    if [[ "${DNS_FILTER_CURRENT_PROFILE:-}" == "custom" && -n "${DNS_FILTER_CURRENT_LISTS:-}" ]]; then
+        DNS_FILTER_LISTS="$DNS_FILTER_CURRENT_LISTS"
+    else
+        DNS_FILTER_LISTS="urlhaus"
+    fi
+    while true; do
+        clear_screen
+        printf '%s\n' "Custom DNS protection"
+        printf '%s\n' "URLhaus is always enabled as the security base."
+        printf '%s\n' "Choose additional categories. Large threat feeds are mutually exclusive in practice."
+        echo
+        for index in "${!sources[@]}"; do
+            source="${sources[$index]}"
+            if dns_custom_has_source "$source"; then status="ON"; else status="-"; fi
+            printf '  %2d. %-48s [%s] %s entries\n' \
+                "$((index + 1))" "$(dns_source_label "$source")" "$status" "$(dns_source_entries "$source")"
+        done
+        entries="$(dns_custom_entries)"
+        memory="$(dns_custom_memory_floor)"
+        echo
+        printf '%s\n' "Approx. selected entries: ${entries}"
+        printf '%s\n' "Required resource floor: ${memory} MB RAM"
+        if ((VPS_RAM_MB < memory)); then
+            printf '%s\n' "Status: NOT AVAILABLE on this VPS"
+        else
+            printf '%s\n' "Status: available"
+        fi
+        if dns_custom_has_source hagezi-doh || dns_custom_has_source hagezi-bypass; then
+            printf '%s\n' "Warning: encrypted DNS/bypass protection may affect Smart TVs and Hiddify."
+        fi
+        echo
+        menu_control a "apply custom profile"
+        prompt_nav
+        case "$REPLY" in
+            a|A)
+                dns_custom_has_source urlhaus || { invalid_choice; continue; }
+                if ! dns_custom_validate; then
+                    wait_action_return
+                    continue
+                fi
+                if ((VPS_VCPUS < $(dns_profile_min_vcpus custom) || VPS_RAM_MB < memory)); then
+                    printf '%s\n' "This Custom profile exceeds the VPS resource limit."
+                    wait_action_return
+                    continue
+                fi
+                DNS_FILTER_PROFILE=custom
+                return 0
+                ;;
+            i) show_info dns ;;
+            b) return 1 ;;
+            m) MAIN_MENU_REQUESTED=1; return 1 ;;
+            x) exit_tui ;;
+            ''|[!0-9]*) invalid_choice ;;
+            *)
+                index=$((REPLY - 1))
+                if ((index >= 0 && index < ${#sources[@]})); then
+                    source="${sources[$index]}"
+                    dns_custom_toggle_source "$source"
+                else
+                    invalid_choice
+                fi
+                ;;
+        esac
+    done
+}
+
 select_dns_profile() {
-    local choice
+    local profile
     while true; do
         clear_screen
         printf '%s\n' "Optional DNS protection"
-        printf '%s\n' "Disabled by default."
-        printf '%s\n' "Blocks DNS requests to malicious domains, phishing sites,"
-        printf '%s\n' "trackers, advertising, telemetry, and command-and-control servers."
+        printf '%s\n' "Disabled by default. Blocks known malicious domains, phishing,"
+        printf '%s\n' "scams, advertising, trackers, telemetry and command-and-control domains."
         printf '%s\n' "Uses additional VPS resources and may block some legitimate domains."
-        printf '%s\n' "You can enable or change it later."
         echo
         if [[ -n "${DNS_FILTER_CURRENT_PROFILE:-}" ]]; then
             printf '%s\n' "Current profile: ${DNS_FILTER_CURRENT_PROFILE}"
@@ -851,34 +1146,31 @@ select_dns_profile() {
         printf '%s\n' "Detected VPS resources: ${VPS_VCPUS} vCPU, $(((VPS_RAM_MB + 512) / 1024)) GB RAM"
         echo
         menu_option 1 "Disabled - no DNS blocklists"
-        if ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 768)); then
-            menu_option 2 "Basic - URLhaus malware protection"
-        fi
-        if ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 1536)); then
-            menu_option 3 "Balanced - URLhaus and HaGeZi TIF Mini"
-        fi
-        if ((VPS_VCPUS >= 2 && VPS_RAM_MB >= 1800)); then
-            menu_option 4 "Full - six RPZ blocklists"
-            if ((VPS_RAM_MB < 4096)); then
-                printf '%s\n' "  Full is available, but 4 GB RAM is recommended."
-            fi
+        printf '  %s2.%s Minimal    - Malware and malicious websites [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "$(dns_profile_is_available minimal && printf available || printf 'not available')"
+        printf '  %s3.%s Optimal    - Malware, phishing, scams and selected trackers [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "$(dns_profile_is_available optimal && printf available || printf 'not available')"
+        printf '  %s4.%s Full       - Ads, tracking, telemetry and malware [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "$(dns_profile_is_available full && printf available || printf 'not available')"
+        printf '  %s5.%s Maximum    - Maximum protection and DNS bypass blocking [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "$(dns_profile_is_available maximum && printf available || printf 'not available')"
+        menu_option 6 "Custom - choose additional protection categories"
+        echo
+        if ((VPS_RAM_MB < 4096 && VPS_VCPUS >= 2)); then
+            printf '%s\n' "  Full and Maximum are available only within their minimum floor; 4 GB RAM is recommended for large feeds."
+            printf '%s\n' "  Full/Maximum may affect Smart TVs or VPN clients with their own encrypted DNS."
         fi
         echo
         prompt_nav
         case "$REPLY" in
-            1) DNS_FILTER_PROFILE=disabled; return 0 ;;
-            2)
-                ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 768)) && { DNS_FILTER_PROFILE=basic; return 0; }
-                invalid_choice
+            1) DNS_FILTER_PROFILE=disabled; DNS_FILTER_LISTS=""; return 0 ;;
+            2|3|4|5)
+                case "$REPLY" in 2) profile=minimal ;; 3) profile=optimal ;; 4) profile=full ;; 5) profile=maximum ;; esac
+                if dns_profile_is_available "$profile"; then
+                    DNS_FILTER_PROFILE="$profile"
+                    DNS_FILTER_LISTS=""
+                    return 0
+                fi
+                printf '%s\n' "This profile does not fit the detected VPS resources."
+                wait_action_return
                 ;;
-            3)
-                ((VPS_VCPUS >= 1 && VPS_RAM_MB >= 1536)) && { DNS_FILTER_PROFILE=balanced; return 0; }
-                invalid_choice
-                ;;
-            4)
-                ((VPS_VCPUS >= 2 && VPS_RAM_MB >= 1800)) && { DNS_FILTER_PROFILE=full; return 0; }
-                invalid_choice
-                ;;
+            6) select_custom_dns_profile ;;
             i) show_info dns ;;
             b) return 1 ;;
             m) MAIN_MENU_REQUESTED=1; return 1 ;;
@@ -1019,7 +1311,7 @@ retry_existing_node_with_saved_key() {
 }
 
 add_node() {
-    local name host server_name dns_profile bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port
+    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port
     clear_screen
     read -r -e -p 'VPS IP address: ' host
     if ! valid_ipv4 "$host"; then
@@ -1126,9 +1418,10 @@ add_node() {
         return 1
     fi
     dns_profile="$DNS_FILTER_PROFILE"
+    dns_lists="${DNS_FILTER_LISTS:-}"
 
     name="auto"
-    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" --dns-profile "$dns_profile" add-node "$name" "$host" <"$before" >"$after"; then
+    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" --dns-profile "$dns_profile" --dns-lists "$dns_lists" add-node "$name" "$host" <"$before" >"$after"; then
         rm -f "$before" "$after"
         return 1
     fi
@@ -1695,7 +1988,7 @@ PY
 }
 
 manage_dns_protection() {
-    local node="$1" before after host user port private_key current_profile selected_profile
+    local node="$1" before after host user port private_key current_profile current_lists selected_profile selected_lists
     before="$(mktemp)"
     if ! read_vault_state "$before"; then
         rm -f "$before"
@@ -1706,6 +1999,7 @@ manage_dns_protection() {
     port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$before")"
     private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before")"
     current_profile="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("xray", {}).get("dns_filter_profile", "disabled"), end="")' "$node" <"$before")"
+    current_lists="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(",".join(node.get("xray", {}).get("dns_filter_lists", [])), end="")' "$node" <"$before")"
     if [[ -z "$private_key" ]]; then
         rm -f "$before"
         clear_screen
@@ -1719,14 +2013,19 @@ manage_dns_protection() {
     fi
 
     DNS_FILTER_CURRENT_PROFILE="$current_profile"
+    DNS_FILTER_CURRENT_LISTS="$current_lists"
     if ! select_dns_profile; then
         unset DNS_FILTER_CURRENT_PROFILE
+        unset DNS_FILTER_CURRENT_LISTS
         rm -f "$before"
         return 0
     fi
     selected_profile="$DNS_FILTER_PROFILE"
+    selected_lists="${DNS_FILTER_LISTS:-}"
     unset DNS_FILTER_CURRENT_PROFILE
-    if [[ "$selected_profile" == "$current_profile" ]]; then
+    unset DNS_FILTER_CURRENT_LISTS
+    if [[ "$selected_profile" == "$current_profile" && "$selected_profile" != "custom" ]] || \
+       [[ "$selected_profile" == "custom" && "$current_profile" == "custom" && "$selected_lists" == "$current_lists" ]]; then
         clear_screen
         printf '%s\n' "DNS protection profile was not changed."
         wait_action_return
@@ -1735,7 +2034,7 @@ manage_dns_protection() {
     fi
 
     after="$(mktemp)"
-    if ! python3 "$ROOT_DIR/scripts/state_cli.py" set-dns-profile "$node" "$selected_profile" <"$before" >"$after"; then
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" --dns-lists "$selected_lists" set-dns-profile "$node" "$selected_profile" <"$before" >"$after"; then
         rm -f "$before" "$after"
         return 1
     fi

@@ -38,12 +38,15 @@ later.
 
 Available DNS protection profiles have these requirements:
 
-- `Basic`: at least 1 vCPU and 1 GB RAM;
-- `Balanced`: at least 1 vCPU and 2 GB RAM;
-- `Full`: at least 2 vCPU and 2 GB RAM; 4 GB RAM is recommended.
+- `Minimal`: at least 1 vCPU and 768 MB RAM;
+- `Optimal`: at least 1 vCPU and 1536 MB RAM;
+- `Full`: at least 2 vCPU and 1800 MB RAM; 4 GB RAM is recommended;
+- `Maximum`: at least 2 vCPU and 3072 MB RAM; 4 GB RAM is recommended;
+- `Custom`: starts with URLhaus and checks every selected source against the
+  detected VPS resource floor.
 
-The installer checks the VPS resources before deployment and shows only the
-profiles that fit. DNS protection is optional and can be disabled.
+The installer checks the VPS resources before deployment and marks profiles
+that do not fit. DNS protection is optional and can be disabled.
 
 During deployment, the controller:
 
@@ -244,11 +247,20 @@ no direct DNS fallback, and direct outbound DNS ports are blocked by routing.
 Profiles:
 
 - `Disabled`: no blocklists and the lowest resource usage;
-- `Basic`: URLhaus malware-delivery domains;
-- `Balanced`: URLhaus plus HaGeZi TIF Mini for malware, phishing, scams,
+- `Minimal`: URLhaus malware-delivery domains;
+- `Optimal`: URLhaus plus HaGeZi TIF Mini for malware, phishing, scams,
   cryptojacking, and command-and-control domains;
-- `Full`: URLhaus, HaGeZi DoH, AdGuard CNAME tracker lists, ThreatFox, and
-  HaGeZi Pro Plus.
+- `Full`: URLhaus, HaGeZi Encrypted DNS, AdGuard CNAME tracker lists,
+  AdGuard Mail Trackers, ThreatFox, and HaGeZi Pro++;
+- `Maximum`: broad threat feeds, bypass protection, tracker protection,
+  dynamic DNS threats, suspicious spam TLDs, and threat-intelligence IPs;
+- `Custom`: URLhaus plus selected additional sources, with resource and
+  compatibility checks before deployment.
+
+`HaGeZi Encrypted DNS` is included in Full and can be disabled through
+Custom because some Smart TVs and VPN clients use their own encrypted DNS.
+The Xray tunnel itself is not affected, but an application may lose DNS
+resolution if its resolver is listed.
 
 The `Full` profile can run on a 2 GB VPS, but 4 GB RAM is recommended because
 large RPZ lists consume more memory while loading and updating. Blocked names
