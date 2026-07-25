@@ -4,7 +4,7 @@
   "dns": {
     "servers": [
       {
-        "address": "unbound",
+        "address": "{{ xray_unbound_ipv4 }}",
         "port": 5353,
         "finalQuery": true,
         "skipFallback": true,
@@ -73,7 +73,9 @@
   "outbounds": [
     {
       "protocol": "freedom",
-      "settings": {"domainStrategy": "UseIPv4"},
+      "settings": {
+        "domainStrategy": "{% if xray_dns_profile != 'disabled' %}ForceIPv4{% else %}UseIPv4{% endif %}"
+      },
       "tag": "direct"
     }
 {% if xray_dns_profile != 'disabled' %}

@@ -10,6 +10,9 @@ xray_xhttp_path: /
 xray_unbound_dir: "{{ xray_dir }}/unbound"
 xray_unbound_dockerfile_path: "{{ xray_unbound_dir }}/Dockerfile"
 xray_unbound_config_path: "{{ xray_unbound_dir }}/unbound.conf"
+# Keep the resolver address stable so Xray does not have to resolve its own DNS server name.
+xray_dns_network_subnet: 172.31.254.0/28
+xray_unbound_ipv4: 172.31.254.2
 xray_dns_profiles:
   disabled:
     min_vcpus: 0
