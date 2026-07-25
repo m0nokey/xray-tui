@@ -369,7 +369,7 @@ delete_vault() {
         menu_control i info
         menu_control x exit
         echo
-        read -r -e -p '?: ' confirm
+        read_required_choice confirm '?: ' || return 0
         case "$confirm" in
             [Yy]) break ;;
             [Nn]|b) return 0 ;;
@@ -451,6 +451,21 @@ restore_vault() {
     read -r -p "Press Enter to continue" _
 }
 
+read_required_choice() {
+    local variable="$1" prompt="$2" value
+    while true; do
+        value=''
+        if ! read -r -e -p "$prompt" value; then
+            return 1
+        fi
+        if [[ -n "$value" ]]; then
+            printf -v "$variable" '%s' "$value"
+            return 0
+        fi
+        invalid_choice
+    done
+}
+
 prompt_nav() {
     echo
     menu_control b back
@@ -458,7 +473,7 @@ prompt_nav() {
     menu_control i info
     menu_control x exit
     echo
-    read -r -e -p '?: ' REPLY
+    read_required_choice REPLY '?: '
 }
 
 menu_heading() {
@@ -543,6 +558,10 @@ show_info() {
         red=''
     fi
 
+    info_desc() {
+        printf '    %b%s%b\n' "$gray" "$1" "$reset"
+    }
+
     clear_screen
     echo
     case "$topic" in
@@ -552,13 +571,32 @@ show_info() {
             printf '    %bPartial%b          %bXray is running and only one VPN port is reachable.%b\n' "$yellow" "$reset" "$gray" "$reset"
             printf '    %bVPN unavailable%b  %bThe VPS responded, but Xray is not confirmed running.%b\n' "$red" "$reset" "$gray" "$reset"
             printf '    %bUnreachable%b      %bNo VPN or management port responded; DPI or a provider firewall may be involved.%b\n' "$red" "$reset" "$gray" "$reset"
+            echo
+            printf '%b  Selected server menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Manage VPN server"
+            info_desc "       Open server operations, DNS protection, SSH management, or removal."
+            printf '%s\n' "    2. Manage access keys"
+            info_desc "       Show, add, or remove the VPN client keys for this server."
             ;;
         access_keys)
             printf '%b  Access keys:%b\n' "$blue" "$reset"
-            printf '%s\n' "    Each access key contains one Vision UUID and one XHTTP UUID."
-            printf '%s\n' "    Both UUIDs are deployed together and removed together."
-            printf '%s\n' "    You can add up to 50 access keys at once."
-            printf '%s\n' "    In the remove screen, enter a key number or the last number to remove all keys."
+            info_desc "Each access key contains one Vision UUID and one XHTTP UUID."
+            info_desc "Both UUIDs are deployed together and removed together."
+            info_desc "You can add up to 50 access keys at once."
+            info_desc "In the remove screen, enter a key number or the last number to remove all keys."
+            echo
+            printf '%b  Manage access keys menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Show"
+            info_desc "       Display the Vision and XHTTP connection links for each key."
+            printf '%s\n' "    2. Add"
+            info_desc "       Generate 1 to 50 new access keys and deploy them to the VPS."
+            printf '%s\n' "    3. Remove"
+            info_desc "       Remove one key, or choose the final number to remove all keys."
+            echo
+            printf '%b  Access-key screens:%b\n' "$blue" "$reset"
+            info_desc "Add: enter the number of keys to generate, from 1 to 50."
+            info_desc "Remove: select a key number, then confirm with y or cancel with n."
+            info_desc "Remove all: confirm that every Vision and XHTTP key should be deleted."
             ;;
         dns)
             printf '%b  DNS protection:%b\n' "$blue" "$reset"
@@ -567,8 +605,22 @@ show_info() {
             printf '    %-7s - %s\n' "Full" "ads, tracking, telemetry and malware."
             printf '    %-7s - %s\n' "Maximum" "broad threat protection and known DNS bypass services."
             printf '    %-7s - %s\n' "Custom" "choose extra categories within the VPS resource limit."
-            printf '%s\n' "    Full includes Encrypted DNS protection; Custom can disable it for TV compatibility."
-            printf '%s\n' "    Blocked domains return NXDOMAIN. DNS filtering does not replace a firewall."
+            info_desc "Full includes Encrypted DNS protection; Custom can disable it for TV compatibility."
+            info_desc "Blocked domains return NXDOMAIN. DNS filtering does not replace a firewall."
+            echo
+            printf '%b  DNS protection menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Disabled"
+            info_desc "       Remove DNS blocklists from the VPS."
+            printf '%s\n' "    2. Minimal"
+            info_desc "       Enable malware and malicious website protection."
+            printf '%s\n' "    3. Optimal"
+            info_desc "       Add phishing, scams, and selected tracker protection."
+            printf '%s\n' "    4. Full"
+            info_desc "       Add advertising, tracking, telemetry, and broader threat protection."
+            printf '%s\n' "    5. Maximum"
+            info_desc "       Add broad threat feeds and known DNS bypass service domains."
+            printf '%s\n' "    6. Custom"
+            info_desc "       Toggle individual lists and apply a resource-checked combination."
             echo
             show_dns_profile_matrix
             echo
@@ -595,93 +647,120 @@ show_info() {
             printf '    %-32s - %s\n' "SafeSearch" "helps enforce safer search endpoints."
             printf '    %-32s - %s\n' "Anti Piracy" "torrent, warez and known piracy domains."
             printf '    %-32s : %s\n' "Source repository" "https://github.com/hagezi/dns-blocklists"
+            echo
+            printf '%b  Custom selection:%b\n' "$blue" "$reset"
+            info_desc "Select a number to toggle a list. [ON] means it will be deployed."
+            info_desc "The selected lists are checked against the detected VPS CPU and RAM."
+            info_desc "Large alternatives are mutually exclusive: Pro++/Ultimate, TIF Mini/Medium, and Gambling sizes."
+            info_desc "Apply saves the selected lists in the Vault only after the VPS deployment succeeds."
             ;;
         server)
             printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
-            printf '%s\n' "    Check the VPS connection, Xray container, and VPN ports."
-            printf '%s\n' "    Restart the Xray VPN service when it is not responding."
-            printf '%s\n' "    Enable, disable, or change optional DNS protection profiles."
-            printf '%s\n' "    Rotate the SSH management key without changing VPN access keys."
-            printf '%s\n' "    Open an SSH session using the saved Vault credentials."
-            printf '%s\n' "    Removing a server cleans up the remote installation before changing the Vault."
+            printf '%s\n' "    1. Check VPN status"
+            info_desc "       Test management SSH, the Xray container, and both VPN ports."
+            printf '%s\n' "    2. Restart VPN server"
+            info_desc "       Restart the Xray Docker stack without changing keys or profiles."
+            printf '%s\n' "    3. DNS protection"
+            info_desc "       Select, disable, or customize DNS blocklists after a VPS resource check."
+            printf '%s\n' "    4. Rotate SSH key"
+            info_desc "       Generate a new management key, verify it, then revoke the old key."
+            printf '%s\n' "    5. Remove VPN server"
+            info_desc "       Clean Xray and Docker from the VPS before removing its Vault entry."
+            printf '%s\n' "    6. Open SSH session"
+            info_desc "       Connect as the saved management user using the saved SSH key and port."
             ;;
         vault)
             printf '%b  Vault:%b\n' "$blue" "$reset"
-            printf '%s\n' "    The Vault is encrypted local storage for VPS access data and VPN keys."
-            printf '%s\n' "    It is unlocked only when an operation needs the saved data."
-            printf '%s\n' "    Keep the Vault password safe: it cannot be recovered from the file."
+            info_desc "The Vault is encrypted local storage for VPS access data and VPN keys."
+            info_desc "It is unlocked only when an operation needs the saved data."
+            info_desc "Keep the Vault password safe: it cannot be recovered from the file."
+            echo
+            printf '%b  Vault menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Change encryption password"
+            info_desc "       Re-encrypt the Vault with a new local password."
+            printf '%s\n' "    2. Backup encrypted state"
+            info_desc "       Create a copy of the encrypted Vault for recovery."
+            printf '%s\n' "    3. Restore encrypted state"
+            info_desc "       Replace the current Vault with a selected encrypted backup."
+            printf '%s\n' "    4. Delete Vault"
+            info_desc "       Delete local Vault data, backups, VPS credentials, and VPN keys."
+            info_desc "When no Vault exists, option 1 creates it and option 2 restores a backup."
             ;;
         removal)
             printf '%b  Remote cleanup:%b\n' "$blue" "$reset"
-            printf '%s\n' "    Xray, Docker, updater services, and the deploy user are removed from the VPS."
-            printf '%s\n' "    The original SSH configuration is restored from its backup."
-            printf '%s\n' "    The server stays in the Vault if remote cleanup fails."
+            info_desc "Confirm with y to remove the VPN server from the VPS."
+            info_desc "Cancel with n or b to leave the VPS and Vault unchanged."
+            info_desc "Xray, Docker, updater services, and the deploy user are removed from the VPS."
+            info_desc "The original SSH configuration is restored from its backup."
+            info_desc "The server stays in the Vault if remote cleanup fails."
+            info_desc "After a failed cleanup, r retries with the initial SSH credentials."
+            info_desc "You can remove only the local Vault entry with y after a failed cleanup; verify the VPS separately."
             ;;
         *)
             printf '%b  Xray TUI:%b\n' "$blue" "$reset"
-            printf '%s\n' "    This tool installs and manages your Xray VPN servers."
-            printf '%s\n' "    VPS access data and VPN keys are kept in the encrypted Vault."
+            info_desc "This tool installs and manages your Xray VPN servers."
+            info_desc "VPS access data and VPN keys are kept in the encrypted Vault."
             echo
             printf '%b  Main menu:%b\n' "$blue" "$reset"
             echo
             printf '%s\n' "  1. VPN servers"
-            printf '%s\n' "     - View the VPN servers saved in the Vault."
-            printf '%s\n' "     - Check the VPS, SSH, Xray, and VPN port status."
-            printf '%s\n' "     - Select a server to manage it."
-            printf '%s\n' "     - If there are no servers, add one with option 2 first."
+            info_desc " - View the VPN servers saved in the Vault."
+            info_desc " - Check the VPS, SSH, Xray, and VPN port status."
+            info_desc " - Select a server to manage it."
+            info_desc " - If there are no servers, add one with option 2 first."
             echo
             printf '%s\n' "     Selected server menu:"
             printf '%s\n' "     1. Manage VPN server"
-            printf '%s\n' "        Check status, restart Xray, rotate the SSH key, or remove the server."
+            info_desc "        Check status, restart Xray, rotate the SSH key, or remove the server."
             printf '%s\n' "     2. Manage access keys"
-            printf '%s\n' "        Show, add, or remove VPN access keys for this server."
+            info_desc "        Show, add, or remove VPN access keys for this server."
             echo
             printf '%s\n' "  2. Add VPN server"
-            printf '%s\n' "     - Enter the VPS IP address, SSH user, SSH port, and password."
-            printf '%s\n' "     - Enter a Reality camouflage domain, or use github.com by default."
-            printf '%s\n' "     - Choose Minimal, Optimal, Full, Maximum, or Custom DNS protection."
-            printf '%s\n' "       The menu checks VPS resources before allowing a profile."
-            printf '%s\n' "     - Install Docker, Xray, automatic updates, and SSH hardening."
-            printf '%s\n' "     - Generate VPN access keys and save all connection data in the Vault."
-            printf '%s\n' "     - Repeating setup for the same VPS is safe and idempotent."
+            info_desc " - Enter the VPS IP address, SSH user, SSH port, and password."
+            info_desc " - Enter a Reality camouflage domain, or use github.com by default."
+            info_desc " - Choose Minimal, Optimal, Full, Maximum, or Custom DNS protection."
+            info_desc "   The menu checks VPS resources before allowing a profile."
+            info_desc " - Install Docker, Xray, automatic updates, and SSH hardening."
+            info_desc " - Generate VPN access keys and save all connection data in the Vault."
+            info_desc " - Repeating setup for the same VPS is safe and idempotent."
             echo
             printf '%s\n' "  3. Vault"
             printf '%s\n' "     1. Change encryption password"
-            printf '%s\n' "        Change the password protecting the local Vault."
+            info_desc "        Change the password protecting the local Vault."
             printf '%s\n' "     2. Backup encrypted state"
-            printf '%s\n' "        Create a backup containing the encrypted Vault file."
+            info_desc "        Create a backup containing the encrypted Vault file."
             printf '%s\n' "     3. Restore encrypted state"
-            printf '%s\n' "        Replace the current Vault with a selected encrypted backup."
+            info_desc "        Replace the current Vault with a selected encrypted backup."
             printf '%s\n' "     4. Delete Vault"
-            printf '%s\n' "        Delete local VPS access data, VPN keys, and Vault backups."
+            info_desc "        Delete local VPS access data, VPN keys, and Vault backups."
             echo
             printf '%s\n' "  Manage VPN server"
             printf '%s\n' "     1. Check VPN status"
-            printf '%s\n' "        Test SSH access, the Xray container, and both VPN ports."
+            info_desc "        Test SSH access, the Xray container, and both VPN ports."
             printf '%s\n' "     2. Restart VPN server"
-            printf '%s\n' "        Restart the Xray Docker stack without changing access keys."
+            info_desc "        Restart the Xray Docker stack without changing access keys."
             printf '%s\n' "     3. DNS protection"
-            printf '%s\n' "        Enable, disable, or change the DNS blocklist profile."
+            info_desc "        Enable, disable, or change the DNS blocklist profile."
             printf '%s\n' "     4. Rotate SSH key"
-            printf '%s\n' "        Generate a new deploy SSH key and revoke the old one."
+            info_desc "        Generate a new deploy SSH key and revoke the old one."
             printf '%s\n' "     5. Remove VPN server"
-            printf '%s\n' "        Remove the Xray installation and clean up the VPS."
-            printf '%s\n' "        The Vault is changed only after remote cleanup succeeds."
+            info_desc "        Remove the Xray installation and clean up the VPS."
+            info_desc "        The Vault is changed only after remote cleanup succeeds."
             echo
             printf '%s\n' "  Manage access keys"
             printf '%s\n' "     1. Show"
-            printf '%s\n' "        Display the Vision and XHTTP connection links for each key."
+            info_desc "        Display the Vision and XHTTP connection links for each key."
             printf '%s\n' "     2. Add"
-            printf '%s\n' "        Add from 1 to 50 access keys and deploy them to the VPS."
+            info_desc "        Add from 1 to 50 access keys and deploy them to the VPS."
             printf '%s\n' "     3. Remove"
-            printf '%s\n' "        Select a key by number and remove both protocol UUIDs together."
-            printf '%s\n' "        Choose the last number to remove every access key at once."
+            info_desc "        Select a key by number and remove both protocol UUIDs together."
+            info_desc "        Choose the last number to remove every access key at once."
             echo
             printf '%b  Navigation:%b\n' "$blue" "$reset"
-            printf '%s\n' "  b. back   Return to the previous menu."
-            printf '%s\n' "  m. main   Return to the main menu."
-            printf '%s\n' "  i. info   Show help for the current screen."
-            printf '%s\n' "  x. exit   Exit Xray TUI and clear the screen."
+            info_desc "b. back   Return to the previous menu."
+            info_desc "m. main   Return to the main menu."
+            info_desc "i. info   Show help for the current screen."
+            info_desc "x. exit   Exit Xray TUI and clear the screen."
             ;;
     esac
     echo
@@ -1761,7 +1840,7 @@ add_access_keys_menu() {
         menu_control i info
         menu_control x exit
         echo
-        read -r -e -p '?: ' count
+        read_required_choice count '?: ' || return 0
         case "$count" in
             b) return 0 ;;
             m) MAIN_MENU_REQUESTED=1; return 0 ;;
@@ -1851,7 +1930,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    read -r -e -p '?: ' confirm
+                    read_required_choice confirm '?: ' || break
                     case "$confirm" in
                         [Yy])
                             clear_screen
@@ -1912,7 +1991,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    read -r -e -p '  ?: ' confirm
+                    read_required_choice confirm '  ?: ' || break
                     case "$confirm" in
                         [Yy])
                             clear_screen
@@ -2186,7 +2265,7 @@ remove_node() {
         menu_control i info
         menu_control x exit
         echo
-        read -r -e -p '?: ' confirm
+        read_required_choice confirm '?: ' || return 0
         case "$confirm" in
             [Yy]) break ;;
             [Nn]|b) return 0 ;;
@@ -2222,7 +2301,7 @@ remove_node() {
         menu_control i info
         menu_control x exit
         echo
-        read -r -e -p '?: ' local_confirm
+        read_required_choice local_confirm '?: ' || break
         case "$local_confirm" in
             [Yy])
                 state_mutate remove-node "$node"
@@ -2395,7 +2474,7 @@ while true; do
     menu_control i info
     menu_control x exit
     echo
-    read -r -e -p '?: ' choice
+    read_required_choice choice '?: ' || exit_tui
     MAIN_MENU_REQUESTED=0
     case "$choice" in
         1) vpn_servers ;;
