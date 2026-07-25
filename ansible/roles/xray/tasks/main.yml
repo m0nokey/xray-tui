@@ -64,6 +64,9 @@
     xray_dns_estimated_rpz_memory_mb: >-
       {{ ((xray_dns_selected_entries | int) * (xray_dns_reference_memory_mb | int)
           / (xray_dns_reference_entries | int)) | round(0, 'ceil') | int }}
+
+- name: Calculate DNS runtime memory
+  ansible.builtin.set_fact:
     xray_dns_runtime_memory_mb: >-
       {{ (xray_dns_estimated_rpz_memory_mb | int) + (xray_dns_memory_headroom_mb | int) }}
 
