@@ -370,7 +370,7 @@ delete_vault() {
         menu_control i info
         menu_control x exit
         echo
-        read_required_choice confirm '?: ' || return 0
+        if ! read_required_choice confirm '?: '; then continue; fi
         case "$confirm" in
             [Yy]) break ;;
             [Nn]|b) return 0 ;;
@@ -453,18 +453,16 @@ restore_vault() {
 }
 
 read_required_choice() {
-    local variable="$1" prompt="$2" value
-    while true; do
-        value=''
-        if ! read -r -e -p "$prompt" value; then
-            return 1
-        fi
-        if [[ -n "$value" ]]; then
-            printf -v "$variable" '%s' "$value"
-            return 0
-        fi
+    local variable="$1" prompt="$2" value=''
+    if ! read -r -e -p "$prompt" value; then
+        return 1
+    fi
+    if [[ -z "$value" ]]; then
         invalid_choice
-    done
+        clear_screen
+        return 2
+    fi
+    printf -v "$variable" '%s' "$value"
 }
 
 prompt_nav() {
@@ -1251,13 +1249,11 @@ select_local_region_countries() {
             menu_control n "new search"
         fi
         menu_control a "apply selection"
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         choice="$REPLY"
         case "$choice" in
             s|S|n|N)
-                if ! read_required_choice query "Country name or ISO code: "; then
-                    return 1
-                fi
+                if ! read_required_choice query "Country name or ISO code: "; then continue; fi
                 ;;
             a|A)
                 return 0
@@ -1323,7 +1319,7 @@ select_custom_dns_profile() {
         fi
         echo
         menu_control a "apply custom profile"
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             a|A)
                 if [[ -z "${DNS_FILTER_LISTS:-}" ]]; then
@@ -1381,7 +1377,7 @@ select_dns_profile() {
         fi
         printf '%s\n' "  4 GB RAM is recommended for large feeds; Custom can disable encrypted DNS for TVs."
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) DNS_FILTER_PROFILE=disabled; DNS_FILTER_LISTS=""; return 0 ;;
             2|3|4|5)
@@ -1965,7 +1961,7 @@ add_access_keys_menu() {
         menu_control i info
         menu_control x exit
         echo
-        read_required_choice count '?: ' || return 0
+        if ! read_required_choice count '?: '; then continue; fi
         case "$count" in
             b) return 0 ;;
             m) MAIN_MENU_REQUESTED=1; return 0 ;;
@@ -2034,7 +2030,7 @@ PY
             printf '  %s%s.%s %sremove all access keys%s\n' "$COLOR_LINE" "$remove_all_selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET"
         fi
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             i) show_info access_keys ;;
             "$remove_all_selection")
@@ -2055,7 +2051,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    read_required_choice confirm '?: ' || break
+                    if ! read_required_choice confirm '?: '; then continue; fi
                     case "$confirm" in
                         [Yy])
                             clear_screen
@@ -2116,7 +2112,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    read_required_choice confirm '  ?: ' || break
+                    if ! read_required_choice confirm '  ?: '; then continue; fi
                     case "$confirm" in
                         [Yy])
                             clear_screen
@@ -2306,7 +2302,7 @@ manage_local_region_policy() {
         menu_option 1 "Select countries"
         menu_option 2 "Disable policy"
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1)
                 if ! select_local_region_countries; then
@@ -2377,7 +2373,7 @@ manage_keys() {
         menu_option 2 Add
         menu_option 3 Remove
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) clear_screen; vault_state_command python3 "$ROOT_DIR/scripts/render_keys.py" "$node"; read -r -p "Press Enter to continue" _ ;;
             2) add_access_keys_menu "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
@@ -2401,7 +2397,7 @@ manage_node() {
         menu_option 1 "Manage VPN server"
         menu_option 2 "Manage access keys"
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) manage_server "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             2) manage_keys "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
@@ -2429,7 +2425,7 @@ manage_server() {
         menu_option 6 "Remove VPN server"
         menu_option 7 "Open SSH session"
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) clear_screen; show_node_status "$node"; read -r -p "Press Enter" _ ;;
             2) clear_screen; run_node_playbook "$node" restart.yml; read -r -p "Press Enter" _ ;;
@@ -2470,7 +2466,7 @@ remove_node() {
         menu_control i info
         menu_control x exit
         echo
-        read_required_choice confirm '?: ' || return 0
+        if ! read_required_choice confirm '?: '; then continue; fi
         case "$confirm" in
             [Yy]) break ;;
             [Nn]|b) return 0 ;;
@@ -2506,7 +2502,7 @@ remove_node() {
         menu_control i info
         menu_control x exit
         echo
-        read_required_choice local_confirm '?: ' || break
+        if ! read_required_choice local_confirm '?: '; then continue; fi
         case "$local_confirm" in
             [Yy])
                 state_mutate remove-node "$node"
@@ -2551,7 +2547,7 @@ vpn_servers() {
             echo
             menu_option 1 "Add VPN server"
             echo
-            prompt_nav
+            if ! prompt_nav; then continue; fi
             case "$REPLY" in
                 1) rm -f "$state"; add_node; return ;;
                 i) show_info status; rm -f "$state"; continue ;;
@@ -2572,7 +2568,7 @@ vpn_servers() {
         fi
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             i) show_info status; rm -f "$state"; continue ;;
             b) rm -f "$state"; return ;;
@@ -2619,7 +2615,7 @@ secure_state() {
             has_vault_backups && menu_option 2 "Restore encrypted state"
         fi
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1)
                 clear_screen
@@ -2679,7 +2675,7 @@ while true; do
     menu_control i info
     menu_control x exit
     echo
-    read_required_choice choice '?: ' || exit_tui
+    if ! read_required_choice choice '?: '; then continue; fi
     MAIN_MENU_REQUESTED=0
     case "$choice" in
         1) vpn_servers ;;
