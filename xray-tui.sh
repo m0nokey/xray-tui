@@ -575,7 +575,7 @@ show_info() {
             echo
             printf '%b  Selected server menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Manage VPN server"
-            info_desc "       Open server operations, DNS protection, SSH management, or removal."
+            info_desc "       Open server operations, ad and threat blocking, country blocking, or removal."
             printf '%s\n' "    2. Manage access keys"
             info_desc "       Show, add, or remove the VPN client keys for this server."
             ;;
@@ -600,7 +600,7 @@ show_info() {
             info_desc "Remove all: confirm that every Vision and XHTTP key should be deleted."
             ;;
         dns)
-            printf '%b  DNS protection:%b\n' "$blue" "$reset"
+            printf '%b  Block ads and threats:%b\n' "$blue" "$reset"
             printf '    %-7s - %s\n' "Minimal" "malware and malicious websites."
             printf '    %-7s - %s\n' "Optimal" "malware, phishing, scams and selected trackers."
             printf '    %-7s - %s\n' "Full" "ads, tracking, telemetry and malware."
@@ -609,7 +609,7 @@ show_info() {
             info_desc "Full includes Encrypted DNS protection; Custom can disable it for TV compatibility."
             info_desc "Blocked domains return NXDOMAIN. DNS filtering does not replace a firewall."
             echo
-            printf '%b  DNS protection menu:%b\n' "$blue" "$reset"
+            printf '%b  Block ads and threats menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Disabled"
             info_desc "       Remove DNS blocklists from the VPS."
             printf '%s\n' "    2. Minimal"
@@ -656,7 +656,7 @@ show_info() {
             info_desc "Apply saves the selected lists in the Vault only after the VPS deployment succeeds."
             ;;
         local_region)
-            printf '%b  Local-region traffic:%b\n' "$blue" "$reset"
+            printf '%b  Block countries:%b\n' "$blue" "$reset"
             info_desc "Select one or more countries whose destinations should be blocked on the VPS."
             info_desc "This is a fallback policy for clients that cannot route local traffic directly."
             info_desc "Xray checks both country IP ranges and country-related domain data."
@@ -665,7 +665,7 @@ show_info() {
             info_desc "Shared hosting, CDNs, geolocation databases, and country domains can cause false positives."
             info_desc "The policy is stored for this VPN node and applies to all its access keys."
             echo
-            printf '%b  Local-region traffic menu:%b\n' "$blue" "$reset"
+            printf '%b  Block countries menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Select countries"
             info_desc "       Search by country name or ISO code and toggle multiple checkboxes."
             printf '%s\n' "    2. Disable policy"
@@ -678,10 +678,10 @@ show_info() {
             info_desc "       Test management SSH, the Xray container, and both VPN ports."
             printf '%s\n' "    2. Restart VPN server"
             info_desc "       Restart the Xray Docker stack without changing keys or profiles."
-            printf '%s\n' "    3. DNS protection"
-            info_desc "       Select, disable, or customize DNS blocklists after a VPS resource check."
-            printf '%s\n' "    4. Local-region traffic"
-            info_desc "       Block selected country destinations when a client cannot bypass them directly."
+            printf '%s\n' "    3. Block ads and threats"
+            info_desc "       Choose protection against ads, trackers, malware, phishing, and other known threats."
+            printf '%s\n' "    4. Block countries"
+            info_desc "       Stop connections to selected countries when direct bypass is unavailable."
             printf '%s\n' "    5. Rotate SSH key"
             info_desc "       Generate a new management key, verify it, then revoke the old key."
             printf '%s\n' "    6. Remove VPN server"
@@ -738,7 +738,7 @@ show_info() {
             printf '%s\n' "  2. Add VPN server"
             info_desc " - Enter the VPS IP address, SSH user, SSH port, and password."
             info_desc " - Enter a Reality camouflage domain, or use github.com by default."
-            info_desc " - Choose Minimal, Optimal, Full, Maximum, or Custom DNS protection."
+            info_desc " - Choose a profile to block ads, trackers, malware, phishing, and other threats."
             info_desc "   The menu checks VPS resources before allowing a profile."
             info_desc " - Install Docker, Xray, automatic updates, and SSH hardening."
             info_desc " - Generate VPN access keys and save all connection data in the Vault."
@@ -759,10 +759,10 @@ show_info() {
             info_desc "        Test SSH access, the Xray container, and both VPN ports."
             printf '%s\n' "     2. Restart VPN server"
             info_desc "        Restart the Xray Docker stack without changing access keys."
-            printf '%s\n' "     3. DNS protection"
-            info_desc "        Enable, disable, or change the DNS blocklist profile."
-            printf '%s\n' "     4. Local-region traffic"
-            info_desc "        Block selected country destinations when client bypass is unavailable."
+            printf '%s\n' "     3. Block ads and threats"
+            info_desc "        Enable, disable, or change protection against ads and known threats."
+            printf '%s\n' "     4. Block countries"
+            info_desc "        Stop connections to selected countries when client bypass is unavailable."
             printf '%s\n' "     5. Rotate SSH key"
             info_desc "        Generate a new deploy SSH key and revoke the old one."
             printf '%s\n' "     6. Remove VPN server"
@@ -1222,8 +1222,8 @@ select_local_region_countries() {
     local -a matches=()
     while true; do
         clear_screen
-        printf '%s\n' "Local-region traffic policy"
-        printf '%s\n' "Select one or more countries. Selected destinations are blocked on the VPS."
+        printf '%s\n' "Block countries"
+        printf '%s\n' "Select one or more countries to block on the VPN server."
         printf '%s\n' "Current selection: $(local_region_selected_summary)"
         echo
         if [[ -z "$query" ]]; then
@@ -1297,7 +1297,7 @@ select_custom_dns_profile() {
     fi
     while true; do
         clear_screen
-        printf '%s\n' "Custom DNS protection"
+        printf '%s\n' "Custom ad and threat blocking"
         printf '%s\n' "Choose any lists you need. Select at least one list."
         printf '%s\n' "Large threat feeds are mutually exclusive in practice."
         echo
@@ -1366,7 +1366,7 @@ select_dns_profile() {
     local profile
     while true; do
         clear_screen
-        printf '%s\n' "Optional DNS protection"
+        printf '%s\n' "Block ads and threats"
         printf '%s\n' "Current: ${DNS_FILTER_CURRENT_PROFILE:-disabled} | VPS: ${VPS_VCPUS} vCPU, $(((VPS_RAM_MB + 512) / 1024)) GB RAM"
         printf '%s\n' "Select a profile. Press i for list details."
         echo
@@ -2300,8 +2300,8 @@ manage_local_region_policy() {
     LOCAL_REGION_COUNTRIES="$current_countries"
     while true; do
         clear_screen
-        printf '%s\n' "Local-region traffic policy"
-        printf '%s\n' "Selected country destinations are blocked on the VPS when client bypass is unavailable."
+        printf '%s\n' "Block countries"
+        printf '%s\n' "Selected countries are blocked when the client cannot bypass them directly."
         printf '%s\n' "Current selection: $(local_region_selected_summary)"
         echo
         menu_option 1 "Select countries"
@@ -2325,7 +2325,7 @@ manage_local_region_policy() {
         selected_countries="${LOCAL_REGION_COUNTRIES:-}"
         if [[ "$selected_countries" == "$current_countries" ]]; then
             clear_screen
-            printf '%s\n' "Local-region traffic policy was not changed."
+            printf '%s\n' "Country blocking settings were not changed."
             wait_action_return
             unset LOCAL_REGION_COUNTRIES
             rm -f "$before"
@@ -2340,14 +2340,14 @@ manage_local_region_policy() {
         fi
         clear_screen
         if [[ -n "$selected_countries" ]]; then
-            printf '%s\n' "Applying local-region policy: $(local_region_selected_summary)"
+            printf '%s\n' "Applying country blocking: $(local_region_selected_summary)"
         else
-            printf '%s\n' "Disabling local-region traffic policy."
+            printf '%s\n' "Disabling country blocking."
         fi
         if ! run_node_playbook "$node" site.yml "$after"; then
             rm -f "$before" "$after"
             unset LOCAL_REGION_COUNTRIES
-            printf '%s\n' "Local-region policy change failed. The existing Vault was not changed."
+            printf '%s\n' "Country blocking change failed. The existing Vault was not changed."
             wait_action_return
             return 1
         fi
@@ -2355,13 +2355,13 @@ manage_local_region_policy() {
             rm -f "$before" "$after"
             unset LOCAL_REGION_COUNTRIES
             printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
-            printf '%s\n' "The previous local-region policy remains recorded in the Vault."
+            printf '%s\n' "The previous country blocking settings remain recorded in the Vault."
             wait_action_return
             return 1
         fi
         rm -f "$before" "$after"
         unset LOCAL_REGION_COUNTRIES
-        printf '%s\n' "Local-region traffic policy updated."
+        printf '%s\n' "Country blocking settings updated."
         wait_action_return
         return 0
     done
@@ -2424,8 +2424,8 @@ manage_server() {
         echo
         menu_option 1 "Check VPN status"
         menu_option 2 "Restart VPN server"
-        menu_option 3 "DNS protection"
-        menu_option 4 "Local-region traffic"
+        menu_option 3 "Block ads and threats"
+        menu_option 4 "Block countries"
         menu_option 5 "Rotate SSH key"
         menu_option 6 "Remove VPN server"
         menu_option 7 "Open SSH session"
