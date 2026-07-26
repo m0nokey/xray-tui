@@ -811,9 +811,8 @@ exit_tui() {
 }
 
 invalid_choice() {
-    printf '%s\n' "Invalid input. Use the English keyboard layout."
+    printf '%s\n' "Invalid input. Enter a menu option using the English keyboard layout."
     sleep 1
-    clear_screen
 }
 
 show_nodes() {
