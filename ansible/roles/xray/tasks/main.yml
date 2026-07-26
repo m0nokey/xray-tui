@@ -22,6 +22,21 @@
       - xray_dns_profile in xray_dns_profiles
     fail_msg: "Unsupported DNS protection profile: {{ xray_dns_profile }}"
 
+- name: Select local-region traffic policy
+  ansible.builtin.set_fact:
+    xray_local_region_countries: >-
+      {{ xray_state.local_region_countries | default([]) | map('lower') | list }}
+
+- name: Validate local-region traffic policy
+  ansible.builtin.assert:
+    that:
+      - xray_local_region_countries is sequence
+      - item is match('^[a-z]{2}$')
+    fail_msg: "Unsupported local-region country code: {{ item }}"
+  loop: "{{ xray_local_region_countries }}"
+  loop_control:
+    label: "{{ item }}"
+
 - name: Select DNS protection sources
   ansible.builtin.set_fact:
     xray_dns_source_names: >-

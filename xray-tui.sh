@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+COUNTRIES_FILE="$ROOT_DIR/data/countries.tsv"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 VAULT_FILE="$STATE_DIR/vault.json"
 HOST_STATE_DIR="${XRAY_TUI_HOST_STATE_DIR:-$STATE_DIR}"
@@ -654,6 +655,23 @@ show_info() {
             info_desc "Large alternatives are mutually exclusive: Pro++/Ultimate, TIF Mini/Medium, and Gambling sizes."
             info_desc "Apply saves the selected lists in the Vault only after the VPS deployment succeeds."
             ;;
+        local_region)
+            printf '%b  Local-region traffic:%b\n' "$blue" "$reset"
+            info_desc "Select one or more countries whose destinations should be blocked on the VPS."
+            info_desc "This is a fallback policy for clients that cannot route local traffic directly."
+            info_desc "Xray checks both country IP ranges and country-related domain data."
+            info_desc "For Russia, .ru and .рф are also matched when RU is selected."
+            info_desc "This does not route traffic directly and does not guarantee that a VPN will be undetectable."
+            info_desc "Shared hosting, CDNs, geolocation databases, and country domains can cause false positives."
+            info_desc "The policy is stored for this VPN node and applies to all its access keys."
+            echo
+            printf '%b  Local-region traffic menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Select countries"
+            info_desc "       Search by country name or ISO code and toggle multiple checkboxes."
+            printf '%s\n' "    2. Disable policy"
+            info_desc "       Remove all country blocking rules from this VPN node."
+            info_desc "Use Apply after selecting countries; the Vault changes only after deployment succeeds."
+            ;;
         server)
             printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Check VPN status"
@@ -662,11 +680,13 @@ show_info() {
             info_desc "       Restart the Xray Docker stack without changing keys or profiles."
             printf '%s\n' "    3. DNS protection"
             info_desc "       Select, disable, or customize DNS blocklists after a VPS resource check."
-            printf '%s\n' "    4. Rotate SSH key"
+            printf '%s\n' "    4. Local-region traffic"
+            info_desc "       Block selected country destinations when a client cannot bypass them directly."
+            printf '%s\n' "    5. Rotate SSH key"
             info_desc "       Generate a new management key, verify it, then revoke the old key."
-            printf '%s\n' "    5. Remove VPN server"
+            printf '%s\n' "    6. Remove VPN server"
             info_desc "       Clean Xray and Docker from the VPS before removing its Vault entry."
-            printf '%s\n' "    6. Open SSH session"
+            printf '%s\n' "    7. Open SSH session"
             info_desc "       Connect as the saved management user using the saved SSH key and port."
             ;;
         vault)
@@ -711,7 +731,7 @@ show_info() {
             echo
             printf '%s\n' "     Selected server menu:"
             printf '%s\n' "     1. Manage VPN server"
-            info_desc "        Check status, restart Xray, rotate the SSH key, or remove the server."
+            info_desc "        Check status, restart Xray, manage DNS and country policy, rotate the SSH key, or remove the server."
             printf '%s\n' "     2. Manage access keys"
             info_desc "        Show, add, or remove VPN access keys for this server."
             echo
@@ -741,9 +761,11 @@ show_info() {
             info_desc "        Restart the Xray Docker stack without changing access keys."
             printf '%s\n' "     3. DNS protection"
             info_desc "        Enable, disable, or change the DNS blocklist profile."
-            printf '%s\n' "     4. Rotate SSH key"
+            printf '%s\n' "     4. Local-region traffic"
+            info_desc "        Block selected country destinations when client bypass is unavailable."
+            printf '%s\n' "     5. Rotate SSH key"
             info_desc "        Generate a new deploy SSH key and revoke the old one."
-            printf '%s\n' "     5. Remove VPN server"
+            printf '%s\n' "     6. Remove VPN server"
             info_desc "        Remove the Xray installation and clean up the VPS."
             info_desc "        The Vault is changed only after remote cleanup succeeds."
             echo
@@ -1146,6 +1168,116 @@ dns_custom_memory_floor() {
     local floor=$(( ((required + round - 1) / round) * round ))
     ((floor < 768)) && floor=768
     printf '%s' "$floor"
+}
+
+country_name_for_code() {
+    local code="${1^^}"
+    awk -F '\t' -v code="$code" '$1 == code { print $2; exit }' "$COUNTRIES_FILE"
+}
+
+country_matches() {
+    local query="${1,,}"
+    awk -F '\t' -v query="$query" '
+        BEGIN { IGNORECASE = 1 }
+        $0 !~ /^#/ && (query == "*" || tolower($1) == query || index(tolower($2), query) > 0) { print }
+    ' "$COUNTRIES_FILE"
+}
+
+local_region_has_country() {
+    [[ ",${LOCAL_REGION_COUNTRIES:-}," == *",$1,"* ]]
+}
+
+local_region_toggle_country() {
+    local code="$1" current="${LOCAL_REGION_COUNTRIES:-}" updated
+    if local_region_has_country "$code"; then
+        updated=",${current},"
+        updated="${updated/,${code},/,}"
+        updated="${updated#,}"
+        updated="${updated%,}"
+        LOCAL_REGION_COUNTRIES="$updated"
+    else
+        LOCAL_REGION_COUNTRIES="${current:+$current,}$code"
+    fi
+}
+
+local_region_selected_summary() {
+    local code name
+    local -a selected=() labels=()
+    IFS=',' read -r -a selected <<<"${LOCAL_REGION_COUNTRIES:-}"
+    for code in "${selected[@]}"; do
+        [[ -n "$code" ]] || continue
+        name="$(country_name_for_code "$code")"
+        labels+=("${name:-Unknown} (${code^^})")
+    done
+    if ((${#labels[@]} == 0)); then
+        printf '%s' "Disabled"
+    else
+        local joined
+        (IFS=', '; joined="${labels[*]}"; printf '%s' "$joined")
+    fi
+}
+
+select_local_region_countries() {
+    local query="" choice index code name status
+    local -a matches=()
+    while true; do
+        clear_screen
+        printf '%s\n' "Local-region traffic policy"
+        printf '%s\n' "Select one or more countries. Selected destinations are blocked on the VPS."
+        printf '%s\n' "Current selection: $(local_region_selected_summary)"
+        echo
+        if [[ -z "$query" ]]; then
+            printf '%s\n' "Type a country name or ISO code to search."
+            echo
+            menu_control s "search country"
+        else
+            mapfile -t matches < <(country_matches "$query")
+            if ((${#matches[@]} == 0)); then
+                printf '%s\n' "No country or territory matched: $query"
+            else
+                printf '%s\n' "Matches for: $query"
+                printf '%s\n' "Select a number to toggle a country; selections are kept while you search."
+                echo
+                for index in "${!matches[@]}"; do
+                    IFS=$'\t' read -r code name <<<"${matches[$index]}"
+                    if local_region_has_country "${code,,}"; then status="ON"; else status="-"; fi
+                    printf '  %2d. %-42s [%s] (%s)\n' "$((index + 1))" "$name" "$status" "${code^^}"
+                    if ((index >= 29)); then
+                        printf '%s\n' "      More matches exist; refine the search."
+                        break
+                    fi
+                done
+            fi
+            echo
+            menu_control n "new search"
+        fi
+        menu_control a "apply selection"
+        prompt_nav
+        choice="$REPLY"
+        case "$choice" in
+            s|S|n|N)
+                if ! read_required_choice query "Country name or ISO code: "; then
+                    return 1
+                fi
+                ;;
+            a|A)
+                return 0
+                ;;
+            b) return 1 ;;
+            m) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i) show_info local_region ;;
+            x) exit_tui ;;
+            ''|*[!0-9]*) invalid_choice ;;
+            *)
+                if ((${#matches[@]} == 0)) || ((choice < 1 || choice > ${#matches[@]} || choice > 30)); then
+                    invalid_choice
+                    continue
+                fi
+                IFS=$'\t' read -r code name <<<"${matches[$((choice - 1))]}"
+                local_region_toggle_country "${code,,}"
+                ;;
+        esac
+    done
 }
 
 select_custom_dns_profile() {
@@ -2157,6 +2289,84 @@ manage_dns_protection() {
     wait_action_return
 }
 
+manage_local_region_policy() {
+    local node="$1" before after current_countries selected_countries policy
+    before="$(mktemp)"
+    if ! read_vault_state "$before"; then
+        rm -f "$before"
+        return 1
+    fi
+    current_countries="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(",".join(node.get("xray", {}).get("local_region_countries", [])), end="")' "$node" <"$before")"
+    LOCAL_REGION_COUNTRIES="$current_countries"
+    while true; do
+        clear_screen
+        printf '%s\n' "Local-region traffic policy"
+        printf '%s\n' "Selected country destinations are blocked on the VPS when client bypass is unavailable."
+        printf '%s\n' "Current selection: $(local_region_selected_summary)"
+        echo
+        menu_option 1 "Select countries"
+        menu_option 2 "Disable policy"
+        echo
+        prompt_nav
+        case "$REPLY" in
+            1)
+                if ! select_local_region_countries; then
+                    [[ "$MAIN_MENU_REQUESTED" == 1 ]] && { unset LOCAL_REGION_COUNTRIES; rm -f "$before"; return; }
+                    continue
+                fi
+                ;;
+            2) LOCAL_REGION_COUNTRIES="" ;;
+            i) show_info local_region; continue ;;
+            b) unset LOCAL_REGION_COUNTRIES; rm -f "$before"; return ;;
+            m) MAIN_MENU_REQUESTED=1; unset LOCAL_REGION_COUNTRIES; rm -f "$before"; return ;;
+            x) exit_tui ;;
+            *) invalid_choice; continue ;;
+        esac
+        selected_countries="${LOCAL_REGION_COUNTRIES:-}"
+        if [[ "$selected_countries" == "$current_countries" ]]; then
+            clear_screen
+            printf '%s\n' "Local-region traffic policy was not changed."
+            wait_action_return
+            unset LOCAL_REGION_COUNTRIES
+            rm -f "$before"
+            return 0
+        fi
+        if [[ -n "$selected_countries" ]]; then policy=enabled; else policy=disabled; fi
+        after="$(mktemp)"
+        if ! python3 "$ROOT_DIR/scripts/state_cli.py" --local-region-countries "$selected_countries" set-local-region "$node" "$policy" <"$before" >"$after"; then
+            rm -f "$before" "$after"
+            unset LOCAL_REGION_COUNTRIES
+            return 1
+        fi
+        clear_screen
+        if [[ -n "$selected_countries" ]]; then
+            printf '%s\n' "Applying local-region policy: $(local_region_selected_summary)"
+        else
+            printf '%s\n' "Disabling local-region traffic policy."
+        fi
+        if ! run_node_playbook "$node" site.yml "$after"; then
+            rm -f "$before" "$after"
+            unset LOCAL_REGION_COUNTRIES
+            printf '%s\n' "Local-region policy change failed. The existing Vault was not changed."
+            wait_action_return
+            return 1
+        fi
+        if ! vault_save "$after"; then
+            rm -f "$before" "$after"
+            unset LOCAL_REGION_COUNTRIES
+            printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
+            printf '%s\n' "The previous local-region policy remains recorded in the Vault."
+            wait_action_return
+            return 1
+        fi
+        rm -f "$before" "$after"
+        unset LOCAL_REGION_COUNTRIES
+        printf '%s\n' "Local-region traffic policy updated."
+        wait_action_return
+        return 0
+    done
+}
+
 manage_keys() {
     local node="$1"
     while true; do
@@ -2215,18 +2425,20 @@ manage_server() {
         menu_option 1 "Check VPN status"
         menu_option 2 "Restart VPN server"
         menu_option 3 "DNS protection"
-        menu_option 4 "Rotate SSH key"
-        menu_option 5 "Remove VPN server"
-        menu_option 6 "Open SSH session"
+        menu_option 4 "Local-region traffic"
+        menu_option 5 "Rotate SSH key"
+        menu_option 6 "Remove VPN server"
+        menu_option 7 "Open SSH session"
         echo
         prompt_nav
         case "$REPLY" in
             1) clear_screen; show_node_status "$node"; read -r -p "Press Enter" _ ;;
             2) clear_screen; run_node_playbook "$node" restart.yml; read -r -p "Press Enter" _ ;;
             3) manage_dns_protection "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
-            4) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
-            5) clear_screen; remove_node "$node"; return ;;
-            6) open_node_ssh_session "$node" ;;
+            4) manage_local_region_policy "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            5) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
+            6) clear_screen; remove_node "$node"; return ;;
+            7) open_node_ssh_session "$node" ;;
             i) show_info server ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
