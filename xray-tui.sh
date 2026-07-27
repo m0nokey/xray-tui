@@ -1215,7 +1215,7 @@ local_region_selected_summary() {
 }
 
 select_local_region_countries() {
-    local query="" choice index code name status
+    local query="" choice index code name status page=0 page_size=20 page_count start end
     local -a matches=()
     while true; do
         clear_screen
@@ -1224,36 +1224,54 @@ select_local_region_countries() {
         printf '%s\n' "Current selection: $(local_region_selected_summary)"
         echo
         if [[ -z "$query" ]]; then
-            printf '%s\n' "Type a country name or ISO code to search."
+            mapfile -t matches < <(country_matches "*")
+            page_count=$(( (${#matches[@]} + page_size - 1) / page_size ))
+            ((page_count > 0)) || page_count=1
+            ((page < 0)) && page=0
+            ((page >= page_count)) && page=$((page_count - 1))
+            start=$((page * page_size))
+            end=$((start + page_size))
+            ((end > ${#matches[@]})) && end=${#matches[@]}
+            printf 'Countries (page %d/%d)\n' "$((page + 1))" "$page_count"
+            printf '%s\n' "Select a number to toggle a country. [ON] means it will be blocked."
             echo
             menu_control s "search country"
+            if ((page < page_count - 1)); then menu_control n "next page"; fi
+            if ((page > 0)); then menu_control p "previous page"; fi
         else
             mapfile -t matches < <(country_matches "$query")
+            page=0
             if ((${#matches[@]} == 0)); then
                 printf '%s\n' "No country or territory matched: $query"
             else
                 printf '%s\n' "Matches for: $query"
                 printf '%s\n' "Select a number to toggle a country; selections are kept while you search."
                 echo
-                for index in "${!matches[@]}"; do
+                start=0
+                end=${#matches[@]}
+                ((end > 30)) && end=30
+                for ((index = start; index < end; index++)); do
                     IFS=$'\t' read -r code name <<<"${matches[$index]}"
                     if local_region_has_country "${code,,}"; then status="ON"; else status="-"; fi
                     printf '  %2d. %-42s [%s] (%s)\n' "$((index + 1))" "$name" "$status" "${code^^}"
-                    if ((index >= 29)); then
-                        printf '%s\n' "      More matches exist; refine the search."
-                        break
-                    fi
                 done
+                if ((${#matches[@]} > 30)); then printf '%s\n' "      More matches exist; refine the search."; fi
             fi
             echo
-            menu_control n "new search"
+            menu_control s "new search"
         fi
         menu_control a "apply selection"
         if ! prompt_nav; then continue; fi
         choice="$REPLY"
         case "$choice" in
-            s|S|n|N)
+            s|S)
                 if ! read_required_choice query "Country name or ISO code: "; then continue; fi
+                ;;
+            n|N)
+                [[ -z "$query" ]] && page=$((page + 1)) || invalid_choice
+                ;;
+            p|P)
+                [[ -z "$query" ]] && page=$((page - 1)) || invalid_choice
                 ;;
             a|A)
                 return 0
@@ -1264,11 +1282,11 @@ select_local_region_countries() {
             x) exit_tui ;;
             ''|*[!0-9]*) invalid_choice ;;
             *)
-                if ((${#matches[@]} == 0)) || ((choice < 1 || choice > ${#matches[@]} || choice > 30)); then
+                if ((${#matches[@]} == 0)) || ((choice < 1 || choice > end - start)); then
                     invalid_choice
                     continue
                 fi
-                IFS=$'\t' read -r code name <<<"${matches[$((choice - 1))]}"
+                IFS=$'\t' read -r code name <<<"${matches[$((start + choice - 1))]}"
                 local_region_toggle_country "${code,,}"
                 ;;
         esac
