@@ -30,9 +30,9 @@ The XHTTP server configuration and generated client links use the same
 
 ### VPS
 
-- Root or sudo access
+- Root/sudo access
 - Supported OS: Debian 12+
-- Public IPv4 address or resolvable hostname
+- Public IPv4 address
 - SSH password access for the first installation
 - At least 1 vCPU and 1 GB RAM
 
