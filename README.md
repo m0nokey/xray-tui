@@ -22,19 +22,23 @@ The XHTTP server configuration and generated client links use the same
 
 ### Local computer
 
+```text
 - Docker
 - Docker Compose
 - Bash
 - curl
 - git
+```
 
 ### VPS
 
+```text
 - Root/sudo access
 - Supported OS: Debian 12+
 - Public IPv4 address
 - SSH password access for the first installation
 - At least 1 vCPU and 1 GB RAM
+```
 
 ### Optional DNS protection
 
