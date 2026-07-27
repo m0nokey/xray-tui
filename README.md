@@ -83,8 +83,7 @@ If Git is not installed, download the repository archive with `curl` and
 extract it with `tar`:
 
 ```sh
-curl -fsSL https://github.com/m0nokey/xray-tui/archive/refs/heads/main.tar.gz \
-  | tar -xz
+curl -fsSL https://github.com/m0nokey/xray-tui/archive/refs/heads/main.tar.gz | tar -xz
 mv xray-tui-main xray-tui
 cd xray-tui
 bash run.sh
