@@ -28,6 +28,7 @@ if [[ -t 1 ]]; then
     COLOR_WARN=$'\033[38;5;221m'
     COLOR_ERROR=$'\033[38;5;203m'
     COLOR_MUTED=$'\033[38;5;245m'
+    COLOR_MUTED_ITALIC=$'\033[3;38;5;245m'
 else
     COLOR_RESET=''
     COLOR_TEXT=''
@@ -37,6 +38,7 @@ else
     COLOR_WARN=''
     COLOR_ERROR=''
     COLOR_MUTED=''
+    COLOR_MUTED_ITALIC=''
 fi
 
 cleanup() {
@@ -488,7 +490,7 @@ add_node_ip_prompt() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice ip_value 'VPS IP address: '; then
+        if ! read_required_choice ip_value 'Enter VPS IP: '; then
             continue
         fi
         case "$ip_value" in
@@ -503,6 +505,158 @@ add_node_ip_prompt() {
                 fi
                 error="Invalid VPS IP address. Enter an IPv4 address."
                 ;;
+        esac
+    done
+}
+
+add_node_user_prompt() {
+    local user_value error=''
+    while true; do
+        clear_screen
+        printf '%s\n' "Add VPN server"
+        printf '%s\n' "Enter the SSH user used for the first VPS connection."
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "[!] Press Enter to use the default value shown in [brackets]." "$COLOR_RESET"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read -r -e -p 'Enter VPS user [root]: ' user_value; then
+            return 1
+        fi
+        case "$user_value" in
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; error='' ;;
+            x|X) exit_tui ;;
+            '') ADD_NODE_USER=root; return 0 ;;
+            *)
+                if [[ "$user_value" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]]; then
+                    ADD_NODE_USER="$user_value"
+                    return 0
+                fi
+                error="Invalid SSH user. Enter a valid Linux user name."
+                ;;
+        esac
+    done
+}
+
+add_node_port_prompt() {
+    local port_value error=''
+    while true; do
+        clear_screen
+        printf '%s\n' "Add VPN server"
+        printf '%s\n' "Enter the SSH port used for the first VPS connection."
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "[!] Press Enter to use the default value shown in [brackets]." "$COLOR_RESET"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read -r -e -p 'Enter VPS port [22]: ' port_value; then
+            return 1
+        fi
+        case "$port_value" in
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; error='' ;;
+            x|X) exit_tui ;;
+            '') ADD_NODE_PORT=22; return 0 ;;
+            *)
+                if [[ "$port_value" =~ ^[0-9]+$ ]] && ((10#$port_value >= 1 && 10#$port_value <= 65535)); then
+                    ADD_NODE_PORT="$port_value"
+                    return 0
+                fi
+                error="Invalid VPS port. Enter a number from 1 to 65535."
+                ;;
+        esac
+    done
+}
+
+add_node_password_prompt() {
+    clear_screen
+    printf '%s\n' "Add VPN server"
+    printf '%s\n' "Enter the password for the first VPS connection."
+    printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "The password is used only to verify access and start deployment." "$COLOR_RESET"
+    echo
+    if ! read_ascii_secret 'Enter VPS password: '; then
+        return 1
+    fi
+    ADD_NODE_PASSWORD="$REPLY"
+}
+
+add_node_domain_prompt() {
+    local domain_value error=''
+    while true; do
+        clear_screen
+        printf '%s\n' "Add VPN server"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "This domain helps the VPN connection look like normal HTTPS traffic." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Use a real HTTPS website that supports TLS 1.3." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Press Enter to use the default value shown in [brackets]." "$COLOR_RESET"
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read -r -e -p 'Enter domain [github.com]: ' domain_value; then
+            return 1
+        fi
+        case "$domain_value" in
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; error='' ;;
+            x|X) exit_tui ;;
+            '') domain_value=github.com ;;
+        esac
+        if [[ "$domain_value" == b || "$domain_value" == B || "$domain_value" == m || "$domain_value" == M || "$domain_value" == i || "$domain_value" == I || "$domain_value" == x || "$domain_value" == X ]]; then
+            continue
+        fi
+        if valid_server_name "$domain_value"; then
+            ADD_NODE_SERVER_NAME="${domain_value,,}"
+            return 0
+        fi
+        error="Invalid domain. Use an HTTPS hostname such as github.com."
+    done
+}
+
+review_node_connection() {
+    local choice
+    while true; do
+        clear_screen
+        printf '%s\n' "Review VPS connection"
+        echo
+        printf '%-16s %s\n' "IP address:" "$1"
+        printf '%-16s %s\n' "User:" "$2"
+        printf '%-16s %s\n' "Port:" "$3"
+        printf '%-16s %s\n' "Password:" "entered"
+        echo
+        menu_control a continue
+        menu_control e edit
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice choice '?: '; then
+            continue
+        fi
+        case "$choice" in
+            a|A) return 0 ;;
+            e|E) return 1 ;;
+            b|B) return 2 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 2 ;;
+            i|I) show_info general ;;
+            x|X) exit_tui ;;
+            *) invalid_choice ;;
         esac
     done
 }
@@ -767,8 +921,8 @@ show_info() {
             info_desc "        Show, add, or remove VPN access keys for this server."
             echo
             printf '%s\n' "  2. Add VPN server"
-            info_desc " - Enter the VPS IP address, SSH user, SSH port, and password."
-            info_desc " - At the IP prompt, b goes back, m returns to main, i opens this help, and x exits."
+            info_desc " - Enter the VPS IP address, SSH user, SSH port, and password on separate screens."
+            info_desc " - Review the connection details, then let the manager check SSH access and VPS resources."
             info_desc " - Enter a Reality camouflage domain, or use github.com by default."
             info_desc " - Choose a profile to block ads, trackers, malware, phishing, and other threats."
             info_desc "   The menu checks VPS resources before allowing a profile."
@@ -1594,30 +1748,32 @@ retry_existing_node_with_saved_key() {
 }
 
 add_node() {
-    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port
-    if ! add_node_ip_prompt; then
-        return 0
-    fi
-    host="$ADD_NODE_HOST"
-    unset ADD_NODE_HOST
-    read -r -e -p 'VPS user (press Enter to use root): ' bootstrap_user
-    bootstrap_user="${bootstrap_user:-root}"
-    read -r -e -p 'VPS SSH port (press Enter to use 22): ' bootstrap_port
-    bootstrap_port="${bootstrap_port:-22}"
-    if [[ ! "$bootstrap_port" =~ ^[0-9]+$ ]] || ((10#$bootstrap_port < 1 || 10#$bootstrap_port > 65535)); then
-        printf '%s\n' "Invalid VPS SSH port. Enter a number from 1 to 65535."
-        sleep 1.5
-        return 1
-    fi
-    before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
-    after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
-    if ! read_vault_state "$before"; then
-        rm -f "$before" "$after"
-        return 1
-    fi
+    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port review_status
+    while true; do
+        if ! add_node_ip_prompt; then
+            return 0
+        fi
+        host="$ADD_NODE_HOST"
+        unset ADD_NODE_HOST
+        if ! add_node_user_prompt; then
+            return 0
+        fi
+        bootstrap_user="$ADD_NODE_USER"
+        unset ADD_NODE_USER
+        if ! add_node_port_prompt; then
+            return 0
+        fi
+        bootstrap_port="$ADD_NODE_PORT"
+        unset ADD_NODE_PORT
+        before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
+        after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
+        if ! read_vault_state "$before"; then
+            rm -f "$before" "$after"
+            return 1
+        fi
 
-    existing_node="$(find_node_by_connection "$before" "$host" "$bootstrap_port")"
-    if [[ -n "$existing_node" ]]; then
+        existing_node="$(find_node_by_connection "$before" "$host" "$bootstrap_port")"
+        if [[ -n "$existing_node" ]]; then
         saved_bootstrap_user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_user", "root"), end="")' "$existing_node" <"$before")"
         saved_bootstrap_port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_ssh_port", 22), end="")' "$existing_node" <"$before")"
         if [[ "$bootstrap_user" != "$saved_bootstrap_user" || "$bootstrap_port" != "$saved_bootstrap_port" ]]; then
@@ -1657,41 +1813,40 @@ add_node() {
                 printf '%s\n' "Deployment failed. The existing Vault was not changed."
             fi
         fi
-        wait_action_return
-        return 0
-    fi
+            wait_action_return
+            return 0
+        fi
 
-    clear_screen
-    printf '%s\n' "Reality camouflage domain (SNI)"
-    printf '%s\n' "Enter a public HTTPS domain without https:// or a path."
-    printf '%s\n' "Press Enter to use github.com, or type another domain."
-    echo
-    read -r -e -p 'Domain: ' server_name
-    server_name="${server_name:-github.com}"
-    if ! valid_server_name "$server_name"; then
-        printf '%s\n' "Invalid domain. Use an ASCII HTTPS hostname such as github.com."
-        sleep 1.5
-        rm -f "$before" "$after"
-        wait_action_return
-        return 1
-    fi
-    server_name="${server_name,,}"
-
-    clear_screen
-    printf '%s\n' "Ansible will verify the VPS address, SSH port, user, and password."
-    echo
-    if ! read_ascii_secret 'VPS password: '; then
-        rm -f "$before" "$after"
-        wait_action_return
-        return 1
-    fi
-    bootstrap_password="$REPLY"
+        if ! add_node_password_prompt; then
+            rm -f "$before" "$after"
+            return 0
+        fi
+        bootstrap_password="$ADD_NODE_PASSWORD"
+        unset ADD_NODE_PASSWORD
+        if review_node_connection "$host" "$bootstrap_user" "$bootstrap_port"; then
+            review_status=0
+        else
+            review_status=$?
+        fi
+        case "$review_status" in
+            0) break ;;
+            1) rm -f "$before" "$after"; continue ;;
+            *) rm -f "$before" "$after"; return 0 ;;
+        esac
+    done
 
     if ! probe_vps_resources "$host" "$bootstrap_user" "$bootstrap_port" "$bootstrap_password"; then
         unset bootstrap_password
         rm -f "$before" "$after"
         return 1
     fi
+    if ! add_node_domain_prompt; then
+        unset bootstrap_password
+        rm -f "$before" "$after"
+        return 0
+    fi
+    server_name="$ADD_NODE_SERVER_NAME"
+    unset ADD_NODE_SERVER_NAME
     unset DNS_FILTER_CURRENT_PROFILE
     unset DNS_FILTER_LISTS
     if ! select_dns_profile; then
