@@ -101,9 +101,8 @@ Select a profile:
 The default domain is `github.com`. You can change it according to your
 country and camouflage strategy.
 
-Choose a profile or leave blocking disabled. If you are not sure, choose
-`Disabled`; you can enable blocking later from `Manage VPN server`. Wait for
-the deployment to finish.
+Choose a profile or press Enter for `Disabled`. You can enable blocking later
+from `Manage VPN server`. Wait for the deployment to finish.
 
 After a successful deployment, the manager saves the VPN ports, keys, and
 connection data in the encrypted Vault.

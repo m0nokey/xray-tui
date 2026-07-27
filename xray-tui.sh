@@ -794,6 +794,9 @@ show_info() {
             printf '    %-7s - %s\n' "Custom" "choose extra categories within the VPS resource limit."
             info_desc "Full includes Encrypted DNS protection; Custom can disable it for TV compatibility."
             info_desc "Blocked domains return NXDOMAIN. DNS filtering does not replace a firewall."
+            info_desc "Resource floors: Minimal/Optimal 1 vCPU and 1280 MB RAM; Full 2 vCPU and 1792 MB RAM."
+            info_desc "Maximum requires 2 vCPU and 2304 MB RAM. Custom is calculated from the selected lists."
+            info_desc "Large feeds work best with 4 GB RAM."
             echo
             printf '%b  Block ads and threats menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Disabled"
@@ -1577,23 +1580,24 @@ select_dns_profile() {
         clear_screen
         printf '%s\n' "Block ads and threats"
         printf '%s\n' "Optional. Blocks malware, phishing, scams, ads, trackers, and telemetry."
-        printf '%s\n' "Not sure what to choose? Select Disabled. You can enable it later."
-        printf '%s\n' "Current: ${DNS_FILTER_CURRENT_PROFILE:-disabled} | VPS: ${VPS_VCPUS} vCPU, $(((VPS_RAM_MB + 512) / 1024)) GB RAM"
-        printf '%s\n' "Select a profile. Press i for list details."
+        printf '%s\n' "Current: ${DNS_FILTER_CURRENT_PROFILE:-disabled}"
         echo
-        printf '  %s1.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Disabled" "No DNS blocklists" "available"
+        printf '  %s1.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Disabled" "No blocking" "available"
         printf '  %s2.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Minimal" "Malware protection" "$(dns_profile_is_available minimal && printf available || printf 'not available')"
         printf '  %s3.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Optimal" "Malware, phishing and scams" "$(dns_profile_is_available optimal && printf available || printf 'not available')"
         printf '  %s4.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Full" "Malware, ads and tracking" "$(dns_profile_is_available full && printf available || printf 'not available')"
         printf '  %s5.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Maximum" "Broad protection and DNS bypass" "$(dns_profile_is_available maximum && printf available || printf 'not available')"
         printf '  %s6.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Custom" "Choose protection categories" "$(dns_profile_is_available custom && printf available || printf 'not available')"
         echo
-        if ! dns_profile_is_available maximum; then
-            printf '%s\n' "  Maximum requires at least 2 vCPU and $(dns_profile_min_memory maximum) MB RAM."
-        fi
-        printf '%s\n' "  4 GB RAM is recommended for large feeds; Custom can disable encrypted DNS for TVs."
+        printf '%s\n' "Press Enter for Disabled."
         echo
-        if ! prompt_nav; then continue; fi
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read -r -e -p '?: ' REPLY; then return 1; fi
+        [[ -z "$REPLY" ]] && REPLY=1
         case "$REPLY" in
             1) DNS_FILTER_PROFILE=disabled; DNS_FILTER_LISTS=""; return 0 ;;
             2|3|4|5)
