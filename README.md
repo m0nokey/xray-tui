@@ -18,69 +18,46 @@ The VPS runs Xray in Docker with two protocols:
 The XHTTP server configuration and generated client links use the same
 `packet-up` transport mode.
 
-## Supported VPS
+## Requirements
 
-The VPS provider does not matter. The target VPS must run **Debian 12 or
-newer**. Only Debian 12+ VPS are supported.
+### Local computer
 
-The target VPS must also meet all of these requirements:
-
-- a public IPv4 address or resolvable hostname;
-- an initial SSH user with `sudo` access, usually `root`;
-- password authentication available for the first installation;
-- at least 1 vCPU and 1 GB RAM for the VPN itself.
-
-Optional DNS protection is disabled by default. When enabled, it can block DNS
-requests to malicious domains, phishing sites, trackers, advertising,
-telemetry, and command-and-control servers. It uses additional VPS resources
-and may block some legitimate domains. The profile can be enabled or changed
-later.
-
-Available DNS protection profiles have these requirements:
-
-- `Minimal`: at least 1 vCPU and 1280 MB RAM;
-- `Optimal`: at least 1 vCPU and 1280 MB RAM;
-- `Full`: at least 2 vCPU and 1792 MB RAM; 4 GB RAM is recommended;
-- `Maximum`: at least 2 vCPU and 2304 MB RAM; 4 GB RAM is recommended;
-- `Custom`: starts with URLhaus and checks every selected source against the
-  detected VPS resource floor.
-
-The Custom resource estimate uses the selected entry count. It is calibrated
-against the Full source set: approximately 520,600 entries used about 600 MB
-of Unbound RSS in the Nitka deployment. The estimate adds 1 GB of headroom for
-Xray and the operating system, then rounds the VPS requirement to 256 MB. It
-is a planning estimate, not a memory limit.
-
-The installer checks the VPS resources before deployment and marks profiles
-that do not fit. DNS protection is optional and can be disabled.
-
-During deployment, the controller:
-
-- installs Docker and Xray;
-- configures automatic operating-system and Docker updates;
-- applies VPS SSH hardening;
-- generates VPN ports, REALITY keys, access keys, and a management SSH key;
-- stores sensitive VPS and VPN data locally inside the encrypted Vault.
-
-The initial SSH password is used only during Ansible operations. It is not
-stored on the VPS.
-
-## Requirements On Your Computer
-
-You need:
-
-- Docker with Docker Compose;
+- Docker;
+- Docker Compose;
 - Bash;
-- an interactive terminal;
-- `git` to clone the repository, or `curl` and `tar` to download it without Git.
+- `curl`;
+- `git` (or `tar` for an archive download);
+- Internet connection;
+- interactive terminal.
 
-Debian 12+ is required for the VPS, not for the local computer. The local
-computer can be macOS or Linux.
+### VPS
 
-You do not need to install Ansible, Python, SSH tools, or Xray on your
-computer. They run inside the local Alpine-based controller container.
+- Root or `sudo` access for package installation;
+- Debian 12 or newer;
+- public IPv4 address or resolvable hostname;
+- SSH password access for the first installation;
+- at least 1 vCPU and 1 GB RAM for the VPN.
 
-## Quick Start
+The VPS provider does not matter.
+
+### Optional DNS protection
+
+Disabled by default. It can block malware, phishing, scams, ads, trackers,
+telemetry, and known DNS/VPN/proxy bypass domains. Some legitimate domains or
+devices with their own encrypted DNS may be affected.
+
+The manager checks VPS resources before deployment:
+
+- `Minimal`: 1 vCPU, 1280 MB RAM;
+- `Optimal`: 1 vCPU, 1280 MB RAM;
+- `Full`: 2 vCPU, 1792 MB RAM;
+- `Maximum`: 2 vCPU, 2304 MB RAM;
+- `Custom`: calculated from the selected lists.
+
+4 GB RAM is recommended for large profiles. These values are planning floors,
+not hard memory limits.
+
+## Install In 3 Steps
 
 ```sh
 git clone https://github.com/m0nokey/xray-tui.git
@@ -100,7 +77,9 @@ bash run.sh
 ```
 
 On the first start, the controller builds its local container and asks you to
-create a Vault password. Then choose `2. Add VPN server`.
+create a Vault password.
+
+### Step 1: choose `2. Add VPN server`
 
 The setup asks for:
 
@@ -111,9 +90,16 @@ The setup asks for:
 5. Reality camouflage domain, default `github.com`;
 6. DNS protection profile, selected from the profiles supported by the VPS.
 
-After a successful deployment, the controller generates the VPN ports, REALITY
-keys, paired access keys, and a new deploy SSH key. All sensitive connection
-data is saved in the encrypted local Vault.
+### Step 2: choose the protection
+
+Select a DNS profile or leave protection disabled. You can also configure
+country blocking later from the server menu.
+
+### Step 3: wait for deployment
+
+The manager installs Docker, Xray, SSH hardening, automatic updates, and VPN
+access keys. After a successful deployment it saves the VPN ports, REALITY
+keys, SSH key, and access-key pairs in the encrypted local Vault.
 
 ## Main Menu
 
@@ -152,9 +138,17 @@ x. exit
 ```text
 1. Check VPN status
 2. Restart VPN server
-3. DNS protection
-4. Rotate SSH key
-5. Remove VPN server
+3. Block ads and threats
+4. Block countries
+5. Rotate SSH key
+6. Remove VPN server
+7. Open SSH session
+
+b. back
+m. main
+i. info
+x. exit
+?:
 ```
 
 The status check tests management SSH access, the Xray container, and both VPN
@@ -170,14 +164,21 @@ Unreachable      No VPN or management port responded; DPI or a provider firewall
 `Rotate SSH key` creates a new deploy key, verifies it, and then revokes the
 old key. The VPN access keys are not changed.
 
-`DNS protection` checks the VPS resources and lets you enable, disable, or
-change the DNS protection profile later. The change is applied through Ansible
-and saved to the Vault only after a successful deployment.
+`Block ads and threats` checks the VPS resources and lets you enable, disable,
+or change the DNS protection profile later. The change is applied through
+Ansible and saved to the Vault only after a successful deployment.
+
+`Block countries` lets you select one or more countries to block on the VPS.
+This is useful when a client cannot bypass local traffic directly. The policy
+applies to all access keys on the node.
 
 `Remove VPN server` removes the Xray installation, Docker stack, automatic
 updaters, and the deploy account from the VPS. It restores the original SSH
 configuration and removes the server from the Vault only after remote cleanup
 has completed successfully.
+
+`Open SSH session` connects to the VPS with the saved management user, SSH key,
+and SSH port.
 
 ### Manage Access Keys
 
