@@ -15,6 +15,9 @@ It runs on your computer and helps you:
 
 The connection data is stored in an encrypted local Vault.
 
+> ⚠️ **Security Notice:**<br>
+> Always review any script from the internet before running it on your system!
+
 ## Requirements
 
 ### Local computer
