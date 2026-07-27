@@ -1235,6 +1235,12 @@ select_local_region_countries() {
             printf 'Countries (page %d/%d)\n' "$((page + 1))" "$page_count"
             printf '%s\n' "Select a number to toggle a country. [ON] means it will be blocked."
             echo
+            for ((index = start; index < end; index++)); do
+                IFS=$'\t' read -r code name <<<"${matches[$index]}"
+                if local_region_has_country "${code,,}"; then status="ON"; else status="-"; fi
+                printf '  %2d. %-42s [%s] (%s)\n' "$((index - start + 1))" "$name" "$status" "${code^^}"
+            done
+            echo
             menu_control s "search country"
             if ((page < page_count - 1)); then menu_control n "next page"; fi
             if ((page > 0)); then menu_control p "previous page"; fi
