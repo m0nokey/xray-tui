@@ -12,8 +12,10 @@ individually without changing keys that are already in use.
 
 The VPS runs Xray in Docker with two protocols:
 
-- VLESS TCP with Vision and REALITY;
-- VLESS XHTTP with REALITY in `packet-up` mode.
+```text
+- VLESS TCP with Vision and REALITY
+- VLESS XHTTP with REALITY in packet-up mode
+```
 
 The XHTTP server configuration and generated client links use the same
 `packet-up` transport mode.
@@ -48,11 +50,13 @@ devices with their own encrypted DNS may be affected.
 
 The manager checks VPS resources before deployment:
 
-- `Minimal`: 1 vCPU, 1280 MB RAM
-- `Optimal`: 1 vCPU, 1280 MB RAM
-- `Full`: 2 vCPU, 1792 MB RAM
-- `Maximum`: 2 vCPU, 2304 MB RAM
-- `Custom`: calculated from the selected lists
+```text
+- Minimal: 1 vCPU, 1280 MB RAM
+- Optimal: 1 vCPU, 1280 MB RAM
+- Full: 2 vCPU, 1792 MB RAM
+- Maximum: 2 vCPU, 2304 MB RAM
+- Custom: calculated from the selected lists
+```
 
 4 GB RAM is recommended for large profiles. These values are planning floors,
 not hard memory limits.
@@ -190,8 +194,10 @@ and SSH port.
 
 One access-key profile contains two UUIDs:
 
-- one Vision UUID;
-- one XHTTP UUID.
+```text
+- one Vision UUID
+- one XHTTP UUID
+```
 
 The `Show` action displays both client links. `Add` creates from 1 to 50 new
 profiles in one operation. `Remove` shows the key numbers and both protocol
@@ -228,18 +234,18 @@ Vault file.
 Ansible configures the VPS through SSH and applies the following management
 steps:
 
-- creates the `deploy` management user with a generated SSH key;
-- enables passwordless sudo for that management user;
-- disables root and password SSH login after installation;
-- generates a random non-default SSH management port;
-- applies hardened SSH settings and rotates the SSH host key;
-- runs Xray in Docker;
-- optionally runs Unbound in a separate hardened Docker container with RPZ
-  blocklists and DNS-over-TLS upstreams;
-- installs automatic Debian security updates;
-- installs a scheduled updater for the Xray `:latest` image and the optional
-  Unbound image;
-- validates the REALITY camouflage hostname before starting the Xray stack.
+```text
+- creates the deploy management user with a generated SSH key
+- enables passwordless sudo for that management user
+- disables root and password SSH login after installation
+- generates a random non-default SSH management port
+- applies hardened SSH settings and rotates the SSH host key
+- runs Xray in Docker
+- optionally runs Unbound in a separate hardened Docker container with RPZ blocklists and DNS-over-TLS upstreams
+- installs automatic Debian security updates
+- installs a scheduled updater for the Xray latest image and the optional Unbound image
+- validates the REALITY camouflage hostname before starting the Xray stack
+```
 
 The Xray configuration is rendered on the VPS from the state supplied by the
 local controller. The local Vault is the source of truth for managing nodes
@@ -253,16 +259,14 @@ no direct DNS fallback, and direct outbound DNS ports are blocked by routing.
 
 Profiles:
 
-- `Disabled`: no blocklists and the lowest resource usage;
-- `Minimal`: URLhaus malware-delivery domains;
-- `Optimal`: URLhaus plus HaGeZi TIF Mini for malware, phishing, scams,
-  cryptojacking, and command-and-control domains;
-- `Full`: URLhaus, HaGeZi Encrypted DNS, AdGuard CNAME tracker lists,
-  AdGuard Mail Trackers, ThreatFox, and HaGeZi Pro++;
-- `Maximum`: broad threat feeds, bypass protection, tracker protection,
-  dynamic DNS threats, suspicious spam TLDs, and threat-intelligence IPs;
-- `Custom`: URLhaus plus selected additional sources, with resource and
-  compatibility checks before deployment.
+```text
+- Disabled: no blocklists and the lowest resource usage
+- Minimal: URLhaus malware-delivery domains
+- Optimal: URLhaus plus HaGeZi TIF Mini for malware, phishing, scams, cryptojacking, and command-and-control domains
+- Full: URLhaus, HaGeZi Encrypted DNS, AdGuard CNAME tracker lists, AdGuard Mail Trackers, ThreatFox, and HaGeZi Pro++
+- Maximum: broad threat feeds, bypass protection, tracker protection, dynamic DNS threats, suspicious spam TLDs, and threat-intelligence IPs
+- Custom: URLhaus plus selected additional sources, with resource and compatibility checks before deployment
+```
 
 `HaGeZi Encrypted DNS` is included in Full and can be disabled through
 Custom because some Smart TVs and VPN clients use their own encrypted DNS.
