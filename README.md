@@ -22,23 +22,19 @@ The XHTTP server configuration and generated client links use the same
 
 ### Local computer
 
-- Docker;
-- Docker Compose;
-- Bash;
-- `curl`;
-- `git` (or `tar` for an archive download);
-- Internet connection;
-- interactive terminal.
+- Docker
+- Docker Compose
+- Bash
+- curl
+- git
 
 ### VPS
 
-- Root or `sudo` access for package installation;
-- Debian 12 or newer;
-- public IPv4 address or resolvable hostname;
-- SSH password access for the first installation;
-- at least 1 vCPU and 1 GB RAM for the VPN.
-
-The VPS provider does not matter.
+- Root or sudo access
+- Supported OS: Debian 12+
+- Public IPv4 address or resolvable hostname
+- SSH password access for the first installation
+- At least 1 vCPU and 1 GB RAM
 
 ### Optional DNS protection
 
@@ -48,11 +44,11 @@ devices with their own encrypted DNS may be affected.
 
 The manager checks VPS resources before deployment:
 
-- `Minimal`: 1 vCPU, 1280 MB RAM;
-- `Optimal`: 1 vCPU, 1280 MB RAM;
-- `Full`: 2 vCPU, 1792 MB RAM;
-- `Maximum`: 2 vCPU, 2304 MB RAM;
-- `Custom`: calculated from the selected lists.
+- `Minimal`: 1 vCPU, 1280 MB RAM
+- `Optimal`: 1 vCPU, 1280 MB RAM
+- `Full`: 2 vCPU, 1792 MB RAM
+- `Maximum`: 2 vCPU, 2304 MB RAM
+- `Custom`: calculated from the selected lists
 
 4 GB RAM is recommended for large profiles. These values are planning floors,
 not hard memory limits.
