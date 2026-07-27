@@ -42,24 +42,34 @@ The XHTTP server configuration and generated client links use the same
 - At least 1 vCPU and 1 GB RAM
 ```
 
-### Optional DNS protection
+### Optional ad and threat protection
 
-Disabled by default. It can block malware, phishing, scams, ads, trackers,
-telemetry, and known DNS/VPN/proxy bypass domains. Some legitimate domains or
-devices with their own encrypted DNS may be affected.
+Disabled by default.
 
-The manager checks VPS resources before deployment:
+You can enable protection in the menu and choose lists that block known
+malicious or advertising domain names.
 
 ```text
-- Minimal: 1 vCPU, 1280 MB RAM
-- Optimal: 1 vCPU, 1280 MB RAM
-- Full: 2 vCPU, 1792 MB RAM
-- Maximum: 2 vCPU, 2304 MB RAM
-- Custom: calculated from the selected lists
+- Malware and dangerous websites
+- Phishing and scams
+- Ads and pop-ups
+- Trackers and email tracking
 ```
 
-4 GB RAM is recommended for large profiles. These values are planning floors,
-not hard memory limits.
+To load the selected blocking lists, the VPS needs enough free CPU and RAM.
+Before deployment, the manager checks the VPS and shows which profiles are
+available:
+
+```text
+- Minimal: 1 vCPU / 1 GB RAM
+- Optimal: 1 vCPU / 1 GB RAM
+- Full: 2 vCPU / about 2 GB RAM
+- Maximum: 2 vCPU / about 2.5 GB RAM
+- Custom: depends on the selected lists
+```
+
+This protection is optional. Some legitimate websites or Smart TVs may be
+affected. You can change or disable it later from the server menu.
 
 ## Install In 3 Steps
 
@@ -256,6 +266,19 @@ and keys; no separate key database is created by the controller.
 When enabled, Xray sends DNS queries through the private Unbound container.
 Unbound uses DNS-over-TLS upstreams and RPZ blocklists. The Xray container has
 no direct DNS fallback, and direct outbound DNS ports are blocked by routing.
+
+The manager checks the VPS resources before deployment:
+
+```text
+- Minimal: 1 vCPU, 1280 MB RAM
+- Optimal: 1 vCPU, 1280 MB RAM
+- Full: 2 vCPU, 1792 MB RAM
+- Maximum: 2 vCPU, 2304 MB RAM
+- Custom: calculated from the selected lists
+```
+
+4 GB RAM is recommended for large profiles. These values are planning floors,
+not hard memory limits.
 
 Profiles:
 
