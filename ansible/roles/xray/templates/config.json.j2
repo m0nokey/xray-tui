@@ -89,7 +89,9 @@
       {"type": "field", "inboundTag": ["dns-out"], "outboundTag": "direct"},
 {% endif %}
 {% if has_local_region %}
-      {"type": "field", "domain": [{% for country in xray_local_region_countries %}"geosite:{{ country }}"{% if not loop.last %}, {% endif %}{% endfor %}{% if 'ru' in xray_local_region_countries %}, "domain:ru", "domain:рф", "domain:xn--p1ai"{% endif %}], "outboundTag": "block"},
+{% if 'ru' in xray_local_region_countries %}
+      {"type": "field", "domain": ["domain:ru", "domain:рф", "domain:xn--p1ai"], "outboundTag": "block"},
+{% endif %}
       {"type": "field", "ip": [{% for country in xray_local_region_countries %}"geoip:{{ country }}"{% if not loop.last %}, {% endif %}{% endfor %}], "outboundTag": "block"}{% if xray_dns_profile != 'disabled' %},{% endif %}
 {% endif %}
 {% if xray_dns_profile != 'disabled' %}
