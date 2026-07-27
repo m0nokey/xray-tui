@@ -475,6 +475,38 @@ prompt_nav() {
     read_required_choice REPLY '?: '
 }
 
+add_node_ip_prompt() {
+    local ip_value error=''
+    while true; do
+        clear_screen
+        printf '%s\n' "Add VPN server"
+        printf '%s\n' "Enter the public IPv4 address of the VPS."
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice ip_value 'VPS IP address: '; then
+            continue
+        fi
+        case "$ip_value" in
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; error='' ;;
+            x|X) exit_tui ;;
+            *)
+                if valid_ipv4 "$ip_value"; then
+                    ADD_NODE_HOST="$ip_value"
+                    return 0
+                fi
+                error="Invalid VPS IP address. Enter an IPv4 address."
+                ;;
+        esac
+    done
+}
+
 menu_heading() {
     printf '%s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET"
 }
@@ -736,6 +768,7 @@ show_info() {
             echo
             printf '%s\n' "  2. Add VPN server"
             info_desc " - Enter the VPS IP address, SSH user, SSH port, and password."
+            info_desc " - At the IP prompt, b goes back, m returns to main, i opens this help, and x exits."
             info_desc " - Enter a Reality camouflage domain, or use github.com by default."
             info_desc " - Choose a profile to block ads, trackers, malware, phishing, and other threats."
             info_desc "   The menu checks VPS resources before allowing a profile."
@@ -1562,13 +1595,11 @@ retry_existing_node_with_saved_key() {
 
 add_node() {
     local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port
-    clear_screen
-    read -r -e -p 'VPS IP address: ' host
-    if ! valid_ipv4 "$host"; then
-        printf '%s\n' "Invalid VPS IP address. Enter an IPv4 address."
-        sleep 1.5
-        return 1
+    if ! add_node_ip_prompt; then
+        return 0
     fi
+    host="$ADD_NODE_HOST"
+    unset ADD_NODE_HOST
     read -r -e -p 'VPS user (press Enter to use root): ' bootstrap_user
     bootstrap_user="${bootstrap_user:-root}"
     read -r -e -p 'VPS SSH port (press Enter to use 22): ' bootstrap_port
