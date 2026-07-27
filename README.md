@@ -320,6 +320,26 @@ ansible/          VPS playbooks and roles
 scripts/          encrypted state and output helpers
 ```
 
+## Legacy Version
+
+The previous direct-SSH version is still available for reference and
+compatibility.
+
+Run it directly from GitHub:
+
+```bash
+bash -c "$(curl -sSfL --http2 --proto '=https' 'https://raw.githubusercontent.com/m0nokey/xray-tui/refs/heads/main/legacy/xray-tui.sh')"
+```
+
+Or run the local copy:
+
+```bash
+bash legacy/xray-tui.sh
+```
+
+The legacy version does not include the current Vault, Ansible deployment, or
+current server management flow. It will be removed in a future release.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
