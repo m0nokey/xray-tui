@@ -11,6 +11,8 @@ MAIN_MENU_REQUESTED=0
 LAST_ANSIBLE_OUTPUT=""
 # Internal status used to distinguish missing saved SSH access from deployment errors.
 readonly NO_SAVED_SSH_ACCESS=125
+# Internal status used to refresh the server list after successful removal.
+readonly NODE_REMOVED_STATUS=124
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 export ANSIBLE_LOCAL_TEMP=/tmp/ansible-local
@@ -2601,7 +2603,7 @@ manage_keys() {
 }
 
 manage_node() {
-    local node="$1"
+    local node="$1" node_status
     while true; do
         clear_screen
         echo
@@ -2612,7 +2614,17 @@ manage_node() {
         echo
         if ! prompt_nav; then continue; fi
         case "$REPLY" in
-            1) manage_server "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            1)
+                if manage_server "$node"; then
+                    :
+                else
+                    node_status=$?
+                    if ((node_status == NODE_REMOVED_STATUS)); then
+                        return "$NODE_REMOVED_STATUS"
+                    fi
+                fi
+                [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return
+                ;;
             2) manage_keys "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             i) show_info status ;;
             b) return ;;
@@ -2624,7 +2636,7 @@ manage_node() {
 }
 
 manage_server() {
-    local node="$1"
+    local node="$1" removal_status
     while true; do
         clear_screen
         echo
@@ -2645,7 +2657,18 @@ manage_server() {
             3) manage_dns_protection "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             4) manage_local_region_policy "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             5) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
-            6) clear_screen; remove_node "$node"; return ;;
+            6)
+                clear_screen
+                if remove_node "$node"; then
+                    return
+                else
+                    removal_status=$?
+                fi
+                if ((removal_status == NODE_REMOVED_STATUS)); then
+                    return "$NODE_REMOVED_STATUS"
+                fi
+                return
+                ;;
             7) open_node_ssh_session "$node" ;;
             i) show_info server ;;
             b) return ;;
@@ -2665,7 +2688,7 @@ remove_remote_node() {
 }
 
 remove_node() {
-    local node="$1" confirm local_confirm
+    local node="$1" confirm local_confirm removed=0
     clear_screen
     while true; do
         clear_screen
@@ -2693,7 +2716,7 @@ remove_node() {
     if remove_remote_node "$node"; then
         state_mutate remove-node "$node"
         printf '%s\n' "VPN server removed from the VPS and Vault."
-        return 0
+        return "$NODE_REMOVED_STATUS"
     fi
 
     while true; do
@@ -2720,12 +2743,14 @@ remove_node() {
             [Yy])
                 state_mutate remove-node "$node"
                 printf '%s\n' "VPN server removed from the local Vault."
+                removed=1
                 break
                 ;;
             r)
                 if remove_remote_node "$node"; then
                     state_mutate remove-node "$node"
                     printf '%s\n' "VPN server removed from the VPS and Vault."
+                    removed=1
                     break
                 fi
                 ;;
@@ -2737,10 +2762,14 @@ remove_node() {
         esac
     done
     read -r -p "Press Enter" _
+    if ((removed)); then
+        return "$NODE_REMOVED_STATUS"
+    fi
+    return 0
 }
 
 vpn_servers() {
-    local count names choice node state
+    local count names choice node state node_status
     while true; do
         clear_screen
         state="$(mktemp "$STATE_DIR/.servers.XXXXXX")"
@@ -2776,7 +2805,15 @@ vpn_servers() {
                 return 1
             fi
             rm -f "$state"
-            manage_node "$node"
+            node_status=0
+            if manage_node "$node"; then
+                :
+            else
+                node_status=$?
+            fi
+            if ((node_status == NODE_REMOVED_STATUS)); then
+                continue
+            fi
             return
         fi
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
@@ -2796,7 +2833,15 @@ vpn_servers() {
                 node="$(printf '%s\n' "$names" | sed -n "${REPLY}p")"
                 rm -f "$state"
                 if [[ -n "$node" ]]; then
-                    manage_node "$node"
+                    node_status=0
+                    if manage_node "$node"; then
+                        :
+                    else
+                        node_status=$?
+                    fi
+                    if ((node_status == NODE_REMOVED_STATUS)); then
+                        continue
+                    fi
                     return
                 fi
                 invalid_choice
