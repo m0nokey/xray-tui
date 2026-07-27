@@ -1574,6 +1574,8 @@ select_dns_profile() {
     while true; do
         clear_screen
         printf '%s\n' "Block ads and threats"
+        printf '%s\n' "Optional. Blocks malware, phishing, scams, ads, trackers, and telemetry."
+        printf '%s\n' "Not sure what to choose? Select Disabled. You can enable it later."
         printf '%s\n' "Current: ${DNS_FILTER_CURRENT_PROFILE:-disabled} | VPS: ${VPS_VCPUS} vCPU, $(((VPS_RAM_MB + 512) / 1024)) GB RAM"
         printf '%s\n' "Select a profile. Press i for list details."
         echo

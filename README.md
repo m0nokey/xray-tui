@@ -92,14 +92,18 @@ This domain helps the VPN connection look like normal HTTPS traffic.
 Use a real HTTPS website that supports TLS 1.3.
 
 Enter domain [github.com]:
-Select DNS protection profile:
+Block ads and threats (optional):
+Blocks malware, phishing, scams, ads, trackers, and telemetry.
+
+Select a profile:
 ```
 
 The default domain is `github.com`. You can change it according to your
 country and camouflage strategy.
 
-Choose a DNS protection profile or leave protection disabled. Wait for the
-deployment to finish.
+Choose a profile or leave blocking disabled. If you are not sure, choose
+`Disabled`; you can enable blocking later from `Manage VPN server`. Wait for
+the deployment to finish.
 
 After a successful deployment, the manager saves the VPN ports, keys, and
 connection data in the encrypted Vault.
