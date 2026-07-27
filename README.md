@@ -1,49 +1,41 @@
 # xray-tui
 
-`xray-tui` is a simple console manager for Xray VPN servers and access keys.
-It runs on your computer and lets you install, check, restart, update, and
-remove Xray VPN servers through a menu. Access keys can be added or removed
-individually without changing keys that are already in use.
+`xray-tui` is a console manager for Xray VPN servers.
 
-> **Legacy version:** the old direct-SSH approach is preserved in the
-> [`legacy/`](./legacy/) folder. It does not include the current VPS hardening
-> and Ansible management flow. Use it only if you specifically need the old
-> lightweight approach. The current project is the manager described below.
+It runs on your computer and helps you:
 
-The VPS runs Xray in Docker with two protocols:
+```text
+- install an Xray VPN on a VPS
+- create and manage VPN access keys
+- block ads, trackers, and known threats
+- block selected countries on the VPS
+- open an SSH session without remembering the port or password
+- update or remove the VPN server
+```
 
-- VLESS TCP with Vision and REALITY;
-- VLESS XHTTP with REALITY in `packet-up` mode.
+The connection data is stored in an encrypted local Vault.
 
-The XHTTP server configuration and generated client links use the same
-`packet-up` transport mode.
+## Requirements
 
-## Supported VPS
+### Local computer
 
-Any VPS provider is supported when the target VPS runs **Debian 12 or newer**.
+```text
+- Docker
+- Docker Compose
+- Bash
+- curl
+- git
+```
 
-Ubuntu and other operating systems are not supported. The VPS must have:
+### VPS
 
-- SSH access;
-- an initial user with `sudo` access, usually `root`;
-- password authentication available for the first installation;
-- a public IP address or resolvable hostname.
-
-The controller installs Docker, Xray, automatic updates, and SSH hardening on
-the VPS. The initial SSH password is used only during Ansible operations and is
-stored locally only inside the encrypted Vault.
-
-## Requirements On Your Computer
-
-You need:
-
-- Docker with Docker Compose;
-- Bash;
-- an interactive terminal;
-- `curl` for checking the Docker base image version.
-
-You do not need to install Ansible, Python, SSH tools, or Xray on your
-computer. They run inside the local Alpine-based controller container.
+```text
+- Root/sudo access
+- Supported OS: Debian 12+
+- Public IPv4 address
+- SSH password access for the first installation
+- At least 1 vCPU and 1 GB RAM
+```
 
 ## Quick Start
 
@@ -53,20 +45,64 @@ cd xray-tui
 bash run.sh
 ```
 
-On the first start, the controller builds its local container and asks you to
-create a Vault password. Then choose `2. Add VPN server`.
+Without Git:
 
-The setup asks for:
+```sh
+curl -fsSL https://github.com/m0nokey/xray-tui/archive/refs/heads/main.tar.gz | tar -xz
+mv xray-tui-main xray-tui
+cd xray-tui
+bash run.sh
+```
 
-1. VPS IP address or hostname;
-2. initial SSH user, default `root`;
-3. initial SSH port, default `22`;
-4. initial SSH password;
-5. Reality camouflage domain, default `github.com`.
+On the first run, create a password for the local encrypted Vault.
 
-After a successful deployment, the controller generates the VPN ports, REALITY
-keys, paired access keys, and a new deploy SSH key. All sensitive connection
-data is saved in the encrypted local Vault.
+In the main menu choose:
+
+```text
+2. Add VPN server
+```
+
+Each input is shown on a separate screen. The previous screen is cleared.
+
+```text
+Enter VPS IP:
+Enter VPS user [root]:
+Enter VPS port [22]:
+Enter VPS password:
+```
+
+```text
+[!] Press Enter to use the default value shown in [brackets].
+```
+
+Before connecting, the manager shows the entered IP, user, port, and the
+password status. Use `e. edit` if something is wrong.
+
+Choose `a. continue`. The manager then checks:
+
+```text
+- SSH access
+- VPS resources
+```
+
+If the check succeeds, choose a camouflage domain and protection profile:
+
+```text
+This domain helps the VPN connection look like normal HTTPS traffic.
+Use a real HTTPS website that supports TLS 1.3.
+
+Enter domain [github.com]:
+Select DNS protection profile:
+```
+
+The default domain is `github.com`. You can change it according to your
+country and camouflage strategy.
+
+Choose a DNS protection profile or leave protection disabled. Wait for the
+deployment to finish.
+
+After a successful deployment, the manager saves the VPN ports, keys, and
+connection data in the encrypted Vault.
 
 ## Main Menu
 
@@ -80,14 +116,25 @@ x. exit
 ?:
 ```
 
-Press `i` on any menu to see help for that screen. Press `Enter` after the
-help text to return to the same menu. `b` goes back, `m` returns to the main
-menu, and `x` exits the controller.
+Use `i` to see help for the current screen. Use `b` to go back, `m` to return
+to the main menu, and `x` to exit.
 
-## Managing A Server
+## Server Menu
 
-When a server is selected, the controller shows its IP address, status,
-country, creation date, and provider.
+The VPS list shows the important information at a glance:
+
+```text
+  Node Management:
+
+     IP              STATUS   COUNTRY   CREATED      PROVIDER
+
+  1. 203.0.113.42   Active   DE        2026-07-27   Example VPS
+```
+
+The terminal uses color for quick scanning: `Active` is green, `Partial` is
+yellow, and unavailable states are red.
+
+After selecting a VPS:
 
 ```text
 1. Manage VPN server
@@ -105,29 +152,77 @@ x. exit
 ```text
 1. Check VPN status
 2. Restart VPN server
-3. Rotate SSH key
-4. Remove VPN server
+3. Block ads and threats
+4. Block countries
+5. Rotate SSH key
+6. Remove VPN server
+7. Open SSH session
 ```
 
-The status check tests management SSH access, the Xray container, and both VPN
-ports:
+`Open SSH session` uses the saved management key and port from the Vault.
+
+### VPN Status
 
 ```text
 Active           Xray is running and both VPN ports are reachable.
 Partial          Xray is running and only one VPN port is reachable.
 VPN unavailable  The VPS responded, but Xray is not confirmed running.
-Unreachable      No VPN or management port responded; DPI or a provider firewall may be involved.
+Unreachable      No VPN or management port responded.
 ```
 
-`Rotate SSH key` creates a new deploy key, verifies it, and then revokes the
-old key. The VPN access keys are not changed.
+## Optional Protection
 
-`Remove VPN server` removes the Xray installation, Docker stack, automatic
-updaters, and the deploy account from the VPS. It restores the original SSH
-configuration and removes the server from the Vault only after remote cleanup
-has completed successfully.
+### Block Ads And Threats
 
-### Manage Access Keys
+Disabled by default. You can enable lists that block known domain names used
+for:
+
+```text
+- malware and dangerous websites
+- phishing and scams
+- ads and pop-ups
+- trackers and email tracking
+```
+
+The selected lists are loaded on the VPS. Larger profiles need more VPS CPU
+and RAM, so the manager checks resources before deployment.
+
+```text
+- Minimal: 1 vCPU / 1 GB RAM
+- Optimal: 1 vCPU / 1 GB RAM
+- Full: 2 vCPU / about 2 GB RAM
+- Maximum: 2 vCPU / about 2.5 GB RAM
+- Custom: depends on the selected lists
+```
+
+```text
+- Disabled - no blocking
+- Minimal - malware and dangerous websites
+- Optimal - malware, phishing, and scams
+- Full - malware, ads, trackers, and telemetry
+- Maximum - broad protection and known DNS bypass services
+- Custom - choose additional categories
+```
+
+Some legitimate websites or Smart TVs may be affected. You can change or
+disable protection later from the server menu.
+
+The lists are provided by the
+[HaGeZi DNS Blocklists project](https://github.com/hagezi/dns-blocklists).
+
+### Block Countries
+
+Select one or more countries to block on the VPS. This is useful when a VPN
+client cannot configure local traffic bypass directly.
+
+The policy applies to all access keys on that VPS. It blocks destination IP
+ranges assigned to the selected countries. For Russia, selecting `RU` also
+matches `.ru` and `.рф` domains.
+
+This is not a VPN detection guarantee. CDNs, shared hosting, and geolocation
+data can cause false positives.
+
+## Access Keys
 
 ```text
 1. Show
@@ -135,29 +230,19 @@ has completed successfully.
 3. Remove
 ```
 
-One access-key profile contains two UUIDs:
+Each access key contains two paired client links:
 
-- one Vision UUID;
-- one XHTTP UUID.
+```text
+- VLESS TCP Vision
+- VLESS XHTTP
+```
 
-The `Show` action displays both client links. `Add` creates from 1 to 50 new
-profiles in one operation. `Remove` shows the key numbers and both protocol
-UUIDs, then removes the selected pair together. The last number removes all
-access keys after confirmation.
+Removing a key removes both links together. Other keys are not changed.
 
 ## Vault
 
 The Vault is a local encrypted file containing VPS access data, SSH keys, VPN
-ports, REALITY material, and access-key UUIDs. It is created on the first
-setup or through `Vault > Create Vault`.
-
-The file is stored on your computer at:
-
-```text
-$HOME/.local/state/xray/vault.json
-```
-
-The Vault menu provides:
+ports, REALITY keys, and access-key pairs.
 
 ```text
 1. Change encryption password
@@ -166,41 +251,94 @@ The Vault menu provides:
 4. Delete Vault
 ```
 
-The Vault password is never stored in the repository or on the VPS. Keep the
-password and encrypted backups safe: the password cannot be recovered from the
-Vault file.
+The Vault is stored at:
 
-## Security And Updates
+```text
+$HOME/.local/state/xray/vault.json
+```
 
-Ansible configures the VPS through SSH and applies the following management
-steps:
+The Vault password is not stored on the VPS and cannot be recovered from the
+encrypted file.
 
-- creates the `deploy` management user with a generated SSH key;
-- enables passwordless sudo for that management user;
-- disables root and password SSH login after installation;
-- generates a random non-default SSH management port;
-- applies hardened SSH settings and rotates the SSH host key;
-- runs Xray in Docker;
-- installs automatic Debian security updates;
-- installs a scheduled Docker image updater for the Xray `:latest` image;
-- validates the REALITY camouflage hostname before starting the Xray stack.
+## Remove A VPN Server
 
-The Xray configuration is rendered on the VPS from the state supplied by the
-local controller. The local Vault is the source of truth for managing nodes
-and keys; no separate key database is created by the controller.
+`Remove VPN server` cleans the VPS before deleting its Vault record.
+
+```text
+- stops and removes the Xray Docker stack
+- removes updater services and Xray files
+- removes the management user created by xray-tui
+- restores the original SSH configuration
+- removes the server from the local Vault after successful cleanup
+```
+
+If remote cleanup fails, the Vault entry is kept so the operation can be
+retried.
+
+## Technical Overview
+
+```text
+Your computer
+    |
+    | xray-tui
+    | encrypted Vault
+    | SSH / Ansible
+    v
+VPS
+    |
+    +-- Docker
+    |     |
+    |     +-- Xray VPN
+    |     |
+    |     +-- optional Unbound DNS protection
+    |
+    +-- hardened SSH management
+    +-- automatic OS and Docker updates
+```
+
+The VPS runs:
+
+```text
+- VLESS TCP with Vision and REALITY
+- VLESS XHTTP with REALITY in packet-up mode
+```
+
+When protection is enabled, Xray sends DNS requests through the private
+Unbound container. Unbound uses DNS-over-TLS upstreams and blocklists. Blocked
+domain names return `NXDOMAIN`.
+
+The local Vault is the source of truth for VPS access and VPN keys. No
+separate key database is created on the VPS.
 
 ## Repository Layout
 
 ```text
-xray-tui.sh                      interactive console manager
-run.sh                           local launcher and image freshness check
-tui/Dockerfile                    Alpine controller image
-tui/compose.yml                  local hardened controller container
-ansible/                          VPS playbooks, roles, and templates
-scripts/state_cli.py              encrypted state operations
-scripts/render_nodes.py           server table and status output
-scripts/render_keys.py            paired VLESS link output
+xray-tui.sh       interactive console manager
+run.sh            local launcher
+tui/              local controller container
+ansible/          VPS playbooks and roles
+scripts/          encrypted state and output helpers
 ```
+
+## Legacy Version
+
+The previous direct-SSH version is still available for reference and
+compatibility.
+
+Run it directly from GitHub:
+
+```bash
+bash -c "$(curl -sSfL --http2 --proto '=https' 'https://raw.githubusercontent.com/m0nokey/xray-tui/refs/heads/main/legacy/xray-tui.sh')"
+```
+
+Or run the local copy:
+
+```bash
+bash legacy/xray-tui.sh
+```
+
+The legacy version does not include the current Vault, Ansible deployment, or
+current server management flow. It will be removed in a future release.
 
 ## License
 

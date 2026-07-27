@@ -10,7 +10,22 @@ import sys
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from nacl.public import PrivateKey
+
+COUNTRIES_FILE = Path(__file__).resolve().parent.parent / "data" / "countries.tsv"
+
+
+def country_codes():
+    try:
+        with COUNTRIES_FILE.open(encoding="utf-8") as handle:
+            return {
+                line.split("\t", 1)[0].strip().lower()
+                for line in handle
+                if line.strip() and not line.startswith("#")
+            }
+    except OSError as exc:
+        raise SystemExit(f"country code table is unavailable: {COUNTRIES_FILE}") from exc
 
 
 def read_state():
@@ -116,10 +131,25 @@ def port_number(value):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("action", choices=("count", "names", "normalize", "extract", "mark-deployed", "set-deploy-key", "ensure-ssh-port", "set-bootstrap", "remove-node", "add-node", "add-key", "add-keys", "remove-key", "remove-all-keys"))
+parser.add_argument("action", choices=("count", "names", "normalize", "extract", "mark-deployed", "set-deploy-key", "ensure-ssh-port", "set-bootstrap", "set-dns-profile", "set-local-region", "remove-node", "add-node", "add-key", "add-keys", "remove-key", "remove-all-keys"))
 parser.add_argument("args", nargs="*")
 parser.add_argument("--bootstrap-key")
 parser.add_argument("--server-name", default="github.com")
+parser.add_argument(
+    "--dns-profile",
+    choices=("disabled", "minimal", "optimal", "full", "maximum", "custom"),
+    default="disabled",
+)
+parser.add_argument(
+    "--dns-lists",
+    default="",
+    help="comma-separated DNS source names for the custom profile",
+)
+parser.add_argument(
+    "--local-region-countries",
+    default="",
+    help="comma-separated ISO alpha-2 country codes",
+)
 opts = parser.parse_args()
 state = read_state()
 nodes = state.setdefault("nodes", {})
@@ -133,6 +163,9 @@ elif opts.action == "names":
 elif opts.action == "normalize":
     for node in nodes.values():
         node.setdefault("xray", {}).setdefault("server_name", "github.com")
+        node.setdefault("xray", {}).setdefault("dns_filter_profile", "disabled")
+        node.setdefault("xray", {}).setdefault("dns_filter_lists", [])
+        node.setdefault("xray", {}).setdefault("local_region_countries", [])
         bootstrap_port = int(node.get("bootstrap_ssh_port", node.get("initial_port", 22)))
         target_port = int(
             node.get(
@@ -174,6 +207,9 @@ elif opts.action == "extract":
     output = {
         "xray_state": node["xray"],
         "xray_server_name": node["xray"].get("server_name", "github.com"),
+        "xray_dns_profile": node["xray"].get("dns_filter_profile", "disabled"),
+        "xray_dns_lists": node["xray"].get("dns_filter_lists", []),
+        "xray_local_region_countries": node["xray"].get("local_region_countries", []),
         "xray_public_host": node["host"],
         "management_user": node.get("management_user", node.get("deploy_user", "deploy")),
         "management_authorized_key": node.get(
@@ -251,6 +287,37 @@ elif opts.action == "set-bootstrap":
         }
         node["sshd_port"] = generated_port(used_ports)
         node["ssh_port"] = node["sshd_port"]
+elif opts.action == "set-dns-profile":
+    if len(opts.args) != 2 or opts.args[0] not in nodes:
+        raise SystemExit("set-dns-profile requires NODE PROFILE")
+    profile = opts.args[1]
+    if profile not in ("disabled", "minimal", "optimal", "full", "maximum", "custom"):
+        raise SystemExit("unsupported DNS protection profile")
+    node_xray = nodes[opts.args[0]].setdefault("xray", {})
+    node_xray["dns_filter_profile"] = profile
+    if profile == "custom":
+        node_xray["dns_filter_lists"] = [item for item in opts.dns_lists.split(",") if item]
+    else:
+        node_xray.pop("dns_filter_lists", None)
+elif opts.action == "set-local-region":
+    if len(opts.args) != 2 or opts.args[0] not in nodes:
+        raise SystemExit("set-local-region requires NODE ENABLED_OR_DISABLED")
+    if opts.args[1] not in ("enabled", "disabled"):
+        raise SystemExit("set-local-region requires enabled or disabled")
+    countries = []
+    if opts.args[1] == "enabled":
+        countries = list(dict.fromkeys(
+            item.strip().lower()
+            for item in opts.local_region_countries.split(",")
+            if item.strip()
+        ))
+        invalid = [item for item in countries if not re.fullmatch(r"[a-z]{2}", item)]
+        invalid.extend(item for item in countries if item not in country_codes() and item not in invalid)
+        if invalid:
+            raise SystemExit(f"unsupported country code: {', '.join(invalid)}")
+        if not countries:
+            raise SystemExit("enabled local-region policy requires at least one country")
+    nodes[opts.args[0]].setdefault("xray", {})["local_region_countries"] = countries
 elif opts.action == "remove-node":
     if len(opts.args) != 1 or opts.args[0] not in nodes:
         raise SystemExit("remove-node requires NODE")
@@ -315,6 +382,9 @@ elif opts.action == "add-node":
             "reality_public_key": reality_public,
             "reality_short_id": secrets.token_hex(8),
             "server_name": server_name,
+            "dns_filter_profile": opts.dns_profile,
+            "dns_filter_lists": [item for item in opts.dns_lists.split(",") if item],
+            "local_region_countries": [],
             "access_keys": [{
                 "key_id": "key-" + vision_uuid.replace("-", "")[:8],
                 "vision_uuid": vision_uuid,

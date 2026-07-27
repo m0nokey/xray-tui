@@ -5,6 +5,9 @@ compose_file="{{ system_base_docker_updater_compose_file }}"
 project="{{ system_base_docker_updater_name }}"
 container="{{ xray_container_name | default('xray') }}"
 image_ref="{{ xray_image }}"
+dns_profile="{{ (xray_state | default({})).dns_filter_profile | default('disabled') }}"
+unbound_container="unbound"
+unbound_image="local/xray-tui-unbound:latest"
 health_timeout="{{ system_base_docker_updater_health_timeout }}"
 rollback_ref="local/xray-rollback:$(date +%s)"
 
@@ -20,9 +23,9 @@ exec 9>/run/{{ system_base_docker_updater_name }}-docker-updater.lock
 flock -n 9 || { log_i "another update run is in progress"; exit 0; }
 
 wait_health() {
-    local i status
+    local target="${1:-$container}" i status
     for ((i = 0; i < health_timeout; i++)); do
-        status="$(docker inspect -f '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}{% endraw %}' "$container" 2>/dev/null || true)"
+        status="$(docker inspect -f '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}{% endraw %}' "$target" 2>/dev/null || true)"
         [[ "$status" == "healthy" ]] && return 0
         [[ "$status" == "unhealthy" || "$status" == "exited" || "$status" == "dead" ]] && return 1
         sleep 1
@@ -39,12 +42,53 @@ rollback() {
     log_e "rolling back Xray image"
     docker image tag "$old_id" "$image_ref" || return 1
     docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-recreate xray || return 1
-    wait_health || return 1
+    wait_health "$container" || return 1
     log_i "rollback completed"
+}
+
+update_unbound() {
+    local old_id old_health new_id unbound_rollback_ref
+    [[ "$dns_profile" != "disabled" ]] || return 0
+
+    old_id="$(docker inspect -f '{% raw %}{{.Image}}{% endraw %}' "$unbound_container" 2>/dev/null || true)"
+    old_health="$(docker inspect -f '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}{% endraw %}' "$unbound_container" 2>/dev/null || true)"
+    unbound_rollback_ref="local/xray-unbound-rollback:$(date +%s)"
+
+    log_i "building Unbound image"
+    docker compose -f "$compose_file" -p "$project" build --pull unbound || return 1
+    new_id="$(docker image inspect -f '{% raw %}{{.Id}}{% endraw %}' "$unbound_image" 2>/dev/null || true)"
+    [[ -n "$new_id" ]] || return 1
+
+    if [[ -n "$old_id" && "$old_id" == "$new_id" && "$old_health" == "healthy" ]]; then
+        log_i "Unbound image unchanged and container is healthy; nothing to do"
+        return 0
+    fi
+
+    [[ -n "$old_id" ]] && docker image tag "$old_id" "$unbound_rollback_ref"
+    log_i "recreating Unbound"
+    if ! docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-recreate unbound; then
+        [[ -n "$old_id" ]] && docker image tag "$old_id" "$unbound_image"
+        docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-recreate unbound || true
+        return 1
+    fi
+
+    if ! wait_health "$unbound_container"; then
+        log_e "Unbound is unhealthy after update"
+        if [[ -n "$old_id" ]]; then
+            docker image tag "$old_id" "$unbound_image"
+            docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-recreate unbound || true
+            wait_health "$unbound_container" || true
+        fi
+        return 1
+    fi
+
+    docker image rm "$unbound_rollback_ref" >/dev/null 2>&1 || true
+    log_i "Unbound update complete"
 }
 
 [[ -f "$compose_file" ]] || exit 0
 docker compose -f "$compose_file" -p "$project" config -q || die "compose syntax error"
+update_unbound || die "Unbound update failed"
 
 old_id="$(docker inspect -f '{% raw %}{{.Image}}{% endraw %}' "$container" 2>/dev/null || true)"
 old_health="$(docker inspect -f '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}{% endraw %}' "$container" 2>/dev/null || true)"
@@ -69,7 +113,7 @@ if ! docker compose -f "$compose_file" -p "$project" up -d --no-deps --force-rec
     exit 1
 fi
 
-if ! wait_health; then
+if ! wait_health "$container"; then
     log_e "Xray is unhealthy after update"
     [[ -n "$old_id" ]] && rollback "$old_id" || true
     exit 1

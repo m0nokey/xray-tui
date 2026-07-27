@@ -12,6 +12,101 @@
       - xray_state.access_keys is sequence
     fail_msg: Pass the encrypted local Xray state and SSH port with -e @state.yml.
 
+- name: Select DNS protection profile
+  ansible.builtin.set_fact:
+    xray_dns_profile: "{{ xray_state.dns_filter_profile | default('disabled') }}"
+
+- name: Validate DNS protection profile
+  ansible.builtin.assert:
+    that:
+      - xray_dns_profile in xray_dns_profiles
+    fail_msg: "Unsupported DNS protection profile: {{ xray_dns_profile }}"
+
+- name: Select local-region traffic policy
+  ansible.builtin.set_fact:
+    xray_local_region_countries: >-
+      {{ xray_state.local_region_countries | default([]) | map('lower') | list }}
+
+- name: Validate local-region traffic policy
+  ansible.builtin.assert:
+    that:
+      - xray_local_region_countries is sequence
+      - item is match('^[a-z]{2}$')
+    fail_msg: "Unsupported local-region country code: {{ item }}"
+  loop: "{{ xray_local_region_countries }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Select DNS protection sources
+  ansible.builtin.set_fact:
+    xray_dns_source_names: >-
+      {{ xray_state.dns_filter_lists | default([]) if xray_dns_profile == 'custom'
+         else xray_dns_profiles[xray_dns_profile].source_names }}
+
+- name: Validate custom DNS protection sources
+  ansible.builtin.assert:
+    that:
+      - xray_dns_profile != 'custom' or (xray_dns_source_names | length > 0)
+    fail_msg: >-
+      Custom DNS protection must include at least one source.
+
+- name: Validate DNS protection source names
+  ansible.builtin.assert:
+    that:
+      - item in xray_dns_sources
+    fail_msg: "Unsupported DNS protection source: {{ item }}"
+  loop: "{{ xray_dns_source_names }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Build selected DNS protection sources
+  ansible.builtin.set_fact:
+    xray_dns_selected_sources: "{{ xray_dns_source_names | map('extract', xray_dns_sources) | list }}"
+
+- name: Calculate selected DNS protection entries
+  ansible.builtin.set_fact:
+    xray_dns_selected_entries: >-
+      {{ xray_dns_selected_sources
+         | map(attribute='entries')
+         | map('regex_replace', '[^0-9]', '')
+         | map('int')
+         | list
+         | sum }}
+
+- name: Estimate DNS protection memory
+  ansible.builtin.set_fact:
+    xray_dns_estimated_rpz_memory_mb: >-
+      {{ ((xray_dns_selected_entries | int) * (xray_dns_reference_memory_mb | int)
+          / (xray_dns_reference_entries | int)) | round(0, 'ceil') | int }}
+
+- name: Calculate DNS runtime memory
+  ansible.builtin.set_fact:
+    xray_dns_runtime_memory_mb: >-
+      {{ (xray_dns_estimated_rpz_memory_mb | int) + (xray_dns_memory_headroom_mb | int) }}
+
+- name: Calculate DNS protection resource floor
+  ansible.builtin.set_fact:
+    xray_dns_required_vcpus: "{{ xray_dns_profiles[xray_dns_profile].min_vcpus | int }}"
+    xray_dns_required_memory_mb: >-
+      {{ [xray_dns_profiles[xray_dns_profile].min_memory_mb | int,
+          (((xray_dns_runtime_memory_mb | int) + (xray_dns_memory_round_mb | int) - 1)
+           // (xray_dns_memory_round_mb | int)) * (xray_dns_memory_round_mb | int)] | max }}
+
+- name: Validate VPS resources for DNS protection
+  ansible.builtin.assert:
+    that:
+      - (ansible_facts.processor_vcpus | int) >= (xray_dns_required_vcpus | int)
+      - (ansible_facts.memtotal_mb | int) >= (xray_dns_required_memory_mb | int)
+    fail_msg: >-
+      DNS profile '{{ xray_dns_profile }}' requires at least
+      {{ xray_dns_required_vcpus }} vCPU and
+      {{ xray_dns_required_memory_mb }} MB RAM.
+      The selected sources contain approximately {{ xray_dns_selected_entries }} entries
+      and require about {{ xray_dns_estimated_rpz_memory_mb }} MB for RPZ data.
+      Detected {{ ansible_facts.processor_vcpus }} vCPU and
+      {{ ansible_facts.memtotal_mb }} MB RAM.
+  when: xray_dns_profile != 'disabled'
+
 - name: Create Xray directory
   ansible.builtin.file:
     path: "{{ xray_dir }}"
@@ -19,6 +114,36 @@
     owner: root
     group: root
     mode: "0750"
+
+- name: Create Unbound directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ xray_unbound_dir }}", mode: "0750" }
+  when: xray_dns_profile != 'disabled'
+
+- name: Render Unbound configuration
+  ansible.builtin.template:
+    src: unbound.conf.j2
+    dest: "{{ xray_unbound_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: xray_unbound_config_render
+  when: xray_dns_profile != 'disabled'
+
+- name: Render Unbound Dockerfile
+  ansible.builtin.template:
+    src: unbound.Dockerfile.j2
+    dest: "{{ xray_unbound_dockerfile_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: xray_dns_profile != 'disabled'
 
 - name: Validate access key pairs
   ansible.builtin.assert:
@@ -49,6 +174,65 @@
     group: root
     mode: "0600"
   notify: Restart Xray
+
+- name: Build Unbound image when sources changed
+  ansible.builtin.shell: |
+    set -eu
+    state_dir="{{ xray_dir }}/.build-fingerprints"
+    state_file="$state_dir/unbound.sha256"
+    mkdir -p "$state_dir"
+    fingerprint="$({
+      sha256sum compose.yml
+      sha256sum unbound/Dockerfile
+      sha256sum unbound/unbound.conf
+    } | sha256sum | awk '{print $1}')"
+    old_fingerprint="$(cat "$state_file" 2>/dev/null || true)"
+    if docker image inspect local/xray-tui-unbound:latest >/dev/null 2>&1 \
+      && [ "$fingerprint" = "$old_fingerprint" ]; then
+      exit 0
+    fi
+    docker compose --file compose.yml build unbound
+    printf '%s\n' "$fingerprint" > "$state_file"
+    echo "xray-unbound-built"
+  args:
+    chdir: "{{ xray_dir }}"
+    executable: /bin/bash
+  register: xray_unbound_build
+  changed_when: "'xray-unbound-built' in xray_unbound_build.stdout"
+  when: xray_dns_profile != 'disabled'
+
+- name: Validate Unbound configuration
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --file
+      - "{{ xray_compose_path }}"
+      - run
+      - --rm
+      - --no-deps
+      - unbound
+      - unbound-checkconf
+      - /opt/unbound/etc/unbound/unbound.conf
+  changed_when: false
+  when: xray_dns_profile != 'disabled'
+
+- name: Restart Unbound after configuration change
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --file
+      - "{{ xray_compose_path }}"
+      - up
+      - --detach
+      - --force-recreate
+      - --no-deps
+      - unbound
+  changed_when: true
+  when:
+    - xray_dns_profile != 'disabled'
+    - xray_unbound_config_render.changed
 
 - name: Validate Xray configuration in a disposable container
   ansible.builtin.command:
@@ -84,3 +268,4 @@
     files:
       - compose.yml
     state: present
+    remove_orphans: true

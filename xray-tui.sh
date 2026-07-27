@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+COUNTRIES_FILE="$ROOT_DIR/data/countries.tsv"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 VAULT_FILE="$STATE_DIR/vault.json"
 HOST_STATE_DIR="${XRAY_TUI_HOST_STATE_DIR:-$STATE_DIR}"
@@ -27,6 +28,7 @@ if [[ -t 1 ]]; then
     COLOR_WARN=$'\033[38;5;221m'
     COLOR_ERROR=$'\033[38;5;203m'
     COLOR_MUTED=$'\033[38;5;245m'
+    COLOR_MUTED_ITALIC=$'\033[3;38;5;245m'
 else
     COLOR_RESET=''
     COLOR_TEXT=''
@@ -36,6 +38,7 @@ else
     COLOR_WARN=''
     COLOR_ERROR=''
     COLOR_MUTED=''
+    COLOR_MUTED_ITALIC=''
 fi
 
 cleanup() {
@@ -369,7 +372,7 @@ delete_vault() {
         menu_control i info
         menu_control x exit
         echo
-        read -r -e -p '?: ' confirm
+        if ! read_required_choice confirm '?: '; then continue; fi
         case "$confirm" in
             [Yy]) break ;;
             [Nn]|b) return 0 ;;
@@ -451,6 +454,19 @@ restore_vault() {
     read -r -p "Press Enter to continue" _
 }
 
+read_required_choice() {
+    local variable="$1" prompt="$2" value=''
+    if ! read -r -e -p "$prompt" value; then
+        return 1
+    fi
+    if [[ -z "$value" ]]; then
+        invalid_choice
+        clear_screen
+        return 2
+    fi
+    printf -v "$variable" '%s' "$value"
+}
+
 prompt_nav() {
     echo
     menu_control b back
@@ -458,7 +474,191 @@ prompt_nav() {
     menu_control i info
     menu_control x exit
     echo
-    read -r -e -p '?: ' REPLY
+    read_required_choice REPLY '?: '
+}
+
+add_node_ip_prompt() {
+    local ip_value error=''
+    while true; do
+        clear_screen
+        printf '%s\n' "Add VPN server"
+        printf '%s\n' "Enter the public IPv4 address of the VPS."
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice ip_value 'Enter VPS IP: '; then
+            continue
+        fi
+        case "$ip_value" in
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; error='' ;;
+            x|X) exit_tui ;;
+            *)
+                if valid_ipv4 "$ip_value"; then
+                    ADD_NODE_HOST="$ip_value"
+                    return 0
+                fi
+                error="Invalid VPS IP address. Enter an IPv4 address."
+                ;;
+        esac
+    done
+}
+
+add_node_user_prompt() {
+    local user_value error=''
+    while true; do
+        clear_screen
+        printf '%s\n' "Add VPN server"
+        printf '%s\n' "Enter the SSH user used for the first VPS connection."
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "[!] Press Enter to use the default value shown in [brackets]." "$COLOR_RESET"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read -r -e -p 'Enter VPS user [root]: ' user_value; then
+            return 1
+        fi
+        case "$user_value" in
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; error='' ;;
+            x|X) exit_tui ;;
+            '') ADD_NODE_USER=root; return 0 ;;
+            *)
+                if [[ "$user_value" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]]; then
+                    ADD_NODE_USER="$user_value"
+                    return 0
+                fi
+                error="Invalid SSH user. Enter a valid Linux user name."
+                ;;
+        esac
+    done
+}
+
+add_node_port_prompt() {
+    local port_value error=''
+    while true; do
+        clear_screen
+        printf '%s\n' "Add VPN server"
+        printf '%s\n' "Enter the SSH port used for the first VPS connection."
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "[!] Press Enter to use the default value shown in [brackets]." "$COLOR_RESET"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read -r -e -p 'Enter VPS port [22]: ' port_value; then
+            return 1
+        fi
+        case "$port_value" in
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; error='' ;;
+            x|X) exit_tui ;;
+            '') ADD_NODE_PORT=22; return 0 ;;
+            *)
+                if [[ "$port_value" =~ ^[0-9]+$ ]] && ((10#$port_value >= 1 && 10#$port_value <= 65535)); then
+                    ADD_NODE_PORT="$port_value"
+                    return 0
+                fi
+                error="Invalid VPS port. Enter a number from 1 to 65535."
+                ;;
+        esac
+    done
+}
+
+add_node_password_prompt() {
+    clear_screen
+    printf '%s\n' "Add VPN server"
+    printf '%s\n' "Enter the password for the first VPS connection."
+    printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "The password is used only to verify access and start deployment." "$COLOR_RESET"
+    echo
+    if ! read_ascii_secret 'Enter VPS password: '; then
+        return 1
+    fi
+    ADD_NODE_PASSWORD="$REPLY"
+}
+
+add_node_domain_prompt() {
+    local domain_value error=''
+    while true; do
+        clear_screen
+        printf '%s\n' "Add VPN server"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "This domain helps the VPN connection look like normal HTTPS traffic." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Use a real HTTPS website that supports TLS 1.3." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Press Enter to use the default value shown in [brackets]." "$COLOR_RESET"
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read -r -e -p 'Enter domain [github.com]: ' domain_value; then
+            return 1
+        fi
+        case "$domain_value" in
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; error='' ;;
+            x|X) exit_tui ;;
+            '') domain_value=github.com ;;
+        esac
+        if [[ "$domain_value" == b || "$domain_value" == B || "$domain_value" == m || "$domain_value" == M || "$domain_value" == i || "$domain_value" == I || "$domain_value" == x || "$domain_value" == X ]]; then
+            continue
+        fi
+        if valid_server_name "$domain_value"; then
+            ADD_NODE_SERVER_NAME="${domain_value,,}"
+            return 0
+        fi
+        error="Invalid domain. Use an HTTPS hostname such as github.com."
+    done
+}
+
+review_node_connection() {
+    local choice
+    while true; do
+        clear_screen
+        printf '%s\n' "Review VPS connection"
+        echo
+        printf '%-16s %s\n' "IP address:" "$1"
+        printf '%-16s %s\n' "User:" "$2"
+        printf '%-16s %s\n' "Port:" "$3"
+        printf '%-16s %s\n' "Password:" "entered"
+        echo
+        menu_control a continue
+        menu_control e edit
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice choice '?: '; then
+            continue
+        fi
+        case "$choice" in
+            a|A) return 0 ;;
+            e|E) return 1 ;;
+            b|B) return 2 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 2 ;;
+            i|I) show_info general ;;
+            x|X) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
 }
 
 menu_heading() {
@@ -471,6 +671,62 @@ menu_option() {
 
 menu_control() {
     printf '%s%s.%s %s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET" "$COLOR_TEXT" "$2" "$COLOR_RESET"
+}
+
+show_dns_profile_matrix() {
+    local separator
+    separator="    $(printf '%*s' 103 '' | tr ' ' '-')"
+    printf '%s\n' "PROFILE LIST MATRIX"
+    printf '%s\n' ""
+    printf '    %-45s %9s %9s %9s %9s %17s\n' \
+        "List" "Minimal" "Optimal" "Full" "Maximum" "Approx. entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "URLhaus" "ON" "ON" "ON" "ON" "~611 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Threat Intelligence Feeds Mini" "-" "ON" "-" "-" "160,610 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Encrypted DNS" "-" "-" "ON" "-" "3,423 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Encrypted DNS/VPN/Proxy Bypass" "-" "-" "-" "ON" "17,591 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "AdGuard CNAME Trackers" "-" "-" "ON" "ON" "~100,087 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "AdGuard Mail Trackers" "-" "-" "ON" "ON" "~98,595 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "ThreatFox" "-" "-" "ON" "ON" "~45,617 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Pro++" "-" "-" "ON" "-" "272,267 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Ultimate" "-" "-" "-" "ON" "294,364 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Threat Intelligence Feeds Medium" "-" "-" "-" "ON" "417,094 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Threat Intelligence IPs" "-" "-" "-" "ON" "~54,609 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Dynamic DNS Threats" "-" "-" "optional" "ON" "1,524 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Suspicious Spam TLDs" "-" "-" "-" "optional" "~129 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' ""
+    printf '%s\n' "    Custom-only sources"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Pop-up Ads" "-" "optional" "included" "included" "56,598 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Adult Content" "-" "optional" "optional" "optional" "110,004 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Gambling Mini" "-" "optional" "optional" "optional" "94,060 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Gambling Medium" "-" "-" "optional" "optional" "155,276 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Gambling Full" "-" "-" "optional" "optional" "357,251 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Social Networks" "-" "-" "optional" "optional" "898 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "SafeSearch" "-" "-" "optional" "optional" "206 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Anti Piracy" "-" "-" "optional" "optional" "36,844 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' ""
+    printf '%s\n' "    Counts are upstream list values and may change when sources update."
 }
 
 show_info() {
@@ -487,6 +743,10 @@ show_info() {
         red=''
     fi
 
+    info_desc() {
+        printf '    %b%s%b\n' "$gray" "$1" "$reset"
+    }
+
     clear_screen
     echo
     case "$topic" in
@@ -496,94 +756,213 @@ show_info() {
             printf '    %bPartial%b          %bXray is running and only one VPN port is reachable.%b\n' "$yellow" "$reset" "$gray" "$reset"
             printf '    %bVPN unavailable%b  %bThe VPS responded, but Xray is not confirmed running.%b\n' "$red" "$reset" "$gray" "$reset"
             printf '    %bUnreachable%b      %bNo VPN or management port responded; DPI or a provider firewall may be involved.%b\n' "$red" "$reset" "$gray" "$reset"
+            echo
+            printf '%b  Selected server menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Manage VPN server"
+            info_desc "       Open server operations, ad and threat blocking, country blocking, or removal."
+            printf '%s\n' "    2. Manage access keys"
+            info_desc "       Show, add, or remove the VPN client keys for this server."
             ;;
         access_keys)
             printf '%b  Access keys:%b\n' "$blue" "$reset"
-            printf '%s\n' "    Each access key contains one Vision UUID and one XHTTP UUID."
-            printf '%s\n' "    Both UUIDs are deployed together and removed together."
-            printf '%s\n' "    You can add up to 50 access keys at once."
-            printf '%s\n' "    In the remove screen, enter a key number or the last number to remove all keys."
+            info_desc "Each access key contains one Vision UUID and one XHTTP UUID."
+            info_desc "Both UUIDs are deployed together and removed together."
+            info_desc "You can add up to 50 access keys at once."
+            info_desc "In the remove screen, enter a key number or the last number to remove all keys."
+            echo
+            printf '%b  Manage access keys menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Show"
+            info_desc "       Display the Vision and XHTTP connection links for each key."
+            printf '%s\n' "    2. Add"
+            info_desc "       Generate 1 to 50 new access keys and deploy them to the VPS."
+            printf '%s\n' "    3. Remove"
+            info_desc "       Remove one key, or choose the final number to remove all keys."
+            echo
+            printf '%b  Access-key screens:%b\n' "$blue" "$reset"
+            info_desc "Add: enter the number of keys to generate, from 1 to 50."
+            info_desc "Remove: select a key number, then confirm with y or cancel with n."
+            info_desc "Remove all: confirm that every Vision and XHTTP key should be deleted."
+            ;;
+        dns)
+            printf '%b  Block ads and threats:%b\n' "$blue" "$reset"
+            printf '    %-7s - %s\n' "Minimal" "malware and malicious websites."
+            printf '    %-7s - %s\n' "Optimal" "malware, phishing, scams and selected trackers."
+            printf '    %-7s - %s\n' "Full" "ads, tracking, telemetry and malware."
+            printf '    %-7s - %s\n' "Maximum" "broad threat protection and known DNS bypass services."
+            printf '    %-7s - %s\n' "Custom" "choose extra categories within the VPS resource limit."
+            info_desc "Full includes Encrypted DNS protection; Custom can disable it for TV compatibility."
+            info_desc "Blocked domains return NXDOMAIN. DNS filtering does not replace a firewall."
+            echo
+            printf '%b  Block ads and threats menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Disabled"
+            info_desc "       Remove DNS blocklists from the VPS."
+            printf '%s\n' "    2. Minimal"
+            info_desc "       Enable malware and malicious website protection."
+            printf '%s\n' "    3. Optimal"
+            info_desc "       Add phishing, scams, and selected tracker protection."
+            printf '%s\n' "    4. Full"
+            info_desc "       Add advertising, tracking, telemetry, and broader threat protection."
+            printf '%s\n' "    5. Maximum"
+            info_desc "       Add broad threat feeds and known DNS bypass service domains."
+            printf '%s\n' "    6. Custom"
+            info_desc "       Toggle individual lists and apply a resource-checked combination."
+            echo
+            show_dns_profile_matrix
+            echo
+            printf '%b  List descriptions:%b\n' "$blue" "$reset"
+            printf '    %-32s - %s\n' "URLhaus" "malware delivery and malicious website domains."
+            printf '    %-32s - %s\n' "Threat Intelligence Feeds Mini" "malware, phishing, scams and attacker infrastructure."
+            printf '    %-32s - %s\n' "Encrypted DNS" "known DoH and DoT resolver domains."
+            printf '    %-32s - %s\n' "DNS/VPN/Proxy Bypass" "known DoH, VPN and proxy service domains; not all exit-node IPs."
+            printf '    %-32s - %s\n' "CNAME Trackers" "trackers hidden behind CNAME DNS records."
+            printf '    %-32s - %s\n' "Mail Trackers" "tracking pixels and link-tracking domains in emails."
+            printf '    %-32s - %s\n' "ThreatFox" "malware indicators and command-and-control domains."
+            printf '    %-32s - %s\n' "Pro++" "ads, trackers, telemetry, malware, phishing and scams."
+            printf '    %-32s - %s\n' "Ultimate" "aggressive privacy and security filtering with higher false positives."
+            printf '    %-32s - %s\n' "Threat Intelligence Feeds Medium" "a larger malware, phishing, scam and attacker infrastructure feed."
+            printf '    %-32s - %s\n' "Threat Intelligence IPs" "IP-related threat indicators in RPZ form; not an IP firewall."
+            printf '    %-32s - %s\n' "Dynamic DNS Threats" "suspicious dynamic DNS used by malware and phishing."
+            printf '    %-32s - %s\n' "Suspicious Spam TLDs" "selected high-abuse TLDs; legitimate sites may be blocked."
+            printf '    %-32s - %s\n' "Pop-up Ads" "known pop-up and aggressive advertising domains."
+            printf '    %-32s - %s\n' "Adult Content" "adult and NSFW domains; not a complete parental-control system."
+            printf '    %-32s - %s\n' "Gambling Mini" "selected betting, casino and gambling domains."
+            printf '    %-32s - %s\n' "Gambling Medium" "a broader betting, casino and gambling domain list."
+            printf '    %-32s - %s\n' "Gambling Full" "the broadest betting, casino and gambling domain list."
+            printf '    %-32s - %s\n' "Social Networks" "selected social media domains."
+            printf '    %-32s - %s\n' "SafeSearch" "helps enforce safer search endpoints."
+            printf '    %-32s - %s\n' "Anti Piracy" "torrent, warez and known piracy domains."
+            printf '    %-32s : %s\n' "Source repository" "https://github.com/hagezi/dns-blocklists"
+            echo
+            printf '%b  Custom selection:%b\n' "$blue" "$reset"
+            info_desc "Select a number to toggle a list. [ON] means it will be deployed."
+            info_desc "The selected lists are checked against the detected VPS CPU and RAM."
+            info_desc "Large alternatives are mutually exclusive: Pro++/Ultimate, TIF Mini/Medium, and Gambling sizes."
+            info_desc "Apply saves the selected lists in the Vault only after the VPS deployment succeeds."
+            ;;
+        local_region)
+            printf '%b  Block countries:%b\n' "$blue" "$reset"
+            info_desc "Select one or more countries whose destinations should be blocked on the VPS."
+            info_desc "This is a fallback policy for clients that cannot route local traffic directly."
+            info_desc "Xray blocks IP ranges assigned to the selected countries."
+            info_desc "For Russia, .ru and .рф domains are also matched when RU is selected."
+            info_desc "Other country domains may use foreign CDNs and are not a complete domain-zone block."
+            info_desc "This does not route traffic directly and does not guarantee that a VPN will be undetectable."
+            info_desc "Shared hosting, CDNs, geolocation databases, and country domains can cause false positives."
+            info_desc "The policy is stored for this VPN node and applies to all its access keys."
+            echo
+            printf '%b  Block countries menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Select countries"
+            info_desc "       Search by country name or ISO code and toggle multiple checkboxes."
+            printf '%s\n' "    2. Disable policy"
+            info_desc "       Remove all country blocking rules from this VPN node."
+            info_desc "Use Apply after selecting countries; the Vault changes only after deployment succeeds."
             ;;
         server)
             printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
-            printf '%s\n' "    Check the VPS connection, Xray container, and VPN ports."
-            printf '%s\n' "    Restart the Xray VPN service when it is not responding."
-            printf '%s\n' "    Rotate the SSH management key without changing VPN access keys."
-            printf '%s\n' "    Removing a server cleans up the remote installation before changing the Vault."
+            printf '%s\n' "    1. Check VPN status"
+            info_desc "       Test management SSH, the Xray container, and both VPN ports."
+            printf '%s\n' "    2. Restart VPN server"
+            info_desc "       Restart the Xray Docker stack without changing keys or profiles."
+            printf '%s\n' "    3. Block ads and threats"
+            info_desc "       Choose protection against ads, trackers, malware, phishing, and other known threats."
+            printf '%s\n' "    4. Block countries"
+            info_desc "       Stop connections to selected countries when direct bypass is unavailable."
+            printf '%s\n' "    5. Rotate SSH key"
+            info_desc "       Generate a new management key, verify it, then revoke the old key."
+            printf '%s\n' "    6. Remove VPN server"
+            info_desc "       Clean Xray and Docker from the VPS before removing its Vault entry."
+            printf '%s\n' "    7. Open SSH session"
+            info_desc "       Connect as the saved management user using the saved SSH key and port."
             ;;
         vault)
             printf '%b  Vault:%b\n' "$blue" "$reset"
-            printf '%s\n' "    The Vault is encrypted local storage for VPS access data and VPN keys."
-            printf '%s\n' "    It is unlocked only when an operation needs the saved data."
-            printf '%s\n' "    Keep the Vault password safe: it cannot be recovered from the file."
+            info_desc "The Vault is encrypted local storage for VPS access data and VPN keys."
+            info_desc "It is unlocked only when an operation needs the saved data."
+            info_desc "Keep the Vault password safe: it cannot be recovered from the file."
+            echo
+            printf '%b  Vault menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Change encryption password"
+            info_desc "       Re-encrypt the Vault with a new local password."
+            printf '%s\n' "    2. Backup encrypted state"
+            info_desc "       Create a copy of the encrypted Vault for recovery."
+            printf '%s\n' "    3. Restore encrypted state"
+            info_desc "       Replace the current Vault with a selected encrypted backup."
+            printf '%s\n' "    4. Delete Vault"
+            info_desc "       Delete local Vault data, backups, VPS credentials, and VPN keys."
+            info_desc "When no Vault exists, option 1 creates it and option 2 restores a backup."
             ;;
         removal)
             printf '%b  Remote cleanup:%b\n' "$blue" "$reset"
-            printf '%s\n' "    Xray, Docker, updater services, and the deploy user are removed from the VPS."
-            printf '%s\n' "    The original SSH configuration is restored from its backup."
-            printf '%s\n' "    The server stays in the Vault if remote cleanup fails."
+            info_desc "Confirm with y to remove the VPN server from the VPS."
+            info_desc "Cancel with n or b to leave the VPS and Vault unchanged."
+            info_desc "Xray, Docker, updater services, and the deploy user are removed from the VPS."
+            info_desc "The original SSH configuration is restored from its backup."
+            info_desc "The server stays in the Vault if remote cleanup fails."
+            info_desc "After a failed cleanup, r retries with the initial SSH credentials."
+            info_desc "You can remove only the local Vault entry with y after a failed cleanup; verify the VPS separately."
             ;;
         *)
             printf '%b  Xray TUI:%b\n' "$blue" "$reset"
-            printf '%s\n' "    This tool installs and manages your Xray VPN servers."
-            printf '%s\n' "    VPS access data and VPN keys are kept in the encrypted Vault."
+            info_desc "This tool installs and manages your Xray VPN servers."
+            info_desc "VPS access data and VPN keys are kept in the encrypted Vault."
             echo
             printf '%b  Main menu:%b\n' "$blue" "$reset"
             echo
             printf '%s\n' "  1. VPN servers"
-            printf '%s\n' "     - View the VPN servers saved in the Vault."
-            printf '%s\n' "     - Check the VPS, SSH, Xray, and VPN port status."
-            printf '%s\n' "     - Select a server to manage it."
-            printf '%s\n' "     - If there are no servers, add one with option 2 first."
+            info_desc " - View the VPN servers saved in the Vault."
+            info_desc " - Check the VPS, SSH, Xray, and VPN port status."
+            info_desc " - Select a server to manage it."
+            info_desc " - If there are no servers, add one with option 2 first."
             echo
             printf '%s\n' "     Selected server menu:"
             printf '%s\n' "     1. Manage VPN server"
-            printf '%s\n' "        Check status, restart Xray, rotate the SSH key, or remove the server."
+            info_desc "        Check status, restart Xray, manage DNS and country policy, rotate the SSH key, or remove the server."
             printf '%s\n' "     2. Manage access keys"
-            printf '%s\n' "        Show, add, or remove VPN access keys for this server."
+            info_desc "        Show, add, or remove VPN access keys for this server."
             echo
             printf '%s\n' "  2. Add VPN server"
-            printf '%s\n' "     - Enter the VPS IP address, SSH user, SSH port, and password."
-            printf '%s\n' "     - Enter a Reality camouflage domain, or use github.com by default."
-            printf '%s\n' "     - Install Docker, Xray, automatic updates, and SSH hardening."
-            printf '%s\n' "     - Generate VPN access keys and save all connection data in the Vault."
-            printf '%s\n' "     - Repeating setup for the same VPS is safe and idempotent."
+            info_desc " - Enter the VPS IP address, SSH user, SSH port, and password on separate screens."
+            info_desc " - Review the connection details, then let the manager check SSH access and VPS resources."
+            info_desc " - Enter a Reality camouflage domain, or use github.com by default."
+            info_desc " - Choose a profile to block ads, trackers, malware, phishing, and other threats."
+            info_desc "   The menu checks VPS resources before allowing a profile."
+            info_desc " - Install Docker, Xray, automatic updates, and SSH hardening."
+            info_desc " - Generate VPN access keys and save all connection data in the Vault."
+            info_desc " - Repeating setup for the same VPS is safe and idempotent."
             echo
             printf '%s\n' "  3. Vault"
             printf '%s\n' "     1. Change encryption password"
-            printf '%s\n' "        Change the password protecting the local Vault."
+            info_desc "        Change the password protecting the local Vault."
             printf '%s\n' "     2. Backup encrypted state"
-            printf '%s\n' "        Create a backup containing the encrypted Vault file."
+            info_desc "        Create a backup containing the encrypted Vault file."
             printf '%s\n' "     3. Restore encrypted state"
-            printf '%s\n' "        Replace the current Vault with a selected encrypted backup."
+            info_desc "        Replace the current Vault with a selected encrypted backup."
             printf '%s\n' "     4. Delete Vault"
-            printf '%s\n' "        Delete local VPS access data, VPN keys, and Vault backups."
+            info_desc "        Delete local VPS access data, VPN keys, and Vault backups."
             echo
             printf '%s\n' "  Manage VPN server"
             printf '%s\n' "     1. Check VPN status"
-            printf '%s\n' "        Test SSH access, the Xray container, and both VPN ports."
+            info_desc "        Test SSH access, the Xray container, and both VPN ports."
             printf '%s\n' "     2. Restart VPN server"
-            printf '%s\n' "        Restart the Xray Docker stack without changing access keys."
-            printf '%s\n' "     3. Rotate SSH key"
-            printf '%s\n' "        Generate a new deploy SSH key and revoke the old one."
-            printf '%s\n' "     4. Remove VPN server"
-            printf '%s\n' "        Remove the Xray installation and clean up the VPS."
-            printf '%s\n' "        The Vault is changed only after remote cleanup succeeds."
+            info_desc "        Restart the Xray Docker stack without changing access keys."
+            printf '%s\n' "     3. Block ads and threats"
+            info_desc "        Enable, disable, or change protection against ads and known threats."
+            printf '%s\n' "     4. Block countries"
+            info_desc "        Stop connections to selected countries when client bypass is unavailable."
+            printf '%s\n' "     5. Rotate SSH key"
+            info_desc "        Generate a new deploy SSH key and revoke the old one."
+            printf '%s\n' "     6. Remove VPN server"
+            info_desc "        Remove the Xray installation and clean up the VPS."
+            info_desc "        The Vault is changed only after remote cleanup succeeds."
             echo
             printf '%s\n' "  Manage access keys"
             printf '%s\n' "     1. Show"
-            printf '%s\n' "        Display the Vision and XHTTP connection links for each key."
+            info_desc "        Display the Vision and XHTTP connection links for each key."
             printf '%s\n' "     2. Add"
-            printf '%s\n' "        Add from 1 to 50 access keys and deploy them to the VPS."
+            info_desc "        Add from 1 to 50 access keys and deploy them to the VPS."
             printf '%s\n' "     3. Remove"
-            printf '%s\n' "        Select a key by number and remove both protocol UUIDs together."
-            printf '%s\n' "        Choose the last number to remove every access key at once."
-            echo
-            printf '%b  Navigation:%b\n' "$blue" "$reset"
-            printf '%s\n' "  b. back   Return to the previous menu."
-            printf '%s\n' "  m. main   Return to the main menu."
-            printf '%s\n' "  i. info   Show help for the current screen."
-            printf '%s\n' "  x. exit   Exit Xray TUI and clear the screen."
+            info_desc "        Select a key by number and remove both protocol UUIDs together."
+            info_desc "        Choose the last number to remove every access key at once."
             ;;
     esac
     echo
@@ -618,9 +997,8 @@ exit_tui() {
 }
 
 invalid_choice() {
-    printf '%s\n' "Invalid input. Use the English keyboard layout."
+    printf '%s\n' "Invalid input. Enter a menu option using the English keyboard layout."
     sleep 1
-    clear_screen
 }
 
 show_nodes() {
@@ -663,8 +1041,580 @@ show_node_status() {
     rm -f "$state"
 }
 
+open_node_ssh_session() {
+    local node="$1" state host user port private_key key_file ssh_status
+    state="$(mktemp "$STATE_DIR/.ssh-session.XXXXXX")"
+    if ! read_vault_state "$state"; then
+        rm -f "$state"
+        return 1
+    fi
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$state")"
+    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$state")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$state")"
+    private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$state")"
+    rm -f "$state"
+
+    if [[ -z "$host" || -z "$user" || -z "$port" || -z "$private_key" ]]; then
+        clear_screen
+        printf '%s\n' "Saved SSH management credentials are incomplete for this VPN server."
+        wait_action_return
+        return 1
+    fi
+
+    key_file="$(mktemp /tmp/xray-ssh-session.XXXXXX)"
+    chmod 600 "$key_file"
+    printf '%s\n' "$private_key" >"$key_file"
+    unset private_key
+
+    clear_screen
+    printf '%s\n' "Opening SSH session to ${user}@${host}:${port}."
+    printf '%s\n' "Exit the remote shell to return to Xray TUI."
+    echo
+    if ssh -tt -i "$key_file" -p "$port" \
+        -o IdentitiesOnly=yes \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=8 \
+        -o ConnectionAttempts=1 \
+        "$user@$host"; then
+        ssh_status=0
+    else
+        ssh_status=$?
+    fi
+    rm -f "$key_file"
+    echo
+    if ((ssh_status != 0)); then
+        printf '%s\n' "SSH session ended with exit code ${ssh_status}."
+    else
+        printf '%s\n' "SSH session closed."
+    fi
+    wait_action_return
+    return 0
+}
+
 yaml_scalar() {
     python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
+probe_vps_resources() {
+    local host="$1" user="$2" port="$3" password="$4"
+    local inventory_dir inventory log password_yaml facts_line
+    inventory_dir="$(mktemp -d /tmp/xray-preflight.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    log="$inventory_dir/ansible.log"
+    password_yaml="$(yaml_scalar "$password")"
+    printf '%s\n' \
+        "---" \
+        "all:" \
+        "  children:" \
+        "    xray_nodes:" \
+        "      hosts:" \
+        "        preflight:" \
+        "          ansible_host: $host" \
+        "          ansible_user: $user" \
+        "          ansible_port: $port" \
+        "          ansible_password: $password_yaml" \
+        "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o PubkeyAuthentication=no -o PreferredAuthentications=password'" \
+        >"$inventory"
+    chmod 600 "$inventory"
+    unset password password_yaml
+
+    clear_screen
+    printf '%s\n' "Checking VPS resources..."
+    if ! ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1; then
+        cat "$log"
+        rm -rf "$inventory_dir"
+        printf '%s\n' "The VPS resources could not be checked. Deployment was not started."
+        wait_action_return
+        return 1
+    fi
+    facts_line="$(grep -o 'XRAY_RESOURCE_FACTS vcpus=[0-9][0-9]* ram_mb=[0-9][0-9]*' "$log" | tail -n 1 || true)"
+    if [[ ! "$facts_line" =~ vcpus=([0-9]+)[[:space:]]ram_mb=([0-9]+) ]]; then
+        cat "$log"
+        rm -rf "$inventory_dir"
+        printf '%s\n' "The VPS resource report was invalid. Deployment was not started."
+        wait_action_return
+        return 1
+    fi
+    VPS_VCPUS="${BASH_REMATCH[1]}"
+    VPS_RAM_MB="${BASH_REMATCH[2]}"
+    rm -rf "$inventory_dir"
+    return 0
+}
+
+probe_vps_resources_with_key() {
+    local host="$1" user="$2" port="$3" private_key="$4"
+    local inventory_dir inventory key_file log facts_line
+    inventory_dir="$(mktemp -d /tmp/xray-preflight.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    key_file="$inventory_dir/id_ed25519"
+    log="$inventory_dir/ansible.log"
+    printf '%s\n' "$private_key" >"$key_file"
+    chmod 600 "$key_file"
+    printf '%s\n' \
+        "---" \
+        "all:" \
+        "  children:" \
+        "    xray_nodes:" \
+        "      hosts:" \
+        "        preflight:" \
+        "          ansible_host: $host" \
+        "          ansible_user: $user" \
+        "          ansible_port: $port" \
+        "          ansible_ssh_private_key_file: $key_file" \
+        "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" \
+        >"$inventory"
+    chmod 600 "$inventory"
+
+    clear_screen
+    printf '%s\n' "Checking VPS resources..."
+    if ! ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1; then
+        cat "$log"
+        rm -rf "$inventory_dir"
+        printf '%s\n' "The VPS resources could not be checked. The DNS profile was not changed."
+        wait_action_return
+        return 1
+    fi
+    facts_line="$(grep -o 'XRAY_RESOURCE_FACTS vcpus=[0-9][0-9]* ram_mb=[0-9][0-9]*' "$log" | tail -n 1 || true)"
+    if [[ ! "$facts_line" =~ vcpus=([0-9]+)[[:space:]]ram_mb=([0-9]+) ]]; then
+        cat "$log"
+        rm -rf "$inventory_dir"
+        printf '%s\n' "The VPS resource report was invalid. The DNS profile was not changed."
+        wait_action_return
+        return 1
+    fi
+    VPS_VCPUS="${BASH_REMATCH[1]}"
+    VPS_RAM_MB="${BASH_REMATCH[2]}"
+    rm -rf "$inventory_dir"
+    return 0
+}
+
+dns_source_label() {
+    case "$1" in
+        urlhaus) printf '%s' "URLhaus" ;;
+        hagezi-tif-mini) printf '%s' "HaGeZi Threat Intelligence Feeds Mini" ;;
+        hagezi-doh) printf '%s' "HaGeZi Encrypted DNS" ;;
+        hagezi-bypass) printf '%s' "HaGeZi Encrypted DNS/VPN/Proxy Bypass" ;;
+        adguard-cname-trackers) printf '%s' "AdGuard CNAME Trackers" ;;
+        adguard-cname-mail) printf '%s' "AdGuard Mail Trackers" ;;
+        threatfox) printf '%s' "ThreatFox" ;;
+        hagezi-pro-plus) printf '%s' "HaGeZi Pro++" ;;
+        hagezi-ultimate) printf '%s' "HaGeZi Ultimate" ;;
+        hagezi-tif-medium) printf '%s' "HaGeZi Threat Intelligence Feeds Medium" ;;
+        hagezi-tif-ips) printf '%s' "Threat Intelligence IPs" ;;
+        hagezi-dyndns) printf '%s' "Dynamic DNS Threats" ;;
+        hagezi-spam-tlds) printf '%s' "Suspicious Spam TLDs" ;;
+        hagezi-popup-ads) printf '%s' "Pop-up Ads" ;;
+        hagezi-nsfw) printf '%s' "Adult Content" ;;
+        hagezi-gambling-mini) printf '%s' "Gambling Mini" ;;
+        hagezi-gambling-medium) printf '%s' "Gambling Medium" ;;
+        hagezi-gambling-full) printf '%s' "Gambling Full" ;;
+        hagezi-social) printf '%s' "Social Networks" ;;
+        hagezi-safesearch) printf '%s' "SafeSearch" ;;
+        hagezi-anti-piracy) printf '%s' "Anti Piracy" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+dns_source_entries() {
+    case "$1" in
+        urlhaus) printf '%s' 611 ;;
+        hagezi-tif-mini) printf '%s' 160610 ;;
+        hagezi-doh) printf '%s' 3423 ;;
+        hagezi-bypass) printf '%s' 17591 ;;
+        adguard-cname-trackers) printf '%s' 100087 ;;
+        adguard-cname-mail) printf '%s' 98595 ;;
+        threatfox) printf '%s' 45617 ;;
+        hagezi-pro-plus) printf '%s' 272267 ;;
+        hagezi-ultimate) printf '%s' 294364 ;;
+        hagezi-tif-medium) printf '%s' 417094 ;;
+        hagezi-tif-ips) printf '%s' 54609 ;;
+        hagezi-dyndns) printf '%s' 1524 ;;
+        hagezi-spam-tlds) printf '%s' 129 ;;
+        hagezi-popup-ads) printf '%s' 56598 ;;
+        hagezi-nsfw) printf '%s' 110004 ;;
+        hagezi-gambling-mini) printf '%s' 94060 ;;
+        hagezi-gambling-medium) printf '%s' 155276 ;;
+        hagezi-gambling-full) printf '%s' 357251 ;;
+        hagezi-social) printf '%s' 898 ;;
+        hagezi-safesearch) printf '%s' 206 ;;
+        hagezi-anti-piracy) printf '%s' 36844 ;;
+        *) printf '%s' 0 ;;
+    esac
+}
+
+dns_profile_min_vcpus() {
+    case "$1" in
+        disabled) printf '%s' 0 ;;
+        minimal|optimal|custom) printf '%s' 1 ;;
+        full|maximum) printf '%s' 2 ;;
+        *) printf '%s' 99 ;;
+    esac
+}
+
+dns_profile_min_memory() {
+    case "$1" in
+        disabled) printf '%s' 0 ;;
+        minimal) printf '%s' 1280 ;;
+        optimal) printf '%s' 1280 ;;
+        full) printf '%s' 1792 ;;
+        maximum) printf '%s' 2304 ;;
+        custom) printf '%s' 768 ;;
+        *) printf '%s' 999999 ;;
+    esac
+}
+
+dns_profile_is_available() {
+    local profile="$1"
+    if [[ "$profile" == "custom" && -n "${DNS_FILTER_LISTS:-}" ]]; then
+        ((VPS_VCPUS >= $(dns_profile_min_vcpus "$profile") && VPS_RAM_MB >= $(dns_custom_memory_floor)))
+    else
+        ((VPS_VCPUS >= $(dns_profile_min_vcpus "$profile") && VPS_RAM_MB >= $(dns_profile_min_memory "$profile")))
+    fi
+}
+
+dns_custom_has_source() {
+    [[ ",${DNS_FILTER_LISTS:-}," == *",$1,"* ]]
+}
+
+dns_custom_toggle_source() {
+    local source="$1" current="${DNS_FILTER_LISTS:-}" updated
+    if dns_custom_has_source "$source"; then
+        updated=",${current},"
+        updated="${updated/,${source},/,}"
+        updated="${updated#,}"
+        updated="${updated%,}"
+        DNS_FILTER_LISTS="$updated"
+    else
+        DNS_FILTER_LISTS="${current:+$current,}$source"
+    fi
+}
+
+dns_custom_validate() {
+    local gambling_count=0 source
+    dns_custom_has_source hagezi-pro-plus && dns_custom_has_source hagezi-ultimate && {
+        printf '%s\n' "Choose either HaGeZi Pro++ or HaGeZi Ultimate, not both."
+        return 1
+    }
+    dns_custom_has_source hagezi-tif-mini && dns_custom_has_source hagezi-tif-medium && {
+        printf '%s\n' "Choose either TIF Mini or TIF Medium, not both."
+        return 1
+    }
+    for source in hagezi-gambling-mini hagezi-gambling-medium hagezi-gambling-full; do
+        dns_custom_has_source "$source" && gambling_count=$((gambling_count + 1))
+    done
+    if ((gambling_count > 1)); then
+        printf '%s\n' "Choose one Gambling list size."
+        return 1
+    fi
+    return 0
+}
+
+dns_custom_entries() {
+    local total=0 source
+    IFS=',' read -r -a selected <<<"${DNS_FILTER_LISTS:-}"
+    for source in "${selected[@]}"; do
+        [[ -n "$source" ]] || continue
+        total=$((total + $(dns_source_entries "$source")))
+    done
+    printf '%s' "$total"
+}
+
+dns_custom_reference_entries() {
+    printf '%s' 520600
+}
+
+dns_custom_reference_memory_mb() {
+    printf '%s' 600
+}
+
+dns_custom_memory_headroom_mb() {
+    printf '%s' 1024
+}
+
+dns_custom_memory_round_mb() {
+    printf '%s' 256
+}
+
+dns_custom_estimated_rpz_memory() {
+    local entries="$(dns_custom_entries)"
+    local reference_entries="$(dns_custom_reference_entries)"
+    local reference_memory="$(dns_custom_reference_memory_mb)"
+    local estimate=$(( (entries * reference_memory + reference_entries - 1) / reference_entries ))
+    ((estimate < 1)) && estimate=1
+    printf '%s' "$estimate"
+}
+
+dns_custom_memory_floor() {
+    local estimated="$(dns_custom_estimated_rpz_memory)"
+    local headroom="$(dns_custom_memory_headroom_mb)"
+    local round="$(dns_custom_memory_round_mb)"
+    local required=$((estimated + headroom))
+    local floor=$(( ((required + round - 1) / round) * round ))
+    ((floor < 768)) && floor=768
+    printf '%s' "$floor"
+}
+
+country_name_for_code() {
+    local code="${1^^}"
+    awk -F '\t' -v code="$code" '$1 == code { print $2; exit }' "$COUNTRIES_FILE"
+}
+
+country_matches() {
+    local query="${1,,}"
+    awk -F '\t' -v query="$query" '
+        BEGIN { IGNORECASE = 1 }
+        $0 !~ /^#/ && (query == "*" || tolower($1) == query || index(tolower($2), query) > 0) { print }
+    ' "$COUNTRIES_FILE"
+}
+
+local_region_has_country() {
+    [[ ",${LOCAL_REGION_COUNTRIES:-}," == *",$1,"* ]]
+}
+
+local_region_toggle_country() {
+    local code="$1" current="${LOCAL_REGION_COUNTRIES:-}" updated
+    if local_region_has_country "$code"; then
+        updated=",${current},"
+        updated="${updated/,${code},/,}"
+        updated="${updated#,}"
+        updated="${updated%,}"
+        LOCAL_REGION_COUNTRIES="$updated"
+    else
+        LOCAL_REGION_COUNTRIES="${current:+$current,}$code"
+    fi
+}
+
+local_region_selected_summary() {
+    local code name
+    local -a selected=() labels=()
+    IFS=',' read -r -a selected <<<"${LOCAL_REGION_COUNTRIES:-}"
+    for code in "${selected[@]}"; do
+        [[ -n "$code" ]] || continue
+        name="$(country_name_for_code "$code")"
+        labels+=("${name:-Unknown} (${code^^})")
+    done
+    if ((${#labels[@]} == 0)); then
+        printf '%s' "Disabled"
+    else
+        local joined
+        (IFS=', '; joined="${labels[*]}"; printf '%s' "$joined")
+    fi
+}
+
+select_local_region_countries() {
+    local query="" choice index code name status page=0 page_size=20 page_count start end
+    local -a matches=()
+    while true; do
+        clear_screen
+        printf '%s\n' "Block countries"
+        printf '%s\n' "Select one or more countries to block on the VPN server."
+        printf '%s\n' "Current selection: $(local_region_selected_summary)"
+        echo
+        if [[ -z "$query" ]]; then
+            mapfile -t matches < <(country_matches "*")
+            page_count=$(( (${#matches[@]} + page_size - 1) / page_size ))
+            ((page_count > 0)) || page_count=1
+            ((page < 0)) && page=0
+            ((page >= page_count)) && page=$((page_count - 1))
+            start=$((page * page_size))
+            end=$((start + page_size))
+            ((end > ${#matches[@]})) && end=${#matches[@]}
+            printf 'Countries (page %d/%d)\n' "$((page + 1))" "$page_count"
+            printf '%s\n' "Select a number to toggle a country. [ON] means it will be blocked."
+            echo
+            for ((index = start; index < end; index++)); do
+                IFS=$'\t' read -r code name <<<"${matches[$index]}"
+                if local_region_has_country "${code,,}"; then status="ON"; else status="-"; fi
+                printf '  %2d. %-42s [%s] (%s)\n' "$((index - start + 1))" "$name" "$status" "${code^^}"
+            done
+            echo
+            menu_control s "search country"
+            if ((page < page_count - 1)); then menu_control n "next page"; fi
+            if ((page > 0)); then menu_control p "previous page"; fi
+        else
+            mapfile -t matches < <(country_matches "$query")
+            page=0
+            if ((${#matches[@]} == 0)); then
+                printf '%s\n' "No country or territory matched: $query"
+            else
+                printf '%s\n' "Matches for: $query"
+                printf '%s\n' "Select a number to toggle a country; selections are kept while you search."
+                echo
+                start=0
+                end=${#matches[@]}
+                ((end > 30)) && end=30
+                for ((index = start; index < end; index++)); do
+                    IFS=$'\t' read -r code name <<<"${matches[$index]}"
+                    if local_region_has_country "${code,,}"; then status="ON"; else status="-"; fi
+                    printf '  %2d. %-42s [%s] (%s)\n' "$((index + 1))" "$name" "$status" "${code^^}"
+                done
+                if ((${#matches[@]} > 30)); then printf '%s\n' "      More matches exist; refine the search."; fi
+            fi
+            echo
+            menu_control s "new search"
+        fi
+        menu_control a "apply selection"
+        if ! prompt_nav; then continue; fi
+        choice="$REPLY"
+        case "$choice" in
+            s|S)
+                if ! read_required_choice query "Country name or ISO code: "; then continue; fi
+                ;;
+            n|N)
+                [[ -z "$query" ]] && page=$((page + 1)) || invalid_choice
+                ;;
+            p|P)
+                [[ -z "$query" ]] && page=$((page - 1)) || invalid_choice
+                ;;
+            a|A)
+                return 0
+                ;;
+            b) return 1 ;;
+            m) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i) show_info local_region ;;
+            x) exit_tui ;;
+            ''|*[!0-9]*) invalid_choice ;;
+            *)
+                if ((${#matches[@]} == 0)) || ((choice < 1 || choice > end - start)); then
+                    invalid_choice
+                    continue
+                fi
+                IFS=$'\t' read -r code name <<<"${matches[$((start + choice - 1))]}"
+                local_region_toggle_country "${code,,}"
+                ;;
+        esac
+    done
+}
+
+select_custom_dns_profile() {
+    local choice source index status entries memory rpz_memory
+    local -a sources=(
+        urlhaus hagezi-tif-mini hagezi-doh hagezi-bypass
+        adguard-cname-trackers adguard-cname-mail threatfox hagezi-pro-plus
+        hagezi-ultimate hagezi-tif-medium hagezi-tif-ips hagezi-dyndns
+        hagezi-spam-tlds hagezi-popup-ads hagezi-nsfw hagezi-gambling-mini
+        hagezi-gambling-medium hagezi-gambling-full hagezi-social
+        hagezi-safesearch hagezi-anti-piracy
+    )
+    if [[ "${DNS_FILTER_CURRENT_PROFILE:-}" == "custom" && -n "${DNS_FILTER_CURRENT_LISTS:-}" ]]; then
+        DNS_FILTER_LISTS="$DNS_FILTER_CURRENT_LISTS"
+    else
+        DNS_FILTER_LISTS=""
+    fi
+    while true; do
+        clear_screen
+        printf '%s\n' "Custom ad and threat blocking"
+        printf '%s\n' "Choose any lists you need. Select at least one list."
+        printf '%s\n' "Large threat feeds are mutually exclusive in practice."
+        echo
+        for index in "${!sources[@]}"; do
+            source="${sources[$index]}"
+            if dns_custom_has_source "$source"; then status="ON"; else status="-"; fi
+            printf '  %2d. %-48s [%s] %s entries\n' \
+                "$((index + 1))" "$(dns_source_label "$source")" "$status" "$(dns_source_entries "$source")"
+        done
+        entries="$(dns_custom_entries)"
+        rpz_memory="$(dns_custom_estimated_rpz_memory)"
+        memory="$(dns_custom_memory_floor)"
+        echo
+        printf '%s\n' "Approx. selected entries: ${entries}"
+        printf '%s\n' "Estimated RPZ memory: ~${rpz_memory} MB"
+        printf '%s\n' "VPS memory: ${VPS_RAM_MB} MB RAM | Required: ${memory} MB RAM"
+        if ((VPS_RAM_MB < memory)); then
+            printf '%s\n' "Status: NOT AVAILABLE on this VPS"
+        else
+            printf '%s\n' "Status: available"
+        fi
+        if dns_custom_has_source hagezi-doh || dns_custom_has_source hagezi-bypass; then
+            printf '%s\n' "Warning: encrypted DNS/bypass protection may affect Smart TVs and Hiddify."
+        fi
+        echo
+        menu_control a "apply custom profile"
+        if ! prompt_nav; then continue; fi
+        case "$REPLY" in
+            a|A)
+                if [[ -z "${DNS_FILTER_LISTS:-}" ]]; then
+                    printf '%s\n' "Select at least one list, or use Disabled for no lists."
+                    wait_action_return
+                    continue
+                fi
+                if ! dns_custom_validate; then
+                    wait_action_return
+                    continue
+                fi
+                if ((VPS_VCPUS < $(dns_profile_min_vcpus custom) || VPS_RAM_MB < memory)); then
+                    printf '%s\n' "This Custom profile exceeds the VPS resource limit."
+                    wait_action_return
+                    continue
+                fi
+                DNS_FILTER_PROFILE=custom
+                return 0
+                ;;
+            i) show_info dns ;;
+            b) return 1 ;;
+            m) MAIN_MENU_REQUESTED=1; return 1 ;;
+            x) exit_tui ;;
+            ''|[!0-9]*) invalid_choice ;;
+            *)
+                index=$((REPLY - 1))
+                if ((index >= 0 && index < ${#sources[@]})); then
+                    source="${sources[$index]}"
+                    dns_custom_toggle_source "$source"
+                else
+                    invalid_choice
+                fi
+                ;;
+        esac
+    done
+}
+
+select_dns_profile() {
+    local profile
+    while true; do
+        clear_screen
+        printf '%s\n' "Block ads and threats"
+        printf '%s\n' "Current: ${DNS_FILTER_CURRENT_PROFILE:-disabled} | VPS: ${VPS_VCPUS} vCPU, $(((VPS_RAM_MB + 512) / 1024)) GB RAM"
+        printf '%s\n' "Select a profile. Press i for list details."
+        echo
+        printf '  %s1.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Disabled" "No DNS blocklists" "available"
+        printf '  %s2.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Minimal" "Malware protection" "$(dns_profile_is_available minimal && printf available || printf 'not available')"
+        printf '  %s3.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Optimal" "Malware, phishing and scams" "$(dns_profile_is_available optimal && printf available || printf 'not available')"
+        printf '  %s4.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Full" "Malware, ads and tracking" "$(dns_profile_is_available full && printf available || printf 'not available')"
+        printf '  %s5.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Maximum" "Broad protection and DNS bypass" "$(dns_profile_is_available maximum && printf available || printf 'not available')"
+        printf '  %s6.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Custom" "Choose protection categories" "$(dns_profile_is_available custom && printf available || printf 'not available')"
+        echo
+        if ! dns_profile_is_available maximum; then
+            printf '%s\n' "  Maximum requires at least 2 vCPU and $(dns_profile_min_memory maximum) MB RAM."
+        fi
+        printf '%s\n' "  4 GB RAM is recommended for large feeds; Custom can disable encrypted DNS for TVs."
+        echo
+        if ! prompt_nav; then continue; fi
+        case "$REPLY" in
+            1) DNS_FILTER_PROFILE=disabled; DNS_FILTER_LISTS=""; return 0 ;;
+            2|3|4|5)
+                case "$REPLY" in 2) profile=minimal ;; 3) profile=optimal ;; 4) profile=full ;; 5) profile=maximum ;; esac
+                if dns_profile_is_available "$profile"; then
+                    DNS_FILTER_PROFILE="$profile"
+                    DNS_FILTER_LISTS=""
+                    return 0
+                fi
+                printf '%s\n' "This profile does not fit the detected VPS resources."
+                wait_action_return
+                ;;
+            6)
+                if select_custom_dns_profile; then
+                    return 0
+                fi
+                [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return 1
+                ;;
+            i) show_info dns ;;
+            b) return 1 ;;
+            m) MAIN_MENU_REQUESTED=1; return 1 ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
 }
 
 run_ansible_playbook() {
@@ -798,32 +1748,32 @@ retry_existing_node_with_saved_key() {
 }
 
 add_node() {
-    local name host server_name bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port
-    clear_screen
-    read -r -e -p 'VPS IP address: ' host
-    if ! valid_ipv4 "$host"; then
-        printf '%s\n' "Invalid VPS IP address. Enter an IPv4 address."
-        sleep 1.5
-        return 1
-    fi
-    read -r -e -p 'VPS user (press Enter to use root): ' bootstrap_user
-    bootstrap_user="${bootstrap_user:-root}"
-    read -r -e -p 'VPS SSH port (press Enter to use 22): ' bootstrap_port
-    bootstrap_port="${bootstrap_port:-22}"
-    if [[ ! "$bootstrap_port" =~ ^[0-9]+$ ]] || ((10#$bootstrap_port < 1 || 10#$bootstrap_port > 65535)); then
-        printf '%s\n' "Invalid VPS SSH port. Enter a number from 1 to 65535."
-        sleep 1.5
-        return 1
-    fi
-    before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
-    after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
-    if ! read_vault_state "$before"; then
-        rm -f "$before" "$after"
-        return 1
-    fi
+    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port review_status
+    while true; do
+        if ! add_node_ip_prompt; then
+            return 0
+        fi
+        host="$ADD_NODE_HOST"
+        unset ADD_NODE_HOST
+        if ! add_node_user_prompt; then
+            return 0
+        fi
+        bootstrap_user="$ADD_NODE_USER"
+        unset ADD_NODE_USER
+        if ! add_node_port_prompt; then
+            return 0
+        fi
+        bootstrap_port="$ADD_NODE_PORT"
+        unset ADD_NODE_PORT
+        before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
+        after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
+        if ! read_vault_state "$before"; then
+            rm -f "$before" "$after"
+            return 1
+        fi
 
-    existing_node="$(find_node_by_connection "$before" "$host" "$bootstrap_port")"
-    if [[ -n "$existing_node" ]]; then
+        existing_node="$(find_node_by_connection "$before" "$host" "$bootstrap_port")"
+        if [[ -n "$existing_node" ]]; then
         saved_bootstrap_user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_user", "root"), end="")' "$existing_node" <"$before")"
         saved_bootstrap_port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_ssh_port", 22), end="")' "$existing_node" <"$before")"
         if [[ "$bootstrap_user" != "$saved_bootstrap_user" || "$bootstrap_port" != "$saved_bootstrap_port" ]]; then
@@ -863,38 +1813,52 @@ add_node() {
                 printf '%s\n' "Deployment failed. The existing Vault was not changed."
             fi
         fi
-        wait_action_return
+            wait_action_return
+            return 0
+        fi
+
+        if ! add_node_password_prompt; then
+            rm -f "$before" "$after"
+            return 0
+        fi
+        bootstrap_password="$ADD_NODE_PASSWORD"
+        unset ADD_NODE_PASSWORD
+        if review_node_connection "$host" "$bootstrap_user" "$bootstrap_port"; then
+            review_status=0
+        else
+            review_status=$?
+        fi
+        case "$review_status" in
+            0) break ;;
+            1) rm -f "$before" "$after"; continue ;;
+            *) rm -f "$before" "$after"; return 0 ;;
+        esac
+    done
+
+    if ! probe_vps_resources "$host" "$bootstrap_user" "$bootstrap_port" "$bootstrap_password"; then
+        unset bootstrap_password
+        rm -f "$before" "$after"
+        return 1
+    fi
+    if ! add_node_domain_prompt; then
+        unset bootstrap_password
+        rm -f "$before" "$after"
         return 0
     fi
-
-    clear_screen
-    printf '%s\n' "Reality camouflage domain (SNI)"
-    printf '%s\n' "Enter a public HTTPS domain without https:// or a path."
-    printf '%s\n' "Press Enter to use github.com, or type another domain."
-    echo
-    read -r -e -p 'Domain: ' server_name
-    server_name="${server_name:-github.com}"
-    if ! valid_server_name "$server_name"; then
-        printf '%s\n' "Invalid domain. Use an ASCII HTTPS hostname such as github.com."
-        sleep 1.5
+    server_name="$ADD_NODE_SERVER_NAME"
+    unset ADD_NODE_SERVER_NAME
+    unset DNS_FILTER_CURRENT_PROFILE
+    unset DNS_FILTER_LISTS
+    if ! select_dns_profile; then
+        unset bootstrap_password
         rm -f "$before" "$after"
-        wait_action_return
         return 1
     fi
-    server_name="${server_name,,}"
-
-    clear_screen
-    printf '%s\n' "Ansible will verify the VPS address, SSH port, user, and password."
-    echo
-    if ! read_ascii_secret 'VPS password: '; then
-        rm -f "$before" "$after"
-        wait_action_return
-        return 1
-    fi
-    bootstrap_password="$REPLY"
+    dns_profile="$DNS_FILTER_PROFILE"
+    dns_lists="${DNS_FILTER_LISTS:-}"
 
     name="auto"
-    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" add-node "$name" "$host" <"$before" >"$after"; then
+    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" --dns-profile "$dns_profile" --dns-lists "$dns_lists" add-node "$name" "$host" <"$before" >"$after"; then
         rm -f "$before" "$after"
         return 1
     fi
@@ -1208,7 +2172,7 @@ add_access_keys_menu() {
         menu_control i info
         menu_control x exit
         echo
-        read -r -e -p '?: ' count
+        if ! read_required_choice count '?: '; then continue; fi
         case "$count" in
             b) return 0 ;;
             m) MAIN_MENU_REQUESTED=1; return 0 ;;
@@ -1277,7 +2241,7 @@ PY
             printf '  %s%s.%s %sremove all access keys%s\n' "$COLOR_LINE" "$remove_all_selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET"
         fi
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             i) show_info access_keys ;;
             "$remove_all_selection")
@@ -1298,7 +2262,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    read -r -e -p '?: ' confirm
+                    if ! read_required_choice confirm '?: '; then continue; fi
                     case "$confirm" in
                         [Yy])
                             clear_screen
@@ -1359,7 +2323,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    read -r -e -p '  ?: ' confirm
+                    if ! read_required_choice confirm '  ?: '; then continue; fi
                     case "$confirm" in
                         [Yy])
                             clear_screen
@@ -1460,6 +2424,155 @@ PY
     printf '%s\n' "SSH key rotated."
 }
 
+manage_dns_protection() {
+    local node="$1" before after host user port private_key current_profile current_lists selected_profile selected_lists
+    before="$(mktemp)"
+    if ! read_vault_state "$before"; then
+        rm -f "$before"
+        return 1
+    fi
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$before")"
+    private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before")"
+    current_profile="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("xray", {}).get("dns_filter_profile", "disabled"), end="")' "$node" <"$before")"
+    current_lists="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(",".join(node.get("xray", {}).get("dns_filter_lists", [])), end="")' "$node" <"$before")"
+    if [[ -z "$private_key" ]]; then
+        rm -f "$before"
+        clear_screen
+        printf '%s\n' "No management SSH key is available for this VPN server."
+        wait_action_return
+        return 1
+    fi
+    if ! probe_vps_resources_with_key "$host" "$user" "$port" "$private_key"; then
+        rm -f "$before"
+        return 1
+    fi
+
+    DNS_FILTER_CURRENT_PROFILE="$current_profile"
+    DNS_FILTER_CURRENT_LISTS="$current_lists"
+    if ! select_dns_profile; then
+        unset DNS_FILTER_CURRENT_PROFILE
+        unset DNS_FILTER_CURRENT_LISTS
+        rm -f "$before"
+        return 0
+    fi
+    selected_profile="$DNS_FILTER_PROFILE"
+    selected_lists="${DNS_FILTER_LISTS:-}"
+    unset DNS_FILTER_CURRENT_PROFILE
+    unset DNS_FILTER_CURRENT_LISTS
+    if [[ "$selected_profile" == "$current_profile" && "$selected_profile" != "custom" ]] || \
+       [[ "$selected_profile" == "custom" && "$current_profile" == "custom" && "$selected_lists" == "$current_lists" ]]; then
+        clear_screen
+        printf '%s\n' "DNS protection profile was not changed."
+        wait_action_return
+        rm -f "$before"
+        return 0
+    fi
+
+    after="$(mktemp)"
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" --dns-lists "$selected_lists" set-dns-profile "$node" "$selected_profile" <"$before" >"$after"; then
+        rm -f "$before" "$after"
+        return 1
+    fi
+    clear_screen
+    printf '%s\n' "Applying DNS protection profile: ${selected_profile}"
+    if ! run_node_playbook "$node" site.yml "$after"; then
+        rm -f "$before" "$after"
+        printf '%s\n' "DNS protection change failed. The existing Vault was not changed."
+        wait_action_return
+        return 1
+    fi
+    if ! vault_save "$after"; then
+        rm -f "$before" "$after"
+        printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
+        printf '%s\n' "The existing DNS profile remains recorded in the Vault."
+        wait_action_return
+        return 1
+    fi
+    rm -f "$before" "$after"
+    printf '%s\n' "DNS protection profile updated: ${selected_profile}."
+    wait_action_return
+}
+
+manage_local_region_policy() {
+    local node="$1" before after current_countries selected_countries policy
+    before="$(mktemp)"
+    if ! read_vault_state "$before"; then
+        rm -f "$before"
+        return 1
+    fi
+    current_countries="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(",".join(node.get("xray", {}).get("local_region_countries", [])), end="")' "$node" <"$before")"
+    LOCAL_REGION_COUNTRIES="$current_countries"
+    while true; do
+        clear_screen
+        printf '%s\n' "Block countries"
+        printf '%s\n' "Selected countries are blocked when the client cannot bypass them directly."
+        printf '%s\n' "Current selection: $(local_region_selected_summary)"
+        echo
+        menu_option 1 "Select countries"
+        menu_option 2 "Disable policy"
+        echo
+        if ! prompt_nav; then continue; fi
+        case "$REPLY" in
+            1)
+                if ! select_local_region_countries; then
+                    [[ "$MAIN_MENU_REQUESTED" == 1 ]] && { unset LOCAL_REGION_COUNTRIES; rm -f "$before"; return; }
+                    continue
+                fi
+                ;;
+            2) LOCAL_REGION_COUNTRIES="" ;;
+            i) show_info local_region; continue ;;
+            b) unset LOCAL_REGION_COUNTRIES; rm -f "$before"; return ;;
+            m) MAIN_MENU_REQUESTED=1; unset LOCAL_REGION_COUNTRIES; rm -f "$before"; return ;;
+            x) exit_tui ;;
+            *) invalid_choice; continue ;;
+        esac
+        selected_countries="${LOCAL_REGION_COUNTRIES:-}"
+        if [[ "$selected_countries" == "$current_countries" ]]; then
+            clear_screen
+            printf '%s\n' "Country blocking settings were not changed."
+            wait_action_return
+            unset LOCAL_REGION_COUNTRIES
+            rm -f "$before"
+            return 0
+        fi
+        if [[ -n "$selected_countries" ]]; then policy=enabled; else policy=disabled; fi
+        after="$(mktemp)"
+        if ! python3 "$ROOT_DIR/scripts/state_cli.py" --local-region-countries "$selected_countries" set-local-region "$node" "$policy" <"$before" >"$after"; then
+            rm -f "$before" "$after"
+            unset LOCAL_REGION_COUNTRIES
+            return 1
+        fi
+        clear_screen
+        if [[ -n "$selected_countries" ]]; then
+            printf '%s\n' "Applying country blocking: $(local_region_selected_summary)"
+        else
+            printf '%s\n' "Disabling country blocking."
+        fi
+        if ! run_node_playbook "$node" site.yml "$after"; then
+            rm -f "$before" "$after"
+            unset LOCAL_REGION_COUNTRIES
+            printf '%s\n' "Country blocking change failed. The existing Vault was not changed."
+            wait_action_return
+            return 1
+        fi
+        if ! vault_save "$after"; then
+            rm -f "$before" "$after"
+            unset LOCAL_REGION_COUNTRIES
+            printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
+            printf '%s\n' "The previous country blocking settings remain recorded in the Vault."
+            wait_action_return
+            return 1
+        fi
+        rm -f "$before" "$after"
+        unset LOCAL_REGION_COUNTRIES
+        printf '%s\n' "Country blocking settings updated."
+        wait_action_return
+        return 0
+    done
+}
+
 manage_keys() {
     local node="$1"
     while true; do
@@ -1471,7 +2584,7 @@ manage_keys() {
         menu_option 2 Add
         menu_option 3 Remove
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) clear_screen; vault_state_command python3 "$ROOT_DIR/scripts/render_keys.py" "$node"; read -r -p "Press Enter to continue" _ ;;
             2) add_access_keys_menu "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
@@ -1495,7 +2608,7 @@ manage_node() {
         menu_option 1 "Manage VPN server"
         menu_option 2 "Manage access keys"
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) manage_server "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             2) manage_keys "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
@@ -1517,15 +2630,21 @@ manage_server() {
         echo
         menu_option 1 "Check VPN status"
         menu_option 2 "Restart VPN server"
-        menu_option 3 "Rotate SSH key"
-        menu_option 4 "Remove VPN server"
+        menu_option 3 "Block ads and threats"
+        menu_option 4 "Block countries"
+        menu_option 5 "Rotate SSH key"
+        menu_option 6 "Remove VPN server"
+        menu_option 7 "Open SSH session"
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) clear_screen; show_node_status "$node"; read -r -p "Press Enter" _ ;;
             2) clear_screen; run_node_playbook "$node" restart.yml; read -r -p "Press Enter" _ ;;
-            3) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
-            4) clear_screen; remove_node "$node"; return ;;
+            3) manage_dns_protection "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            4) manage_local_region_policy "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            5) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
+            6) clear_screen; remove_node "$node"; return ;;
+            7) open_node_ssh_session "$node" ;;
             i) show_info server ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
@@ -1558,7 +2677,7 @@ remove_node() {
         menu_control i info
         menu_control x exit
         echo
-        read -r -e -p '?: ' confirm
+        if ! read_required_choice confirm '?: '; then continue; fi
         case "$confirm" in
             [Yy]) break ;;
             [Nn]|b) return 0 ;;
@@ -1594,7 +2713,7 @@ remove_node() {
         menu_control i info
         menu_control x exit
         echo
-        read -r -e -p '?: ' local_confirm
+        if ! read_required_choice local_confirm '?: '; then continue; fi
         case "$local_confirm" in
             [Yy])
                 state_mutate remove-node "$node"
@@ -1639,7 +2758,7 @@ vpn_servers() {
             echo
             menu_option 1 "Add VPN server"
             echo
-            prompt_nav
+            if ! prompt_nav; then continue; fi
             case "$REPLY" in
                 1) rm -f "$state"; add_node; return ;;
                 i) show_info status; rm -f "$state"; continue ;;
@@ -1660,7 +2779,7 @@ vpn_servers() {
         fi
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             i) show_info status; rm -f "$state"; continue ;;
             b) rm -f "$state"; return ;;
@@ -1707,7 +2826,7 @@ secure_state() {
             has_vault_backups && menu_option 2 "Restore encrypted state"
         fi
         echo
-        prompt_nav
+        if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1)
                 clear_screen
@@ -1767,7 +2886,7 @@ while true; do
     menu_control i info
     menu_control x exit
     echo
-    read -r -e -p '?: ' choice
+    if ! read_required_choice choice '?: '; then continue; fi
     MAIN_MENU_REQUESTED=0
     case "$choice" in
         1) vpn_servers ;;

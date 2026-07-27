@@ -1,8 +1,44 @@
 services:
+{% if xray_dns_profile != 'disabled' %}
+  unbound:
+    build:
+      context: ./unbound
+    image: local/xray-tui-unbound:latest
+    container_name: unbound
+    restart: unless-stopped
+    init: true
+    dns_search: []
+    networks:
+      xray_dns:
+        ipv4_address: "{{ xray_unbound_ipv4 }}"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+    volumes:
+      - ./unbound/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
+      - xray_unbound_rpz:/opt/unbound/etc/unbound/rpz
+    expose:
+      - "5353"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: none
+
+{% endif %}
   xray:
     image: {{ xray_image }}
     container_name: {{ xray_container_name }}
     command: ["run", "-c", "/etc/xray/config.json"]
+{% if xray_dns_profile != 'disabled' %}
+    depends_on:
+      unbound:
+        condition: service_healthy
+    networks:
+      - xray_dns
+{% endif %}
     healthcheck:
       test: ["CMD", "xray", "run", "-test", "-config=/etc/xray/config.json"]
       interval: 10s
@@ -25,3 +61,14 @@ services:
     ports:
       - "{{ xray_state.vision_port }}:{{ xray_state.vision_port }}/tcp"
       - "{{ xray_state.xhttp_port }}:{{ xray_state.xhttp_port }}/tcp"
+
+{% if xray_dns_profile != 'disabled' %}
+volumes:
+  xray_unbound_rpz:
+
+networks:
+  xray_dns:
+    ipam:
+      config:
+        - subnet: "{{ xray_dns_network_subnet }}"
+{% endif %}
