@@ -1575,10 +1575,14 @@ select_custom_dns_profile() {
 }
 
 select_dns_profile() {
-    local profile
+    local profile mode="${1:-manage}"
     while true; do
         clear_screen
-        printf '%s\n' "Block ads and threats"
+        if [[ "$mode" == "initial" ]]; then
+            printf '%s\n' "Block ads and threats"
+        else
+            printf '%s\n' "Current profile: Block ads and threats"
+        fi
         printf '%s\n' "Optional. Blocks malware, phishing, scams, ads, trackers, and telemetry."
         printf '%s\n' "Current: ${DNS_FILTER_CURRENT_PROFILE:-disabled}"
         echo
@@ -1589,15 +1593,21 @@ select_dns_profile() {
         printf '  %s5.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Maximum" "Broad protection and DNS bypass" "$(dns_profile_is_available maximum && printf available || printf 'not available')"
         printf '  %s6.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Custom" "Choose protection categories" "$(dns_profile_is_available custom && printf available || printf 'not available')"
         echo
-        printf '%s\n' "Press Enter for Disabled."
+        if [[ "$mode" == "initial" ]]; then
+            printf '%s\n' "Press Enter for Disabled."
+        fi
         echo
-        menu_control b back
-        menu_control m main
-        menu_control i info
-        menu_control x exit
-        echo
-        if ! read -r -e -p '?: ' REPLY; then return 1; fi
-        [[ -z "$REPLY" ]] && REPLY=1
+        if [[ "$mode" == "initial" ]]; then
+            menu_control b back
+            menu_control m main
+            menu_control i info
+            menu_control x exit
+            echo
+            if ! read -r -e -p '?: ' REPLY; then return 1; fi
+            [[ -z "$REPLY" ]] && REPLY=1
+        else
+            if ! prompt_nav; then continue; fi
+        fi
         case "$REPLY" in
             1) DNS_FILTER_PROFILE=disabled; DNS_FILTER_LISTS=""; return 0 ;;
             2|3|4|5)
@@ -1857,7 +1867,7 @@ add_node() {
     unset ADD_NODE_SERVER_NAME
     unset DNS_FILTER_CURRENT_PROFILE
     unset DNS_FILTER_LISTS
-    if ! select_dns_profile; then
+    if ! select_dns_profile initial; then
         unset bootstrap_password
         rm -f "$before" "$after"
         return 1
@@ -2459,7 +2469,7 @@ manage_dns_protection() {
 
     DNS_FILTER_CURRENT_PROFILE="$current_profile"
     DNS_FILTER_CURRENT_LISTS="$current_lists"
-    if ! select_dns_profile; then
+    if ! select_dns_profile manage; then
         unset DNS_FILTER_CURRENT_PROFILE
         unset DNS_FILTER_CURRENT_LISTS
         rm -f "$before"
