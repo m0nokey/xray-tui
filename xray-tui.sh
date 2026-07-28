@@ -1949,9 +1949,10 @@ add_node() {
             esac
 
             if probe_vps_resources "$host" "$bootstrap_user" "$bootstrap_port" "$bootstrap_password"; then
-                break
+                break 2
+            else
+                probe_rc=$?
             fi
-            probe_rc=$?
             if ((probe_rc != INVALID_BOOTSTRAP_CREDENTIALS)); then
                 unset bootstrap_password
                 rm -f "$before" "$after"
@@ -1959,8 +1960,9 @@ add_node() {
             fi
             if bootstrap_auth_failure_menu; then
                 continue
+            else
+                auth_action=$?
             fi
-            auth_action=$?
             unset bootstrap_password
             rm -f "$before" "$after"
             if ((auth_action == 1)); then
@@ -2241,6 +2243,55 @@ run_node_playbook() {
     printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
     chmod 600 "$key_file"
     if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/$playbook" --private-key "$key_file"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    rm -f "$before" "$extra" "$key_file"
+    rm -rf "$inventory_dir"
+    return "$rc"
+}
+
+run_remove_with_management_key() {
+    local node="$1" before extra inventory inventory_dir key_file host user port private_key rc
+    before="$(mktemp)"
+    extra="$(mktemp)"
+    inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
+    inventory="$inventory_dir/hosts.yml"
+    key_file="$inventory_dir/id_ed25519"
+    if ! read_vault_state "$before"; then
+        rm -f "$before" "$extra" "$key_file"
+        rm -rf "$inventory_dir"
+        return 1
+    fi
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
+    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", ""))))' "$node" <"$before")"
+    private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before")"
+    if [[ -z "$host" || -z "$port" || -z "$private_key" ]]; then
+        rm -f "$before" "$extra" "$key_file"
+        rm -rf "$inventory_dir"
+        return 1
+    fi
+    printf '%s\n' "$private_key" >"$key_file"
+    chmod 600 "$key_file"
+    python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
+    printf '%s\n' \
+        "---" \
+        "all:" \
+        "  children:" \
+        "    xray_nodes:" \
+        "      hosts:" \
+        "        $node:" \
+        "          ansible_host: $host" \
+        "          ansible_user: $user" \
+        "          ansible_port: $port" \
+        "          ansible_ssh_private_key_file: $key_file" \
+        "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" \
+        >"$inventory"
+    chmod 600 "$inventory"
+
+    if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml" --private-key "$key_file"; then
         rc=0
     else
         rc=$?
@@ -2882,6 +2933,13 @@ manage_server() {
 remove_remote_node() {
     local node="$1"
     # Removal remains independent of the pinned management host key.
+    if run_remove_with_management_key "$node"; then
+        # The deploy user cannot remove itself while it is the Ansible user.
+        # The first pass restores the original SSH access; the second pass
+        # removes the deploy account and the remaining Xray TUI state as root.
+        run_remove_with_bootstrap "$node"
+        return $?
+    fi
     run_remove_with_bootstrap "$node"
 }
 

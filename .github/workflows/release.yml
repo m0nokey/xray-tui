@@ -62,9 +62,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          notes_file=".github/RELEASE_NOTES_${RELEASE_TAG}.md"
+          notes_body=""
+          if [[ -f "$notes_file" ]]; then
+            notes_body="$(cat "$notes_file")"
+          fi
           release_payload="$(jq -n \
             --arg tag "$RELEASE_TAG" \
-            '{tag_name: $tag, name: $tag, generate_release_notes: true}')"
+            --arg body "$notes_body" \
+            '{tag_name: $tag, name: $tag, generate_release_notes: true} +
+             (if $body == "" then {} else {body: $body} end)')"
           release="$(curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Accept: application/vnd.github+json" \
