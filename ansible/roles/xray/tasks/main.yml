@@ -157,15 +157,6 @@
   loop_control:
     label: "{{ item.key_id | default('unnamed') }}"
 
-- name: Render Xray configuration
-  ansible.builtin.template:
-    src: config.json.j2
-    dest: "{{ xray_config_path }}"
-    owner: root
-    group: root
-    mode: "0644"
-  notify: Restart Xray
-
 - name: Render Docker Compose file
   ansible.builtin.template:
     src: compose.yml.j2
@@ -201,7 +192,29 @@
   changed_when: "'xray-unbound-built' in xray_unbound_build.stdout"
   when: xray_dns_profile != 'disabled'
 
-- name: Validate Unbound configuration
+- name: Inspect Unbound container
+  community.docker.docker_container_info:
+    name: unbound
+  register: xray_unbound_container_info
+  when: xray_dns_profile != 'disabled'
+
+- name: Select Unbound container state
+  ansible.builtin.set_fact:
+    xray_unbound_running: >-
+      {{ (xray_unbound_container_info.exists | default(false) | bool)
+         and (xray_unbound_container_info.container.State.Running | default(false) | bool) }}
+  when: xray_dns_profile != 'disabled'
+
+- name: Validate running Unbound configuration
+  community.docker.docker_container_exec:
+    container: unbound
+    command: unbound-checkconf /opt/unbound/etc/unbound/unbound.conf
+  changed_when: false
+  when:
+    - xray_dns_profile != 'disabled'
+    - xray_unbound_running | bool
+
+- name: Validate Unbound configuration in disposable container
   ansible.builtin.command:
     argv:
       - docker
@@ -215,24 +228,18 @@
       - unbound-checkconf
       - /opt/unbound/etc/unbound/unbound.conf
   changed_when: false
-  when: xray_dns_profile != 'disabled'
-
-- name: Restart Unbound after configuration change
-  ansible.builtin.command:
-    argv:
-      - docker
-      - compose
-      - --file
-      - "{{ xray_compose_path }}"
-      - up
-      - --detach
-      - --force-recreate
-      - --no-deps
-      - unbound
-  changed_when: true
   when:
     - xray_dns_profile != 'disabled'
-    - xray_unbound_config_render.changed
+    - not xray_unbound_running | bool
+
+- name: Render Xray configuration
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ xray_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Xray
 
 - name: Validate Xray configuration in a disposable container
   ansible.builtin.command:
@@ -261,6 +268,23 @@
       - ping
       - "{{ xray_server_name }}"
   changed_when: false
+
+- name: Restart Unbound after configuration validation
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --file
+      - "{{ xray_compose_path }}"
+      - up
+      - --detach
+      - --force-recreate
+      - --no-deps
+      - unbound
+  changed_when: true
+  when:
+    - xray_dns_profile != 'disabled'
+    - xray_unbound_config_render.changed
 
 - name: Ensure Xray stack is running
   community.docker.docker_compose_v2:

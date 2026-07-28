@@ -2715,7 +2715,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    if ! read_required_choice confirm '  ?: '; then continue; fi
+                    if ! read_required_choice confirm '?: '; then continue; fi
                     case "$confirm" in
                         [Yy])
                             clear_screen
