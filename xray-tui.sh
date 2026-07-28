@@ -11,6 +11,8 @@ MAIN_MENU_REQUESTED=0
 LAST_ANSIBLE_OUTPUT=""
 # Internal status used to distinguish missing saved SSH access from deployment errors.
 readonly NO_SAVED_SSH_ACCESS=125
+# Internal status used to return to the VPS password prompt after auth failure.
+readonly INVALID_BOOTSTRAP_CREDENTIALS=126
 # Internal status used to refresh the server list after successful removal.
 readonly NODE_REMOVED_STATUS=124
 mkdir -p "$STATE_DIR"
@@ -663,6 +665,36 @@ review_node_connection() {
     done
 }
 
+bootstrap_auth_failure_menu() {
+    local choice
+    while true; do
+        clear_screen
+        printf '%s\n' "VPS authentication failed. The user or password was rejected."
+        printf '%s\n' "Choose what to do next."
+        echo
+        menu_option 1 "Enter password again"
+        menu_option 2 "Edit VPS connection"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice choice '?: '; then
+            continue
+        fi
+        case "$choice" in
+            1) return 0 ;;
+            2) return 1 ;;
+            b|B) return 2 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 2 ;;
+            i|I) show_info general ;;
+            x|X) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
 menu_heading() {
     printf '%s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET"
 }
@@ -1112,7 +1144,7 @@ yaml_scalar() {
 
 probe_vps_resources() {
     local host="$1" user="$2" port="$3" password="$4"
-    local inventory_dir inventory log password_yaml facts_line
+    local inventory_dir inventory log password_yaml facts_line auth_output auth_rc
     inventory_dir="$(mktemp -d /tmp/xray-preflight.XXXXXX)"
     inventory="$inventory_dir/hosts.yml"
     log="$inventory_dir/ansible.log"
@@ -1131,6 +1163,27 @@ probe_vps_resources() {
         "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o PubkeyAuthentication=no -o PreferredAuthentications=password'" \
         >"$inventory"
     chmod 600 "$inventory"
+
+    # Reject bad credentials before Ansible starts its retry loop.
+    if command -v sshpass >/dev/null 2>&1; then
+        auth_rc=0
+        auth_output="$(SSHPASS="$password" sshpass -e ssh \
+            -p "$port" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=8 \
+            -o ConnectionAttempts=1 \
+            -o NumberOfPasswordPrompts=1 \
+            -o PubkeyAuthentication=no \
+            -o PreferredAuthentications=password \
+            -o LogLevel=ERROR \
+            "$user@$host" true 2>&1)" || auth_rc=$?
+        if ((auth_rc != 0)) && grep -Eiq 'permission denied|authentication failed|authentication refused' <<<"$auth_output"; then
+            rm -rf "$inventory_dir"
+            unset password password_yaml auth_output
+            return "$INVALID_BOOTSTRAP_CREDENTIALS"
+        fi
+    fi
     unset password password_yaml
 
     clear_screen
@@ -1808,7 +1861,7 @@ retry_existing_node_with_saved_key() {
 }
 
 add_node() {
-    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port review_status
+    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port review_status probe_rc auth_action
     while true; do
         if ! add_node_ip_prompt; then
             return 0
@@ -1877,29 +1930,45 @@ add_node() {
             return 0
         fi
 
-        if ! add_node_password_prompt; then
-            rm -f "$before" "$after"
-            return 0
-        fi
-        bootstrap_password="$ADD_NODE_PASSWORD"
-        unset ADD_NODE_PASSWORD
-        if review_node_connection "$host" "$bootstrap_user" "$bootstrap_port"; then
-            review_status=0
-        else
-            review_status=$?
-        fi
-        case "$review_status" in
-            0) break ;;
-            1) rm -f "$before" "$after"; continue ;;
-            *) rm -f "$before" "$after"; return 0 ;;
-        esac
-    done
+        while true; do
+            if ! add_node_password_prompt; then
+                rm -f "$before" "$after"
+                return 0
+            fi
+            bootstrap_password="$ADD_NODE_PASSWORD"
+            unset ADD_NODE_PASSWORD
+            if review_node_connection "$host" "$bootstrap_user" "$bootstrap_port"; then
+                review_status=0
+            else
+                review_status=$?
+            fi
+            case "$review_status" in
+                0) ;;
+                1) continue ;;
+                *) rm -f "$before" "$after"; return 0 ;;
+            esac
 
-    if ! probe_vps_resources "$host" "$bootstrap_user" "$bootstrap_port" "$bootstrap_password"; then
-        unset bootstrap_password
-        rm -f "$before" "$after"
-        return 1
-    fi
+            if probe_vps_resources "$host" "$bootstrap_user" "$bootstrap_port" "$bootstrap_password"; then
+                break
+            fi
+            probe_rc=$?
+            if ((probe_rc != INVALID_BOOTSTRAP_CREDENTIALS)); then
+                unset bootstrap_password
+                rm -f "$before" "$after"
+                return 1
+            fi
+            if bootstrap_auth_failure_menu; then
+                continue
+            fi
+            auth_action=$?
+            unset bootstrap_password
+            rm -f "$before" "$after"
+            if ((auth_action == 1)); then
+                continue 2
+            fi
+            return 0
+        done
+    done
     if ! add_node_domain_prompt; then
         unset bootstrap_password
         rm -f "$before" "$after"
