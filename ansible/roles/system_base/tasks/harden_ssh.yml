@@ -209,3 +209,21 @@
   register: system_base_effective_ssh_port
   changed_when: false
   failed_when: system_base_effective_ssh_port.stdout | trim != (ssh_port | string)
+
+- name: Read generated SSH host public key
+  ansible.builtin.slurp:
+    src: /etc/ssh/ssh_host_ed25519_key.pub
+  register: system_base_ssh_host_public_key
+  changed_when: false
+
+- name: Calculate generated SSH host key fingerprint
+  ansible.builtin.command:
+    cmd: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
+  register: system_base_ssh_host_fingerprint_command
+  changed_when: false
+
+- name: Report generated SSH host key
+  ansible.builtin.debug:
+    msg:
+      - "XRAY_SSH_HOST_PUBLIC_KEY={{ system_base_ssh_host_public_key.content | b64decode | trim }}"
+      - "XRAY_SSH_HOST_FINGERPRINT={{ system_base_ssh_host_fingerprint_command.stdout | regex_search('SHA256:[A-Za-z0-9+/=]+') }}"

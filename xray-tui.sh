@@ -1047,7 +1047,7 @@ show_node_status() {
 }
 
 open_node_ssh_session() {
-    local node="$1" state host user port private_key key_file ssh_status
+    local node="$1" state host user port private_key key_file known_hosts_file ssh_status
     state="$(mktemp "$STATE_DIR/.ssh-session.XXXXXX")"
     if ! read_vault_state "$state"; then
         rm -f "$state"
@@ -1057,9 +1057,18 @@ open_node_ssh_session() {
     user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$state")"
     port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$state")"
     private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$state")"
+    known_hosts_file="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
+    if ! write_node_known_hosts "$state" "$node" "$known_hosts_file"; then
+        rm -f "$state" "$known_hosts_file"
+        clear_screen
+        printf '%s\n' "The SSH host key is not pinned for this VPN server. Redeploy it before opening an SSH session."
+        wait_action_return
+        return 1
+    fi
     rm -f "$state"
 
     if [[ -z "$host" || -z "$user" || -z "$port" || -z "$private_key" ]]; then
+        rm -f "$known_hosts_file"
         clear_screen
         printf '%s\n' "Saved SSH management credentials are incomplete for this VPN server."
         wait_action_return
@@ -1077,8 +1086,8 @@ open_node_ssh_session() {
     echo
     if ssh -tt -i "$key_file" -p "$port" \
         -o IdentitiesOnly=yes \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$known_hosts_file" \
         -o ConnectTimeout=8 \
         -o ConnectionAttempts=1 \
         "$user@$host"; then
@@ -1086,7 +1095,7 @@ open_node_ssh_session() {
     else
         ssh_status=$?
     fi
-    rm -f "$key_file"
+    rm -f "$key_file" "$known_hosts_file"
     echo
     if ((ssh_status != 0)); then
         printf '%s\n' "SSH session ended with exit code ${ssh_status}."
@@ -1148,12 +1157,17 @@ probe_vps_resources() {
 }
 
 probe_vps_resources_with_key() {
-    local host="$1" user="$2" port="$3" private_key="$4"
-    local inventory_dir inventory key_file log facts_line
+    local host="$1" user="$2" port="$3" private_key="$4" known_hosts_file="${5:-}"
+    local inventory_dir inventory key_file log facts_line ssh_common_args
     inventory_dir="$(mktemp -d /tmp/xray-preflight.XXXXXX)"
     inventory="$inventory_dir/hosts.yml"
     key_file="$inventory_dir/id_ed25519"
     log="$inventory_dir/ansible.log"
+    if [[ -n "$known_hosts_file" ]]; then
+        ssh_common_args="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes"
+    else
+        ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes"
+    fi
     printf '%s\n' "$private_key" >"$key_file"
     chmod 600 "$key_file"
     printf '%s\n' \
@@ -1167,7 +1181,7 @@ probe_vps_resources_with_key() {
         "          ansible_user: $user" \
         "          ansible_port: $port" \
         "          ansible_ssh_private_key_file: $key_file" \
-        "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" \
+        "          ansible_ssh_common_args: '$ssh_common_args'" \
         >"$inventory"
     chmod 600 "$inventory"
 
@@ -1594,7 +1608,8 @@ select_dns_profile() {
         printf '  %s6.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Custom" "Choose protection categories" "$(dns_profile_is_available custom && printf available || printf 'not available')"
         echo
         if [[ "$mode" == "initial" ]]; then
-            printf '%s\n' "Press Enter for Disabled."
+            printf '%s\n' "Not sure what to choose? Press Enter to keep it disabled."
+            printf '%s\n' "You can enable it later from the VPN management menu."
         fi
         echo
         if [[ "$mode" == "initial" ]]; then
@@ -1649,9 +1664,24 @@ run_ansible_playbook() {
         echo
         printf '%s\n' "Ansible failed with exit code ${rc}. Last output:"
         printf '%s\n' "$LAST_ANSIBLE_OUTPUT"
+    else
+        LAST_ANSIBLE_OUTPUT="$(tail -n 80 "$log")"
     fi
     rm -f "$log"
     return "$rc"
+}
+
+write_node_known_hosts() {
+    local state_file="$1" node="$2" output="$3" port_override="${4:-}" host port public_key
+    host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$state_file")"
+    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", ""))))' "$node" <"$state_file")"
+    if [[ -n "$port_override" ]]; then
+        port="$port_override"
+    fi
+    public_key="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("ssh_host_public_key", ""), end="")' "$node" <"$state_file")"
+    [[ -n "$host" && -n "$port" && -n "$public_key" ]] || return 1
+    printf '[%s]:%s %s\n' "$host" "$port" "$public_key" >"$output"
+    chmod 600 "$output"
 }
 
 find_node_by_connection() {
@@ -1715,7 +1745,7 @@ retry_existing_node_with_bootstrap() {
 }
 
 retry_existing_node_with_saved_key() {
-    local node="$1" state_file="$2" connect_port="$3" recovery_state key_file host user target_port management_port bootstrap_port probe_port recovery_rc
+    local node="$1" state_file="$2" connect_port="$3" recovery_state key_file known_hosts_file probe_known_hosts host user target_port management_port bootstrap_port probe_port recovery_rc
     recovery_state="$(mktemp "$STATE_DIR/.recovery.XXXXXX")"
     if ! python3 "$ROOT_DIR/scripts/state_cli.py" ensure-ssh-port "$node" "$connect_port" <"$state_file" >"$recovery_state"; then
         rm -f "$recovery_state"
@@ -1727,11 +1757,23 @@ retry_existing_node_with_saved_key() {
     management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("management_port", ""))' "$node" <"$recovery_state")"
     bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", ""))' "$node" <"$recovery_state")"
     key_file="$(mktemp "$STATE_DIR/.probe.XXXXXX")"
+    known_hosts_file="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
+    probe_known_hosts="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
+    : >"$known_hosts_file"
+    for probe_port in "$management_port" "$target_port" "$connect_port" "$bootstrap_port"; do
+        [[ -n "$probe_port" ]] || continue
+        if ! write_node_known_hosts "$recovery_state" "$node" "$probe_known_hosts" "$probe_port"; then
+            rm -f "$recovery_state" "$key_file" "$known_hosts_file" "$probe_known_hosts"
+            return "$NO_SAVED_SSH_ACCESS"
+        fi
+        cat "$probe_known_hosts" >>"$known_hosts_file"
+    done
+    rm -f "$probe_known_hosts"
     python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$recovery_state" >"$key_file"
     chmod 600 "$key_file"
 
     if [[ ! -s "$key_file" ]]; then
-        rm -f "$recovery_state" "$key_file"
+        rm -f "$recovery_state" "$key_file" "$known_hosts_file"
         return "$NO_SAVED_SSH_ACCESS"
     fi
 
@@ -1742,12 +1784,12 @@ retry_existing_node_with_saved_key() {
             -o BatchMode=yes \
             -o ConnectTimeout=5 \
             -o ConnectionAttempts=1 \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts_file" \
             -o LogLevel=ERROR \
             "$user@$host" true; then
             if deploy_node "$node" "$recovery_state" "$probe_port"; then
-                rm -f "$key_file"
+                rm -f "$key_file" "$known_hosts_file"
                 if vault_save "$recovery_state"; then
                     rm -f "$recovery_state"
                     return 0
@@ -1756,12 +1798,12 @@ retry_existing_node_with_saved_key() {
                 return 1
             else
                 recovery_rc=$?
-                rm -f "$recovery_state" "$key_file"
+                rm -f "$recovery_state" "$key_file" "$known_hosts_file"
                 return "$recovery_rc"
             fi
         fi
     done
-    rm -f "$recovery_state" "$key_file"
+    rm -f "$recovery_state" "$key_file" "$known_hosts_file"
     return "$NO_SAVED_SSH_ACCESS"
 }
 
@@ -1910,11 +1952,13 @@ PY
 }
 
 deploy_node() {
-    local node="$1" state_file="${2:-}" connect_port="${3:-}" bootstrap_mode="${4:-0}" before extra inventory inventory_dir key_file user host port target_port management_port legacy_port bootstrap_port bootstrap bootstrap_password bootstrap_user rc marked migrated_state
+    local node="$1" state_file="${2:-}" connect_port="${3:-}" bootstrap_mode="${4:-0}" before extra inventory inventory_dir key_file known_hosts_file host_key_file user host port target_port management_port legacy_port bootstrap_port bootstrap bootstrap_password bootstrap_user host_public_key ssh_common_args rc marked migrated_state hardened_state ssh_host_public_key ssh_host_fingerprint actual_fingerprint
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
     inventory="$inventory_dir/hosts.yml"
+    known_hosts_file="$inventory_dir/known_hosts"
+    host_key_file="$inventory_dir/ssh_host_ed25519_key.pub"
     if [[ -n "$state_file" ]]; then
         cp "$state_file" "$before"
     else
@@ -1943,6 +1987,7 @@ deploy_node() {
         bootstrap_password=""
     fi
     bootstrap_user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_user", "root"), end="")' "$node" <"$before")"
+    host_public_key="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("ssh_host_public_key", ""), end="")' "$node" <"$before")"
     if [[ -n "$bootstrap_password" ]]; then
         user="$bootstrap_user"
         port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", 22))' "$node" <"$before")"
@@ -1951,11 +1996,29 @@ deploy_node() {
     elif [[ -n "$bootstrap" ]]; then
         user="$bootstrap_user"
         printf '%s' "$bootstrap" >"$key_file"
-        printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: $user" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+        if [[ -n "$host_public_key" ]]; then
+            if ! write_node_known_hosts "$before" "$node" "$known_hosts_file" "$port"; then
+                rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+                return 1
+            fi
+            ssh_common_args="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes"
+        else
+            ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes"
+        fi
+        printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: $user" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '$ssh_common_args'" >"$inventory"
     else
         user=deploy
         python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
-        printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: $user" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+        if [[ -n "$host_public_key" ]]; then
+            if ! write_node_known_hosts "$before" "$node" "$known_hosts_file" "$port"; then
+                rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+                return 1
+            fi
+            ssh_common_args="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes"
+        else
+            ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes"
+        fi
+        printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: $user" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '$ssh_common_args'" >"$inventory"
     fi
     chmod 600 "$key_file"
     if [[ -n "$bootstrap_password" ]]; then
@@ -1980,7 +2043,16 @@ deploy_node() {
         chmod 600 "$key_file"
     fi
 
-    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    if [[ -n "$host_public_key" ]]; then
+        if ! write_node_known_hosts "$before" "$node" "$known_hosts_file" "$port"; then
+            rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+            return 1
+        fi
+        ssh_common_args="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes"
+    else
+        ssh_common_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes"
+    fi
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '$ssh_common_args'" >"$inventory"
     if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/harden_ssh.yml" --private-key "$key_file"; then
         :
     else
@@ -1989,14 +2061,37 @@ deploy_node() {
         return "$rc"
     fi
 
+    ssh_host_public_key="$(printf '%s\n' "$LAST_ANSIBLE_OUTPUT" | sed -n 's/.*XRAY_SSH_HOST_PUBLIC_KEY=\(ssh-ed25519 [A-Za-z0-9+/=]*\).*/\1/p' | tail -n 1)"
+    ssh_host_fingerprint="$(printf '%s\n' "$LAST_ANSIBLE_OUTPUT" | sed -n 's/.*XRAY_SSH_HOST_FINGERPRINT=\(SHA256:[A-Za-z0-9+/=]*\).*/\1/p' | tail -n 1)"
+    if [[ -z "$ssh_host_public_key" || -z "$ssh_host_fingerprint" ]]; then
+        printf '%s\n' "SSH hardening completed, but the VPS host key could not be returned to the client."
+        rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+        return 1
+    fi
+    printf '%s\n' "$ssh_host_public_key" >"$host_key_file"
+    actual_fingerprint="$(ssh-keygen -lf "$host_key_file" -E sha256 2>/dev/null | awk '{print $2}')"
+    if [[ "$actual_fingerprint" != "$ssh_host_fingerprint" ]]; then
+        printf '%s\n' "The returned SSH host key fingerprint is invalid."
+        rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+        return 1
+    fi
+    hardened_state="$(mktemp)"
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" set-ssh-host-key "$node" "$host_key_file" "$actual_fingerprint" <"$before" >"$hardened_state"; then
+        rm -f "$before" "$extra" "$key_file" "$hardened_state"; rm -rf "$inventory_dir"
+        return 1
+    fi
+    mv -f "$hardened_state" "$before"
+    printf '[%s]:%s %s\n' "$host" "$target_port" "$ssh_host_public_key" >"$known_hosts_file"
+    chmod 600 "$known_hosts_file"
+
     local verify_attempt
     for verify_attempt in {1..12}; do
         if ssh -i "$key_file" -p "$target_port" \
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
             -o ConnectTimeout=8 \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts_file" \
             -o LogLevel=ERROR \
             deploy@"$host" true; then
             break
@@ -2007,7 +2102,7 @@ deploy_node() {
     done
     if ((verify_attempt == 12)); then
         printf '%s\n' "Deployment completed, but the generated SSH port could not be verified: $target_port."
-        rm -f "$before" "$extra" "$key_file"
+        rm -f "$before" "$extra" "$key_file" "$host_key_file" "$known_hosts_file"
         rm -rf "$inventory_dir"
         return 1
     fi
@@ -2015,19 +2110,19 @@ deploy_node() {
         -o IdentitiesOnly=yes \
         -o BatchMode=yes \
         -o ConnectTimeout=8 \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$known_hosts_file" \
         -o LogLevel=ERROR \
         deploy@"$host" \
         'sudo -n sh -c "systemctl stop xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true; systemctl reset-failed xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true"' \
         || true
 
-    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $target_port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $target_port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
     if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/site.yml" --private-key "$key_file"; then
         :
     else
         rc=$?
-        rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+            rm -f "$before" "$extra" "$key_file" "$host_key_file" "$known_hosts_file"; rm -rf "$inventory_dir"
         return "$rc"
     fi
 
@@ -2042,32 +2137,39 @@ deploy_node() {
             cp "$before" "$state_file"
         else
             if ! vault_save "$before"; then
-                rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
+                rm -f "$before" "$extra" "$key_file" "$host_key_file" "$known_hosts_file"; rm -rf "$inventory_dir"
                 return 1
             fi
         fi
     fi
-    rm -f "$before" "$extra" "$key_file"
+    rm -f "$before" "$extra" "$key_file" "$host_key_file" "$known_hosts_file"
     rm -rf "$inventory_dir"
 }
 
 run_node_playbook() {
-    local node="$1" playbook="$2" state_file="${3:-}" before extra inventory inventory_dir key_file host port rc
+    local node="$1" playbook="$2" state_file="${3:-}" before extra inventory inventory_dir key_file known_hosts_file host port rc
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
     inventory="$inventory_dir/hosts.yml"
     key_file="$(mktemp)"
+    known_hosts_file="$inventory_dir/known_hosts"
     if [[ -n "$state_file" ]]; then
         cp "$state_file" "$before"
     else
         read_vault_state "$before" || { rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"; return 1; }
     fi
     python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
+    if ! write_node_known_hosts "$before" "$node" "$known_hosts_file"; then
+        printf '%s\n' "The SSH host key is not pinned for this VPN server. Redeploy it before changing settings."
+        rm -f "$before" "$extra" "$key_file"
+        rm -rf "$inventory_dir"
+        return 1
+    fi
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
     port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node["ssh_port"])))' "$node" <"$before")"
     python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
-    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
     chmod 600 "$key_file"
     if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/$playbook" --private-key "$key_file"; then
         rc=0
@@ -2365,11 +2467,12 @@ PY
 }
 
 rotate_ssh_key() {
-    local node="$1" before extra inventory inventory_dir key_dir old_key new_key new_pub rotated_state host old_pub port rc
+    local node="$1" before extra inventory inventory_dir key_dir old_key new_key new_pub rotated_state known_hosts_file host old_pub port rc
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
     inventory="$inventory_dir/hosts.yml"
+    known_hosts_file="$inventory_dir/known_hosts"
     key_dir="$(mktemp -d "$STATE_DIR/.ssh-rotate.XXXXXX")"
     old_key="$key_dir/old"
     new_key="$key_dir/new"
@@ -2379,6 +2482,12 @@ rotate_ssh_key() {
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
     port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node["ssh_port"])))' "$node" <"$before")"
     old_pub="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_authorized_key", node.get("deploy_authorized_key", "")), end="")' "$node" <"$before")"
+    if ! write_node_known_hosts "$before" "$node" "$known_hosts_file" "$port"; then
+        printf '%s\n' "The SSH host key is not pinned for this VPN server. Redeploy it before rotating the SSH key."
+        rm -f "$before" "$extra" "$rotated_state"
+        rm -rf "$inventory_dir" "$key_dir"
+        return 1
+    fi
     python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$old_key"
     chmod 600 "$old_key"
     ssh-keygen -q -t ed25519 -N "" -f "$new_key"
@@ -2400,13 +2509,13 @@ data = {
 json.dump(data, sys.stdout, indent=2)
 print()
 PY
-    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
     if ! run_ansible_playbook -i "$inventory" -e "@$extra" -e rotate_remove_old_key=false "$ROOT_DIR/ansible/rotate-ssh.yml" --private-key "$old_key"; then
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
-    if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR deploy@"$host" true; then
+    if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts_file" -o LogLevel=ERROR deploy@"$host" true; then
         printf '%s\n' "The new SSH key could not be verified. The old key remains active."
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
@@ -2424,14 +2533,14 @@ PY
         return 1
     fi
 
-    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_private_key_file: $new_key" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_private_key_file: $new_key" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
     if ! run_ansible_playbook -i "$inventory" -e "@$extra" -e rotate_remove_old_key=true "$ROOT_DIR/ansible/rotate-ssh.yml" --private-key "$new_key"; then
         printf '%s\n' "The new SSH key is stored in the Vault, but the old key could not be revoked."
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
-    if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR deploy@"$host" true; then
+    if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts_file" -o LogLevel=ERROR deploy@"$host" true; then
         printf '%s\n' "The old key was revoked, but the new SSH key could not be verified afterward."
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
@@ -2443,7 +2552,7 @@ PY
 }
 
 manage_dns_protection() {
-    local node="$1" before after host user port private_key current_profile current_lists selected_profile selected_lists
+    local node="$1" before after host user port private_key known_hosts_file current_profile current_lists selected_profile selected_lists
     before="$(mktemp)"
     if ! read_vault_state "$before"; then
         rm -f "$before"
@@ -2453,17 +2562,25 @@ manage_dns_protection() {
     user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$before")"
     port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$before")"
     private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before")"
+    known_hosts_file="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
+    if ! write_node_known_hosts "$before" "$node" "$known_hosts_file"; then
+        rm -f "$before" "$known_hosts_file"
+        clear_screen
+        printf '%s\n' "The SSH host key is not pinned for this VPN server. Redeploy it before changing settings."
+        wait_action_return
+        return 1
+    fi
     current_profile="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("xray", {}).get("dns_filter_profile", "disabled"), end="")' "$node" <"$before")"
     current_lists="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(",".join(node.get("xray", {}).get("dns_filter_lists", [])), end="")' "$node" <"$before")"
     if [[ -z "$private_key" ]]; then
-        rm -f "$before"
+        rm -f "$before" "$known_hosts_file"
         clear_screen
         printf '%s\n' "No management SSH key is available for this VPN server."
         wait_action_return
         return 1
     fi
-    if ! probe_vps_resources_with_key "$host" "$user" "$port" "$private_key"; then
-        rm -f "$before"
+    if ! probe_vps_resources_with_key "$host" "$user" "$port" "$private_key" "$known_hosts_file"; then
+        rm -f "$before" "$known_hosts_file"
         return 1
     fi
 
@@ -2472,7 +2589,7 @@ manage_dns_protection() {
     if ! select_dns_profile manage; then
         unset DNS_FILTER_CURRENT_PROFILE
         unset DNS_FILTER_CURRENT_LISTS
-        rm -f "$before"
+        rm -f "$before" "$known_hosts_file"
         return 0
     fi
     selected_profile="$DNS_FILTER_PROFILE"
@@ -2484,19 +2601,19 @@ manage_dns_protection() {
         clear_screen
         printf '%s\n' "DNS protection profile was not changed."
         wait_action_return
-        rm -f "$before"
+        rm -f "$before" "$known_hosts_file"
         return 0
     fi
 
     after="$(mktemp)"
     if ! python3 "$ROOT_DIR/scripts/state_cli.py" --dns-lists "$selected_lists" set-dns-profile "$node" "$selected_profile" <"$before" >"$after"; then
-        rm -f "$before" "$after"
+        rm -f "$before" "$after" "$known_hosts_file"
         return 1
     fi
     clear_screen
     printf '%s\n' "Applying DNS protection profile: ${selected_profile}"
     if ! run_node_playbook "$node" site.yml "$after"; then
-        rm -f "$before" "$after"
+        rm -f "$before" "$after" "$known_hosts_file"
         printf '%s\n' "DNS protection change failed. The existing Vault was not changed."
         wait_action_return
         return 1
@@ -2508,7 +2625,7 @@ manage_dns_protection() {
         wait_action_return
         return 1
     fi
-    rm -f "$before" "$after"
+    rm -f "$before" "$after" "$known_hosts_file"
     printf '%s\n' "DNS protection profile updated: ${selected_profile}."
     wait_action_return
 }
@@ -2695,9 +2812,7 @@ manage_server() {
 
 remove_remote_node() {
     local node="$1"
-    if ! run_node_playbook "$node" remove.yml; then
-        printf '%s\n' "The management cleanup phase failed; trying the original SSH credentials."
-    fi
+    # Removal remains independent of the pinned management host key.
     run_remove_with_bootstrap "$node"
 }
 

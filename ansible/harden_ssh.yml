@@ -2,6 +2,15 @@
 - name: Harden Xray VPN node SSH
   hosts: xray_nodes
   become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait for deploy SSH access after bootstrap
+      ansible.builtin.wait_for_connection:
+        delay: 2
+        timeout: 60
+        sleep: 3
+    - name: Gather VPS facts after SSH is available
+      ansible.builtin.setup:
   tasks:
     - name: Run SSH hardening tasks
       ansible.builtin.import_role:

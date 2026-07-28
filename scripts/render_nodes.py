@@ -66,6 +66,7 @@ def management_state(node, timeout=5.0):
     host = node.get("host", "")
     user = node.get("management_user") or node.get("deploy_user", "deploy")
     private_key = node.get("management_private_key") or node.get("deploy_private_key", "")
+    host_public_key = node.get("ssh_host_public_key", "")
     ports = management_ports(node)
     details = {
         "ports": ports,
@@ -93,8 +94,12 @@ def management_state(node, timeout=5.0):
     if not private_key:
         details["ssh"] = "management private key missing in Vault"
         return details
+    if not host_public_key:
+        details["ssh"] = "SSH host key missing in Vault"
+        return details
 
     key_path = None
+    known_hosts_path = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", prefix=".xray-status-", delete=False
@@ -102,6 +107,13 @@ def management_state(node, timeout=5.0):
             key_file.write(private_key)
             key_path = key_file.name
         os.chmod(key_path, 0o600)
+        with tempfile.NamedTemporaryFile(
+            mode="w", prefix=".xray-known-hosts-", delete=False
+        ) as known_hosts_file:
+            for ssh_port in ports:
+                known_hosts_file.write(f"[{host}]:{ssh_port} {host_public_key}\n")
+            known_hosts_path = known_hosts_file.name
+        os.chmod(known_hosts_path, 0o600)
 
         for ssh_port in reachable_ports:
             result = subprocess.run(
@@ -120,9 +132,9 @@ def management_state(node, timeout=5.0):
                     "-o",
                     "ConnectionAttempts=1",
                     "-o",
-                    "StrictHostKeyChecking=no",
+                    "StrictHostKeyChecking=yes",
                     "-o",
-                    "UserKnownHostsFile=/dev/null",
+                    f"UserKnownHostsFile={known_hosts_path}",
                     "-o",
                     "LogLevel=ERROR",
                     f"{user}@{host}",
@@ -165,6 +177,11 @@ def management_state(node, timeout=5.0):
         if key_path:
             try:
                 os.unlink(key_path)
+            except FileNotFoundError:
+                pass
+        if known_hosts_path:
+            try:
+                os.unlink(known_hosts_path)
             except FileNotFoundError:
                 pass
 

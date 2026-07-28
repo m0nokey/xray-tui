@@ -137,7 +137,7 @@ def port_number(value):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("action", choices=("count", "names", "normalize", "extract", "mark-deployed", "set-deploy-key", "ensure-ssh-port", "set-bootstrap", "set-dns-profile", "set-local-region", "remove-node", "add-node", "add-key", "add-keys", "remove-key", "remove-all-keys"))
+parser.add_argument("action", choices=("count", "names", "normalize", "extract", "mark-deployed", "set-deploy-key", "set-ssh-host-key", "ensure-ssh-port", "set-bootstrap", "set-dns-profile", "set-local-region", "remove-node", "add-node", "add-key", "add-keys", "remove-key", "remove-all-keys"))
 parser.add_argument("args", nargs="*")
 parser.add_argument("--bootstrap-key")
 parser.add_argument("--server-name", default="github.com")
@@ -201,6 +201,8 @@ elif opts.action == "normalize":
         node.setdefault("deploy_user", management_user)
         node.setdefault("deploy_private_key", management_private_key)
         node.setdefault("deploy_authorized_key", management_authorized_key)
+        node.setdefault("ssh_host_public_key", "")
+        node.setdefault("ssh_host_fingerprint", "")
 elif opts.action == "extract":
     if len(opts.args) != 1 or opts.args[0] not in nodes:
         raise SystemExit("extract requires NODE")
@@ -233,6 +235,8 @@ elif opts.action == "extract":
         "ssh_port": target_port,
         "sshd_port": target_port,
         "management_port": node.get("management_port", initial_port),
+        "system_base_ssh_host_public_key": node.get("ssh_host_public_key", ""),
+        "system_base_ssh_host_fingerprint": node.get("ssh_host_fingerprint", ""),
     }
     json.dump(output, sys.stdout, indent=2)
     print()
@@ -257,6 +261,18 @@ elif opts.action == "set-deploy-key":
     node["deploy_authorized_key"] = Path(opts.args[2]).read_text(encoding="utf-8").strip()
     node["management_private_key"] = node["deploy_private_key"]
     node["management_authorized_key"] = node["deploy_authorized_key"]
+elif opts.action == "set-ssh-host-key":
+    if len(opts.args) != 3 or opts.args[0] not in nodes:
+        raise SystemExit("set-ssh-host-key requires NODE PUBLIC_KEY_FILE FINGERPRINT")
+    public_key = Path(opts.args[1]).read_text(encoding="utf-8").strip()
+    fingerprint = opts.args[2].strip()
+    if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: .*)?", public_key):
+        raise SystemExit("invalid SSH host public key")
+    if not re.fullmatch(r"SHA256:[A-Za-z0-9+/=]+", fingerprint):
+        raise SystemExit("invalid SSH host fingerprint")
+    node = nodes[opts.args[0]]
+    node["ssh_host_public_key"] = public_key
+    node["ssh_host_fingerprint"] = fingerprint
 elif opts.action == "ensure-ssh-port":
     if len(opts.args) != 2 or opts.args[0] not in nodes:
         raise SystemExit("ensure-ssh-port requires NODE BOOTSTRAP_PORT")
@@ -382,6 +398,8 @@ elif opts.action == "add-node":
         "ssh_port": ssh_port,
         "sshd_port": ssh_port,
         "management_port": bootstrap_port,
+        "ssh_host_public_key": "",
+        "ssh_host_fingerprint": "",
         "xray": {
             "vision_port": ports[0], "xhttp_port": ports[1],
             "reality_private_key": reality_private,
