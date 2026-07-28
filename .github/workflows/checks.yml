@@ -66,7 +66,7 @@ jobs:
             ansible/restart.yml \
             ansible/rotate-ssh.yml \
             ansible/site.yml; do
-            ansible-playbook --syntax-check -i 'localhost,' -c local "$playbook"
+            ansible-playbook --syntax-check -i 'xray_nodes,' -c local "$playbook"
           done
 
       - name: Run Ansible lint
