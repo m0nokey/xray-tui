@@ -1,0 +1,74 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    env:
+      ANSIBLE_LOCAL_TEMP: ${{ runner.temp }}/ansible-local
+      ANSIBLE_SSH_CONTROL_PATH_DIR: ${{ runner.temp }}/ansible-cp
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install check tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y shellcheck
+          python -m pip install --disable-pip-version-check \
+            ansible-core ansible-lint yamllint ruff
+          ansible-galaxy collection install -r ansible/requirements.yml
+
+      - name: Check Bash syntax
+        run: |
+          bash -n xray-tui.sh
+          bash -n run.sh
+          bash -n legacy/xray-tui.sh
+
+      - name: Run ShellCheck
+        run: shellcheck --severity=error xray-tui.sh run.sh legacy/xray-tui.sh
+
+      - name: Check Python syntax
+        run: python -m compileall -q scripts
+
+      - name: Run Ruff
+        run: ruff check scripts
+
+      - name: Run YAML lint
+        run: yamllint -d relaxed ansible .github/workflows
+
+      - name: Check Ansible syntax
+        run: |
+          for playbook in \
+            ansible/bootstrap.yml \
+            ansible/harden_ssh.yml \
+            ansible/preflight.yml \
+            ansible/remove.yml \
+            ansible/restart.yml \
+            ansible/rotate-ssh.yml \
+            ansible/site.yml; do
+            ansible-playbook --syntax-check -i 'localhost,' -c local "$playbook"
+          done
+
+      - name: Run Ansible lint
+        run: ansible-lint --offline --profile min ansible
+
+      - name: Check changed whitespace
+        run: git diff --check HEAD^ HEAD
