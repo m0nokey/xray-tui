@@ -13,6 +13,10 @@ LAST_ANSIBLE_OUTPUT=""
 readonly NO_SAVED_SSH_ACCESS=125
 # Internal status used to return to the VPS password prompt after auth failure.
 readonly INVALID_BOOTSTRAP_CREDENTIALS=126
+# Internal status used when the VPS cannot be reached over SSH.
+readonly UNAVAILABLE_BOOTSTRAP_CONNECTION=127
+# Internal status used for other preflight failures.
+readonly BOOTSTRAP_PREFLIGHT_FAILED=128
 # Internal status used to refresh the server list after successful removal.
 readonly NODE_REMOVED_STATUS=124
 mkdir -p "$STATE_DIR"
@@ -695,6 +699,96 @@ bootstrap_auth_failure_menu() {
     done
 }
 
+bootstrap_connection_failure_menu() {
+    local host="$1" port="$2" choice
+    while true; do
+        clear_screen
+        printf '%s\n' "VPS SSH connection unavailable"
+        printf '%s\n' "The VPS did not accept an SSH connection."
+        printf '%-16s %s\n' "IP address:" "$host"
+        printf '%-16s %s\n' "Port:" "$port"
+        printf '%s\n' "Check the IP address and SSH port."
+        echo
+        menu_option 1 "Edit VPS connection"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice choice '?: '; then
+            continue
+        fi
+        case "$choice" in
+            1) return 0 ;;
+            b|B) return 2 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 2 ;;
+            i|I) show_info general ;;
+            x|X) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
+local_internet_failure_menu() {
+    local choice
+    while true; do
+        clear_screen
+        printf '%s\n' "Internet connection unavailable"
+        printf '%s\n' "The computer running Xray TUI cannot reach the Internet."
+        printf '%s\n' "Check the local network, proxy, or firewall settings."
+        echo
+        menu_option 1 "Try again"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice choice '?: '; then
+            continue
+        fi
+        case "$choice" in
+            1) return 0 ;;
+            b|B) return 2 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 2 ;;
+            i|I) show_info general ;;
+            x|X) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
+bootstrap_preflight_failure_menu() {
+    local choice
+    while true; do
+        clear_screen
+        printf '%s\n' "VPS preflight failed"
+        printf '%s\n' "The VPS did not pass the initial checks."
+        printf '%s\n' "Deployment was not started."
+        printf '%s\n' "Check the VPS operating system, SSH access, and system configuration."
+        echo
+        menu_option 1 "Edit VPS connection"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice choice '?: '; then
+            continue
+        fi
+        case "$choice" in
+            1) return 0 ;;
+            b|B) return 2 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 2 ;;
+            i|I) show_info general ;;
+            x|X) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
 menu_heading() {
     printf '%s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET"
 }
@@ -1010,6 +1104,20 @@ clear_screen() {
     printf '\033[H\033[2J\033[3J' >&2
 }
 
+local_internet_available() {
+    local url
+    command -v curl >/dev/null 2>&1 || return 1
+    for url in \
+        https://www.gstatic.com/generate_204 \
+        https://deb.debian.org/ \
+        https://github.com/; do
+        if curl -fsSL --connect-timeout 3 --max-time 6 -o /dev/null "$url" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 wait_action_return() {
     local key
     [[ -t 0 ]] || return 0
@@ -1178,10 +1286,17 @@ probe_vps_resources() {
             -o PreferredAuthentications=password \
             -o LogLevel=ERROR \
             "$user@$host" true 2>&1)" || auth_rc=$?
-        if ((auth_rc != 0)) && grep -Eiq 'permission denied|authentication failed|authentication refused' <<<"$auth_output"; then
-            rm -rf "$inventory_dir"
-            unset password password_yaml auth_output
-            return "$INVALID_BOOTSTRAP_CREDENTIALS"
+        if ((auth_rc != 0)); then
+            if grep -Eiq 'permission denied|authentication failed|authentication refused' <<<"$auth_output"; then
+                rm -rf "$inventory_dir"
+                unset password password_yaml auth_output
+                return "$INVALID_BOOTSTRAP_CREDENTIALS"
+            fi
+            if grep -Eiq 'connection closed|connection timed out|timed out|connection refused|no route to host|network is unreachable|could not resolve hostname' <<<"$auth_output"; then
+                rm -rf "$inventory_dir"
+                unset password password_yaml auth_output
+                return "$UNAVAILABLE_BOOTSTRAP_CONNECTION"
+            fi
         fi
     fi
     unset password password_yaml
@@ -1189,19 +1304,21 @@ probe_vps_resources() {
     clear_screen
     printf '%s\n' "Checking VPS resources..."
     if ! ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1; then
-        cat "$log"
+        if grep -Eiq 'permission denied|authentication failed|authentication refused|failed password' "$log"; then
+            rm -rf "$inventory_dir"
+            return "$INVALID_BOOTSTRAP_CREDENTIALS"
+        fi
+        if grep -Eiq 'connection closed|connection timed out|timed out waiting|connection refused|no route to host|network is unreachable|could not resolve hostname' "$log"; then
+            rm -rf "$inventory_dir"
+            return "$UNAVAILABLE_BOOTSTRAP_CONNECTION"
+        fi
         rm -rf "$inventory_dir"
-        printf '%s\n' "The VPS resources could not be checked. Deployment was not started."
-        wait_action_return
-        return 1
+        return "$BOOTSTRAP_PREFLIGHT_FAILED"
     fi
     facts_line="$(grep -o 'XRAY_RESOURCE_FACTS vcpus=[0-9][0-9]* ram_mb=[0-9][0-9]*' "$log" | tail -n 1 || true)"
     if [[ ! "$facts_line" =~ vcpus=([0-9]+)[[:space:]]ram_mb=([0-9]+) ]]; then
-        cat "$log"
         rm -rf "$inventory_dir"
-        printf '%s\n' "The VPS resource report was invalid. Deployment was not started."
-        wait_action_return
-        return 1
+        return "$BOOTSTRAP_PREFLIGHT_FAILED"
     fi
     VPS_VCPUS="${BASH_REMATCH[1]}"
     VPS_RAM_MB="${BASH_REMATCH[2]}"
@@ -1861,8 +1978,18 @@ retry_existing_node_with_saved_key() {
 }
 
 add_node() {
-    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port review_status probe_rc auth_action
+    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port review_status probe_rc auth_action internet_action
     while true; do
+        clear_screen
+        printf '%s\n' "Checking local Internet connection..."
+        if ! local_internet_available; then
+            local_internet_failure_menu
+            internet_action=$?
+            if ((internet_action == 0)); then
+                continue
+            fi
+            return 0
+        fi
         if ! add_node_ip_prompt; then
             return 0
         fi
@@ -1944,7 +2071,11 @@ add_node() {
             fi
             case "$review_status" in
                 0) ;;
-                1) continue ;;
+                1)
+                    unset bootstrap_password
+                    rm -f "$before" "$after"
+                    continue 2
+                    ;;
                 *) rm -f "$before" "$after"; return 0 ;;
             esac
 
@@ -1952,6 +2083,26 @@ add_node() {
                 break 2
             else
                 probe_rc=$?
+            fi
+            if ((probe_rc == UNAVAILABLE_BOOTSTRAP_CONNECTION)); then
+                bootstrap_connection_failure_menu "$host" "$bootstrap_port"
+                auth_action=$?
+                unset bootstrap_password
+                rm -f "$before" "$after"
+                if ((auth_action == 0)); then
+                    continue 2
+                fi
+                return 0
+            fi
+            if ((probe_rc == BOOTSTRAP_PREFLIGHT_FAILED)); then
+                bootstrap_preflight_failure_menu
+                auth_action=$?
+                unset bootstrap_password
+                rm -f "$before" "$after"
+                if ((auth_action == 0)); then
+                    continue 2
+                fi
+                return 0
             fi
             if ((probe_rc != INVALID_BOOTSTRAP_CREDENTIALS)); then
                 unset bootstrap_password
@@ -2155,7 +2306,7 @@ deploy_node() {
     printf '[%s]:%s %s\n' "$host" "$target_port" "$ssh_host_public_key" >"$known_hosts_file"
     chmod 600 "$known_hosts_file"
 
-    local verify_attempt
+    local verify_attempt verified=0
     for verify_attempt in {1..12}; do
         if ssh -i "$key_file" -p "$target_port" \
             -o IdentitiesOnly=yes \
@@ -2165,13 +2316,14 @@ deploy_node() {
             -o UserKnownHostsFile="$known_hosts_file" \
             -o LogLevel=ERROR \
             deploy@"$host" true; then
+            verified=1
             break
         fi
         if ((verify_attempt < 12)); then
             sleep 5
         fi
     done
-    if ((verify_attempt == 12)); then
+    if ((verified == 0)); then
         printf '%s\n' "Deployment completed, but the generated SSH port could not be verified: $target_port."
         rm -f "$before" "$extra" "$key_file" "$host_key_file" "$known_hosts_file"
         rm -rf "$inventory_dir"
