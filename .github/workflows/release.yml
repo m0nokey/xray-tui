@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Build release archive
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          archive="xray-tui-${RELEASE_TAG}.tar.gz"
+          root="xray-tui-${RELEASE_TAG}"
+          staging="$(mktemp -d)"
+          trap 'rm -rf "$staging"' EXIT
+
+          mkdir -p "$staging/$root"
+          git archive --format=tar "$RELEASE_TAG" \
+            | tar -xf - -C "$staging/$root"
+
+          (
+            cd "$staging/$root"
+            find . -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > SHA256SUMS
+          )
+
+          tar -C "$staging" -czf "$archive" "$root"
+          sha256sum "$archive" > SHA256SUMS
+
+          printf 'RELEASE_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
+
+      - name: Create GitHub release and upload assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          release_payload="$(jq -n \
+            --arg tag "$RELEASE_TAG" \
+            '{tag_name: $tag, name: $tag, generate_release_notes: true}')"
+          release="$(curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GITHUB_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Content-Type: application/json" \
+            --data "$release_payload" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases")"
+          upload_url="$(jq -er '.upload_url | sub("\\{.*$"; "")' <<<"$release")"
+
+          for asset in "$RELEASE_ARCHIVE" SHA256SUMS; do
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $GITHUB_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              --header "Content-Type: application/octet-stream" \
+              --data-binary "@$asset" \
+              "$upload_url?name=$(basename "$asset")" >/dev/null
+          done
