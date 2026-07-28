@@ -7,9 +7,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-
 from datetime import datetime
-
 
 RESET = "\033[0m"
 BLUE = "\033[38;5;117m"
