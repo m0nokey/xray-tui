@@ -11,6 +11,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
 from nacl.public import PrivateKey
 
 COUNTRIES_FILE = Path(__file__).resolve().parent.parent / "data" / "countries.tsv"
@@ -47,6 +48,7 @@ def ip_info(host):
             result = subprocess.run(
                 ["curl", "-sSfL", "--tlsv1.3", "--http2", "--proto", "=https",
                  f"https://ipinfo.io/{host}"], capture_output=True, text=True, timeout=10,
+                check=False,
             )
             if result.returncode == 0 and result.stdout.strip():
                 data = json.loads(result.stdout)
@@ -72,8 +74,8 @@ def deploy_key():
     os.unlink(path)
     try:
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path], check=True)
-        private = open(path, encoding="utf-8").read()
-        public = open(path + ".pub", encoding="utf-8").read().strip()
+        private = Path(path).read_text(encoding="utf-8")
+        public = Path(path + ".pub").read_text(encoding="utf-8").strip()
         return private, public
     finally:
         for filename in (path, path + ".pub"):
@@ -105,7 +107,11 @@ def _bot_port_pattern(port):
         for index in range(len(value) - 3)
     ):
         return True
-    return False
+    return len(value) >= 4 and any(
+        value[index] == value[index + 2]
+        and value[index + 1] == value[index + 3]
+        for index in range(len(value) - 3)
+    )
 
 
 def generated_port(used):
@@ -247,8 +253,8 @@ elif opts.action == "set-deploy-key":
     if len(opts.args) != 3 or opts.args[0] not in nodes:
         raise SystemExit("set-deploy-key requires NODE PRIVATE_KEY PUBLIC_KEY")
     node = nodes[opts.args[0]]
-    node["deploy_private_key"] = open(opts.args[1], encoding="utf-8").read()
-    node["deploy_authorized_key"] = open(opts.args[2], encoding="utf-8").read().strip()
+    node["deploy_private_key"] = Path(opts.args[1]).read_text(encoding="utf-8")
+    node["deploy_authorized_key"] = Path(opts.args[2]).read_text(encoding="utf-8").strip()
     node["management_private_key"] = node["deploy_private_key"]
     node["management_authorized_key"] = node["deploy_authorized_key"]
 elif opts.action == "ensure-ssh-port":
@@ -340,7 +346,7 @@ elif opts.action == "add-node":
     private, public = deploy_key()
     bootstrap_private = ""
     if opts.bootstrap_key:
-        bootstrap_private = open(opts.bootstrap_key, encoding="utf-8").read()
+        bootstrap_private = Path(opts.bootstrap_key).read_text(encoding="utf-8")
     bootstrap_password = os.environ.get("XRAY_BOOTSTRAP_PASSWORD", "")
     bootstrap_port = int(os.environ.get("XRAY_BOOTSTRAP_PORT", "22"))
     bootstrap_user = os.environ.get("XRAY_BOOTSTRAP_USER", "root")

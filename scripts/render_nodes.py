@@ -7,7 +7,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 RESET = "\033[0m"
@@ -127,10 +127,13 @@ def management_state(node, timeout=5.0):
                     "-o",
                     "LogLevel=ERROR",
                     f"{user}@{host}",
-                    "status=\"$(sudo -n docker inspect --format '{{.State.Status}}' xray 2>/dev/null || "
-                    "docker inspect --format '{{.State.Status}}' xray 2>/dev/null || true)\"; "
-                    "case \"$status\" in running) printf xray-running;; "
-                    "'') printf xray-not-found;; *) printf 'xray-%s' \"$status\";; esac",
+                    (
+                        "status=\"$(sudo -n docker inspect --format '{{.State.Status}}' xray "
+                        "2>/dev/null || docker inspect --format '{{.State.Status}}' xray "
+                        "2>/dev/null || true)\"; case \"$status\" in running) "
+                        "printf xray-running;; '') printf xray-not-found;; *) "
+                        "printf 'xray-%s' \"$status\";; esac"
+                    ),
                 ],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
