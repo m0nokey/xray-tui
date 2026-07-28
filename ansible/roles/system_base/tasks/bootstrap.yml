@@ -2,8 +2,9 @@
 - name: Require deploy SSH key
   ansible.builtin.assert:
     that:
-      - deploy_authorized_key | length > 0
-    fail_msg: Pass deploy_authorized_key from the encrypted local state.
+      - system_base_deploy_authorized_key | length > 0
+    fail_msg: >-
+      Pass system_base_deploy_authorized_key from the encrypted local state.
 
 - name: Install sudo for bootstrap
   ansible.builtin.apt:
@@ -16,11 +17,16 @@
 - name: Check whether deploy user already exists
   ansible.builtin.getent:
     database: passwd
-    key: "{{ deploy_user }}"
+    key: "{{ system_base_deploy_user }}"
   register: system_base_deploy_user_lookup
   failed_when: false
 
 - name: Mark deploy user created by Xray TUI
+  when:
+    - not (
+        system_base_deploy_user_lookup.ansible_facts.getent_passwd
+        | default(false)
+      )
   block:
     - name: Create Xray TUI state directory
       ansible.builtin.file:
@@ -37,17 +43,15 @@
         owner: root
         group: root
         mode: "0600"
-  when: not (system_base_deploy_user_lookup.ansible_facts.getent_passwd | default(false))
-
 - name: Create deploy group
   ansible.builtin.group:
-    name: "{{ deploy_user }}"
+    name: "{{ system_base_deploy_user }}"
     state: present
 
 - name: Create deploy user
   ansible.builtin.user:
-    name: "{{ deploy_user }}"
-    group: "{{ deploy_user }}"
+    name: "{{ system_base_deploy_user }}"
+    group: "{{ system_base_deploy_user }}"
     shell: /bin/bash
     create_home: true
     password_lock: true
@@ -55,39 +59,40 @@
 
 - name: Ensure deploy SSH directory permissions
   ansible.builtin.file:
-    path: "/home/{{ deploy_user }}/.ssh"
+    path: "/home/{{ system_base_deploy_user }}/.ssh"
     state: directory
-    owner: "{{ deploy_user }}"
-    group: "{{ deploy_user }}"
+    owner: "{{ system_base_deploy_user }}"
+    group: "{{ system_base_deploy_user }}"
     mode: "0700"
 
 - name: Ensure deploy Ansible temporary directory permissions
   ansible.builtin.file:
-    path: "/home/{{ deploy_user }}/.ansible/tmp"
+    path: "/home/{{ system_base_deploy_user }}/.ansible/tmp"
     state: directory
-    owner: "{{ deploy_user }}"
-    group: "{{ deploy_user }}"
+    owner: "{{ system_base_deploy_user }}"
+    group: "{{ system_base_deploy_user }}"
     mode: "0700"
 
 - name: Install deploy authorized key
   ansible.builtin.copy:
-    dest: "/home/{{ deploy_user }}/.ssh/authorized_keys"
-    owner: "{{ deploy_user }}"
-    group: "{{ deploy_user }}"
+    dest: "/home/{{ system_base_deploy_user }}/.ssh/authorized_keys"
+    owner: "{{ system_base_deploy_user }}"
+    group: "{{ system_base_deploy_user }}"
     mode: "0600"
-    content: "{{ deploy_authorized_key | trim }}\n"
+    content: "{{ system_base_deploy_authorized_key | trim }}\n"
 
 - name: Install passwordless deploy sudoers file
   ansible.builtin.copy:
-    dest: "/etc/sudoers.d/{{ deploy_user }}"
+    dest: "/etc/sudoers.d/{{ system_base_deploy_user }}"
     owner: root
     group: root
     mode: "0440"
     validate: /usr/sbin/visudo -cf %s
     content: |
-      {{ deploy_user }} ALL=(ALL) NOPASSWD:ALL
+      {{ system_base_deploy_user }} ALL=(ALL) NOPASSWD:ALL
 
 - name: Verify passwordless deploy sudo
-  become_user: "{{ deploy_user }}"
+  become: true
+  become_user: "{{ system_base_deploy_user }}"
   ansible.builtin.command: sudo -n true
   changed_when: false

@@ -221,14 +221,14 @@ elif opts.action == "extract":
         "management_authorized_key": node.get(
             "management_authorized_key", node.get("deploy_authorized_key", "")
         ),
-        "deploy_user": node.get("deploy_user", node.get("management_user", "deploy")),
-        "deploy_authorized_key": node.get(
+        "system_base_deploy_user": node.get("deploy_user", node.get("management_user", "deploy")),
+        "system_base_deploy_authorized_key": node.get(
             "deploy_authorized_key", node.get("management_authorized_key", "")
         ),
         "management_private_key": node.get(
             "management_private_key", node.get("deploy_private_key", "")
         ),
-        "harden_ssh_initial_user": node.get("bootstrap_user", "root"),
+        "system_base_harden_ssh_initial_user": node.get("bootstrap_user", "root"),
         "initial_port": initial_port,
         "ssh_port": target_port,
         "sshd_port": target_port,

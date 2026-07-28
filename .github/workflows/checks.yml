@@ -71,7 +71,7 @@ jobs:
           done
 
       - name: Run Ansible lint
-        run: ansible-lint --offline --profile min ansible
+        run: ansible-lint --offline --profile production ansible
 
       - name: Check changed whitespace
         run: git diff --check HEAD^ HEAD

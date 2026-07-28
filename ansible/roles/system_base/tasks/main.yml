@@ -2,8 +2,9 @@
 - name: Require deploy SSH key
   ansible.builtin.assert:
     that:
-      - deploy_authorized_key | length > 0
-    fail_msg: Pass deploy_authorized_key from the encrypted local state.
+      - system_base_deploy_authorized_key | length > 0
+    fail_msg: >-
+      Pass system_base_deploy_authorized_key from the encrypted local state.
 
 - name: Gather package facts
   ansible.builtin.package_facts:
@@ -156,7 +157,7 @@
 
 - name: Create deploy user
   ansible.builtin.user:
-    name: "{{ deploy_user }}"
+    name: "{{ system_base_deploy_user }}"
     shell: /bin/bash
     groups: docker
     append: true
@@ -166,37 +167,37 @@
 
 - name: Ensure deploy SSH directory permissions
   ansible.builtin.file:
-    path: "/home/{{ deploy_user }}/.ssh"
+    path: "/home/{{ system_base_deploy_user }}/.ssh"
     state: directory
-    owner: "{{ deploy_user }}"
-    group: "{{ deploy_user }}"
+    owner: "{{ system_base_deploy_user }}"
+    group: "{{ system_base_deploy_user }}"
     mode: "0700"
 
 - name: Ensure deploy Ansible temporary directory permissions
   ansible.builtin.file:
-    path: "/home/{{ deploy_user }}/.ansible/tmp"
+    path: "/home/{{ system_base_deploy_user }}/.ansible/tmp"
     state: directory
-    owner: "{{ deploy_user }}"
-    group: "{{ deploy_user }}"
+    owner: "{{ system_base_deploy_user }}"
+    group: "{{ system_base_deploy_user }}"
     mode: "0700"
 
 - name: Install deploy authorized key
   ansible.builtin.copy:
-    dest: "/home/{{ deploy_user }}/.ssh/authorized_keys"
-    owner: "{{ deploy_user }}"
-    group: "{{ deploy_user }}"
+    dest: "/home/{{ system_base_deploy_user }}/.ssh/authorized_keys"
+    owner: "{{ system_base_deploy_user }}"
+    group: "{{ system_base_deploy_user }}"
     mode: "0600"
-    content: "{{ deploy_authorized_key | trim }}\n"
+    content: "{{ system_base_deploy_authorized_key | trim }}\n"
 
 - name: Install passwordless deploy sudoers file
   ansible.builtin.copy:
-    dest: "/etc/sudoers.d/{{ deploy_user }}"
+    dest: "/etc/sudoers.d/{{ system_base_deploy_user }}"
     owner: root
     group: root
     mode: "0440"
     validate: /usr/sbin/visudo -cf %s
     content: |
-      {{ deploy_user }} ALL=(ALL) NOPASSWD:ALL
+      {{ system_base_deploy_user }} ALL=(ALL) NOPASSWD:ALL
 
 - name: Enable Docker
   ansible.builtin.systemd_service:

@@ -177,7 +177,7 @@
 
 - name: Build Unbound image when sources changed
   ansible.builtin.shell: |
-    set -eu
+    set -euo pipefail
     state_dir="{{ xray_dir }}/.build-fingerprints"
     state_file="$state_dir/unbound.sha256"
     mkdir -p "$state_dir"

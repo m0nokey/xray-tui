@@ -11,7 +11,7 @@ PasswordAuthentication no
 LoginGraceTime 10
 IgnoreRhosts yes
 HostbasedAuthentication no
-AllowGroups {{ harden_ssh_allow_groups }}
+AllowGroups {{ system_base_harden_ssh_allow_groups }}
 PermitOpen none
 MaxAuthTries 3
 StrictModes yes
@@ -37,7 +37,7 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 HostKeyAlgorithms ssh-ed25519
 Ciphers aes256-gcm@openssh.com
 MACs hmac-sha2-512-etm@openssh.com
-KexAlgorithms {{ harden_ssh_kex_algorithms }}
+KexAlgorithms {{ system_base_harden_ssh_kex_algorithms }}
 AuthorizedKeysFile .ssh/authorized_keys
 LogLevel ERROR
 SyslogFacility AUTHPRIV

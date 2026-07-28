@@ -10,6 +10,4 @@
         sleep: 2
   roles:
     - role: system_base
-      vars:
-        ssh_hardening_enabled: false
     - role: xray

@@ -62,6 +62,8 @@
 - name: Generate SSH ed25519 host key
   ansible.builtin.command:
     cmd: ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/ssh_host_ed25519_key
+  args:
+    creates: /etc/ssh/ssh_host_ed25519_key
   when: not system_base_ssh_host_key_marker_stat.stat.exists
 
 - name: Mark SSH host key initialization complete
@@ -86,21 +88,21 @@
     argv:
       - id
       - -gn
-      - "{{ harden_ssh_initial_user }}"
+      - "{{ system_base_harden_ssh_initial_user }}"
   register: system_base_initial_ssh_group
   changed_when: false
   failed_when: false
 
 - name: Build SSH AllowGroups
   ansible.builtin.set_fact:
-    harden_ssh_allow_groups: >-
+    system_base_harden_ssh_allow_groups: >-
       {{
-        deploy_user
+        system_base_deploy_user
         ~ (
           (' ' ~ system_base_initial_ssh_group.stdout)
-          if harden_ssh_initial_user != 'root'
+          if system_base_harden_ssh_initial_user != 'root'
              and (system_base_initial_ssh_group.stdout | default('') | length > 0)
-             and system_base_initial_ssh_group.stdout != deploy_user
+             and system_base_initial_ssh_group.stdout != system_base_deploy_user
           else ''
         )
       }}
@@ -109,29 +111,29 @@
   ansible.builtin.command:
     cmd: ssh -Q kex
   delegate_to: localhost
-  register: harden_ssh_controller_kex_cmd
+  register: system_base_harden_ssh_controller_kex_cmd
   changed_when: false
 
 - name: Detect VPS SSH KEX algorithms
   ansible.builtin.command:
     cmd: ssh -Q kex
-  register: harden_ssh_vps_kex_cmd
+  register: system_base_harden_ssh_vps_kex_cmd
   changed_when: false
 
 - name: Select shared hardened SSH KEX algorithms
   ansible.builtin.set_fact:
-    harden_ssh_kex_algorithms: >-
+    system_base_harden_ssh_kex_algorithms: >-
       {{
-        harden_ssh_preferred_kex
-        | select('in', harden_ssh_vps_kex_cmd.stdout_lines)
-        | select('in', harden_ssh_controller_kex_cmd.stdout_lines)
+        system_base_harden_ssh_preferred_kex
+        | select('in', system_base_harden_ssh_vps_kex_cmd.stdout_lines)
+        | select('in', system_base_harden_ssh_controller_kex_cmd.stdout_lines)
         | join(',')
       }}
 
 - name: Require shared hardened SSH KEX algorithms
   ansible.builtin.fail:
     msg: "No shared hardened SSH KEX algorithm exists between controller and VPS."
-  when: harden_ssh_kex_algorithms | length == 0
+  when: system_base_harden_ssh_kex_algorithms | length == 0
 
 - name: Check current sshd_config
   ansible.builtin.stat:
@@ -199,8 +201,11 @@
   changed_when: false
 
 - name: Verify effective hardened SSH port
-  ansible.builtin.shell:
-    cmd: "sshd -T | awk '$1 == \"port\" { print $2; exit }'"
+  ansible.builtin.shell: |
+    set -o pipefail
+    sshd -T | awk '$1 == "port" { print $2; exit }'
+  args:
+    executable: /bin/bash
   register: system_base_effective_ssh_port
   changed_when: false
   failed_when: system_base_effective_ssh_port.stdout | trim != (ssh_port | string)
