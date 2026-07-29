@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+
+show_dns_profile_matrix() {
+    local separator
+    separator="    $(printf '%*s' 103 '' | tr ' ' '-')"
+    printf '%s\n' "PROFILE LIST MATRIX"
+    printf '%s\n' ""
+    printf '    %-45s %9s %9s %9s %9s %17s\n' \
+        "List" "Minimal" "Optimal" "Full" "Maximum" "Approx. entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "URLhaus" "ON" "ON" "ON" "ON" "~611 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Threat Intelligence Feeds Mini" "-" "ON" "-" "-" "160,610 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Encrypted DNS" "-" "-" "ON" "-" "3,423 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Encrypted DNS/VPN/Proxy Bypass" "-" "-" "-" "ON" "17,591 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "AdGuard CNAME Trackers" "-" "-" "ON" "ON" "~100,087 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "AdGuard Mail Trackers" "-" "-" "ON" "ON" "~98,595 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "ThreatFox" "-" "-" "ON" "ON" "~45,617 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Pro++" "-" "-" "ON" "-" "272,267 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Ultimate" "-" "-" "-" "ON" "294,364 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "HaGeZi Threat Intelligence Feeds Medium" "-" "-" "-" "ON" "417,094 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Threat Intelligence IPs" "-" "-" "-" "ON" "~54,609 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Dynamic DNS Threats" "-" "-" "optional" "ON" "1,524 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Suspicious Spam TLDs" "-" "-" "-" "optional" "~129 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' ""
+    printf '%s\n' "    Custom-only sources"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Pop-up Ads" "-" "optional" "included" "included" "56,598 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Adult Content" "-" "optional" "optional" "optional" "110,004 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Gambling Mini" "-" "optional" "optional" "optional" "94,060 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Gambling Medium" "-" "-" "optional" "optional" "155,276 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Gambling Full" "-" "-" "optional" "optional" "357,251 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Social Networks" "-" "-" "optional" "optional" "898 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "SafeSearch" "-" "-" "optional" "optional" "206 entries"
+    printf '%s\n' "$separator"
+    printf '    %-45s %9s %9s %9s %9s %17s\n' "Anti Piracy" "-" "-" "optional" "optional" "36,844 entries"
+    printf '%s\n' "$separator"
+    printf '%s\n' ""
+    printf '%s\n' "    Counts are upstream list values and may change when sources update."
+}
+
+show_info() {
+    local topic="${1:-general}"
+    local reset="$COLOR_RESET" blue="$COLOR_LINE" gray="$COLOR_MUTED"
+    local green=$'\033[92m' yellow=$'\033[93m' red=$'\033[91m'
+
+    if [[ ! -t 1 ]]; then
+        reset=''
+        blue=''
+        gray=''
+        green=''
+        yellow=''
+        red=''
+    fi
+
+    info_desc() {
+        printf '    %b%s%b\n' "$gray" "$1" "$reset"
+    }
+
+    clear_screen
+    echo
+    case "$topic" in
+        status)
+            printf '%b  Status:%b\n' "$blue" "$reset"
+            printf '    %bActive%b           %bXray is running and both VPN ports are reachable.%b\n' "$green" "$reset" "$gray" "$reset"
+            printf '    %bPartial%b          %bXray is running and only one VPN port is reachable.%b\n' "$yellow" "$reset" "$gray" "$reset"
+            printf '    %bVPN unavailable%b  %bThe VPS responded, but Xray is not confirmed running.%b\n' "$red" "$reset" "$gray" "$reset"
+            printf '    %bUnreachable%b      %bNo VPN or management port responded; DPI or a provider firewall may be involved.%b\n' "$red" "$reset" "$gray" "$reset"
+            echo
+            printf '%b  Selected server menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Manage VPN server"
+            info_desc "       Open server operations, ad and threat blocking, country blocking, or deletion."
+            printf '%s\n' "    2. Manage access keys"
+            info_desc "       Show, add, or delete the VPN client keys for this server."
+            ;;
+        access_keys)
+            printf '%b  Access keys:%b\n' "$blue" "$reset"
+            info_desc "Each access key contains one Vision UUID and one XHTTP UUID."
+            info_desc "Both UUIDs are deployed together and deleted together."
+            info_desc "You can add up to 50 access keys at once."
+            info_desc "In the delete screen, enter a key number or the last number to delete all keys."
+            echo
+            printf '%b  Manage access keys menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Show"
+            info_desc "       Display the Vision and XHTTP connection links for each key."
+            printf '%s\n' "    2. Add"
+            info_desc "       Generate 1 to 50 new access keys and deploy them to the VPS."
+            printf '%s\n' "    3. Delete"
+            info_desc "       Delete one key, or choose the final number to delete all keys."
+            echo
+            printf '%b  Access-key screens:%b\n' "$blue" "$reset"
+            info_desc "Add: enter the number of keys to generate, from 1 to 50."
+            info_desc "Delete: select a key number, then confirm with y or cancel with n."
+            info_desc "Delete all: confirm that every Vision and XHTTP key should be deleted."
+            ;;
+        dns)
+            printf '%b  Block ads and threats:%b\n' "$blue" "$reset"
+            printf '    %-7s - %s\n' "Minimal" "malware and malicious websites."
+            printf '    %-7s - %s\n' "Optimal" "malware, phishing, scams and selected trackers."
+            printf '    %-7s - %s\n' "Full" "ads, tracking, telemetry and malware."
+            printf '    %-7s - %s\n' "Maximum" "broad threat protection and known DNS bypass services."
+            printf '    %-7s - %s\n' "Custom" "choose extra categories within the VPS resource limit."
+            info_desc "Full includes Encrypted DNS protection; Custom can disable it for TV compatibility."
+            info_desc "Blocked domains return NXDOMAIN. DNS filtering does not replace a firewall."
+            info_desc "Resource floors: Minimal/Optimal 1 vCPU and 1280 MB RAM; Full 2 vCPU and 1792 MB RAM."
+            info_desc "Maximum requires 2 vCPU and 2304 MB RAM. Custom is calculated from the selected lists."
+            info_desc "Large feeds work best with 4 GB RAM."
+            echo
+            printf '%b  Block ads and threats menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Disabled"
+            info_desc "       Delete DNS blocklists from the VPS."
+            printf '%s\n' "    2. Minimal"
+            info_desc "       Enable malware and malicious website protection."
+            printf '%s\n' "    3. Optimal"
+            info_desc "       Add phishing, scams, and selected tracker protection."
+            printf '%s\n' "    4. Full"
+            info_desc "       Add advertising, tracking, telemetry, and broader threat protection."
+            printf '%s\n' "    5. Maximum"
+            info_desc "       Add broad threat feeds and known DNS bypass service domains."
+            printf '%s\n' "    6. Custom"
+            info_desc "       Toggle individual lists and apply a resource-checked combination."
+            echo
+            show_dns_profile_matrix
+            echo
+            printf '%b  List descriptions:%b\n' "$blue" "$reset"
+            printf '    %-32s - %s\n' "URLhaus" "malware delivery and malicious website domains."
+            printf '    %-32s - %s\n' "Threat Intelligence Feeds Mini" "malware, phishing, scams and attacker infrastructure."
+            printf '    %-32s - %s\n' "Encrypted DNS" "known DoH and DoT resolver domains."
+            printf '    %-32s - %s\n' "DNS/VPN/Proxy Bypass" "known DoH, VPN and proxy service domains; not all exit-node IPs."
+            printf '    %-32s - %s\n' "CNAME Trackers" "trackers hidden behind CNAME DNS records."
+            printf '    %-32s - %s\n' "Mail Trackers" "tracking pixels and link-tracking domains in emails."
+            printf '    %-32s - %s\n' "ThreatFox" "malware indicators and command-and-control domains."
+            printf '    %-32s - %s\n' "Pro++" "ads, trackers, telemetry, malware, phishing and scams."
+            printf '    %-32s - %s\n' "Ultimate" "aggressive privacy and security filtering with higher false positives."
+            printf '    %-32s - %s\n' "Threat Intelligence Feeds Medium" "a larger malware, phishing, scam and attacker infrastructure feed."
+            printf '    %-32s - %s\n' "Threat Intelligence IPs" "IP-related threat indicators in RPZ form; not an IP firewall."
+            printf '    %-32s - %s\n' "Dynamic DNS Threats" "suspicious dynamic DNS used by malware and phishing."
+            printf '    %-32s - %s\n' "Suspicious Spam TLDs" "selected high-abuse TLDs; legitimate sites may be blocked."
+            printf '    %-32s - %s\n' "Pop-up Ads" "known pop-up and aggressive advertising domains."
+            printf '    %-32s - %s\n' "Adult Content" "adult and NSFW domains; not a complete parental-control system."
+            printf '    %-32s - %s\n' "Gambling Mini" "selected betting, casino and gambling domains."
+            printf '    %-32s - %s\n' "Gambling Medium" "a broader betting, casino and gambling domain list."
+            printf '    %-32s - %s\n' "Gambling Full" "the broadest betting, casino and gambling domain list."
+            printf '    %-32s - %s\n' "Social Networks" "selected social media domains."
+            printf '    %-32s - %s\n' "SafeSearch" "helps enforce safer search endpoints."
+            printf '    %-32s - %s\n' "Anti Piracy" "torrent, warez and known piracy domains."
+            printf '    %-32s : %s\n' "Source repository" "https://github.com/hagezi/dns-blocklists"
+            echo
+            printf '%b  Custom selection:%b\n' "$blue" "$reset"
+            info_desc "Select a number to toggle a list. [ON] means it will be deployed."
+            info_desc "The selected lists are checked against the detected VPS CPU and RAM."
+            info_desc "Large alternatives are mutually exclusive: Pro++/Ultimate, TIF Mini/Medium, and Gambling sizes."
+            info_desc "Apply saves the selected lists in the Vault only after the VPS deployment succeeds."
+            ;;
+        local_region)
+            printf '%b  Block countries:%b\n' "$blue" "$reset"
+            info_desc "Select one or more countries whose destinations should be blocked on the VPS."
+            info_desc "This is a fallback policy for clients that cannot route local traffic directly."
+            info_desc "Xray blocks IP ranges assigned to the selected countries."
+            info_desc "For Russia, .ru and .рф domains are also matched when RU is selected."
+            info_desc "Other country domains may use foreign CDNs and are not a complete domain-zone block."
+            info_desc "This does not route traffic directly and does not guarantee that a VPN will be undetectable."
+            info_desc "Shared hosting, CDNs, geolocation databases, and country domains can cause false positives."
+            info_desc "The policy is stored for this VPN node and applies to all its access keys."
+            echo
+            printf '%b  Block countries menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Select countries"
+            info_desc "       Search by country name or ISO code and toggle multiple checkboxes."
+            printf '%s\n' "    2. Disable policy"
+            info_desc "       Delete all country blocking rules from this VPN node."
+            info_desc "Use Apply after selecting countries; the Vault changes only after deployment succeeds."
+            ;;
+        server)
+            printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Check VPN status"
+            info_desc "       Test management SSH, the Xray container, and both VPN ports."
+            printf '%s\n' "    2. Open SSH session"
+            info_desc "       Connect as the saved management user using the saved SSH key and port."
+            printf '%s\n' "    3. Restart VPN server"
+            info_desc "       Restart the Xray Docker stack without changing keys or profiles."
+            printf '%s\n' "    4. Block ads and threats"
+            info_desc "       Choose protection against ads, trackers, malware, phishing, and other known threats."
+            printf '%s\n' "    5. Block countries"
+            info_desc "       Stop connections to selected countries when direct bypass is unavailable."
+            printf '%s\n' "    6. Rotate SSH key"
+            info_desc "       Generate a new SSH key for secure access to this VPS and disable the old key."
+            printf '%s\n' "    7. Delete VPN server"
+            info_desc "       Clean Xray and Docker from the VPS before deleting its Vault entry."
+            ;;
+        vault)
+            printf '%b  Vault:%b\n' "$blue" "$reset"
+            info_desc "The Vault is encrypted local storage for VPS access data and VPN keys."
+            info_desc "It is unlocked only when an operation needs the saved data."
+            info_desc "Keep the Vault password safe: it cannot be recovered from the file."
+            info_desc "Before each successful Vault replacement, the previous encrypted file is saved as a recovery copy."
+            info_desc "The newest 20 automatic recovery copies are kept; older copies are deleted automatically."
+            info_desc "Automatic recovery copies are internal and are not shown in the backup browser."
+            info_desc "Backup encrypted state creates a manual tar.gz archive for recovery and transfer."
+            echo
+            printf '%b  Vault menu:%b\n' "$blue" "$reset"
+            printf '%s\n' "    1. Change encryption password"
+            info_desc "       Re-encrypt the Vault with a new local password."
+            printf '%s\n' "    2. Backup encrypted state"
+            info_desc "       Create a copy of the encrypted Vault for recovery."
+            printf '%s\n' "    3. Restore encrypted state"
+            info_desc "       Replace the current Vault with a selected encrypted backup."
+            printf '%s\n' "    4. View backups"
+            info_desc "       Show user encrypted archives with their paths and timestamps."
+            printf '%s\n' "    5. Delete Vault"
+            info_desc "       Delete local Vault data, backups, VPS credentials, and VPN keys."
+            info_desc "When no Vault exists, option 1 creates it, option 2 restores a backup, and option 3 lists backups."
+            ;;
+        removal)
+            printf '%b  VPN server deletion:%b\n' "$blue" "$reset"
+            info_desc "Confirm with y to delete the VPN server from the VPS."
+            info_desc "Cancel with n or b to leave the VPS and Vault unchanged."
+            info_desc "Xray, Docker, updater services, and the deploy user are deleted from the VPS."
+            info_desc "The original SSH configuration is restored from its backup."
+            info_desc "The server stays in the Vault if remote deletion fails."
+            info_desc "After a failed cleanup, choose 1 to retry or 2 to delete only the local Vault entry."
+            info_desc "Press b to keep the server in the Vault and return."
+            ;;
+        *)
+            printf '%b  Xray TUI:%b\n' "$blue" "$reset"
+            info_desc "This tool installs and manages your Xray VPN servers."
+            info_desc "VPS access data and VPN keys are kept in the encrypted Vault."
+            echo
+            printf '%b  Main menu:%b\n' "$blue" "$reset"
+            echo
+            printf '%s\n' "  1. VPN servers"
+            info_desc " - View the VPN servers saved in the Vault."
+            info_desc " - Check the VPS, SSH, Xray, and VPN port status."
+            info_desc " - Select a server to manage it."
+            info_desc " - If there are no servers, add one with option 2 first."
+            echo
+            printf '%s\n' "     Selected server menu:"
+            printf '%s\n' "     1. Manage VPN server"
+            info_desc "        Check status, restart Xray, manage DNS and country policy, rotate the SSH key, or delete the server."
+            printf '%s\n' "     2. Manage access keys"
+            info_desc "        Show, add, or delete VPN access keys for this server."
+            echo
+            printf '%s\n' "  2. Add VPN server"
+            info_desc " - Enter the VPS IP address, SSH user, SSH port, and password on separate screens."
+            info_desc " - Review the connection details, then let the manager check SSH access and VPS resources."
+            info_desc " - Enter a Reality camouflage domain, or use github.com by default."
+            info_desc " - Choose a profile to block ads, trackers, malware, phishing, and other threats."
+            info_desc "   The menu checks VPS resources before allowing a profile."
+            info_desc " - Install Docker, Xray, automatic updates, and SSH hardening."
+            info_desc " - Generate VPN access keys and save all connection data in the Vault."
+            info_desc " - Repeating setup for the same VPS is safe and idempotent."
+            echo
+            printf '%s\n' "  3. Vault"
+            printf '%s\n' "     1. Change encryption password"
+            info_desc "        Change the password protecting the local Vault."
+            printf '%s\n' "     2. Backup encrypted state"
+            info_desc "        Create a backup containing the encrypted Vault file."
+            printf '%s\n' "     3. Restore encrypted state"
+            info_desc "        Replace the current Vault with a selected encrypted backup."
+            printf '%s\n' "     4. View backups"
+            info_desc "        List user encrypted archives with their paths and timestamps."
+            printf '%s\n' "     5. Delete Vault"
+            info_desc "        Delete local VPS access data, VPN keys, and Vault backups."
+            echo
+            printf '%s\n' "  Manage VPN server"
+            printf '%s\n' "     1. Check VPN status"
+            info_desc "        Test SSH access, the Xray container, and both VPN ports."
+            printf '%s\n' "     2. Open SSH session"
+            info_desc "        Connect using the saved management key and port."
+            printf '%s\n' "     3. Restart VPN server"
+            info_desc "        Restart the Xray Docker stack without changing access keys."
+            printf '%s\n' "     4. Block ads and threats"
+            info_desc "        Enable, disable, or change protection against ads and known threats."
+            printf '%s\n' "     5. Block countries"
+            info_desc "        Stop connections to selected countries when client bypass is unavailable."
+            printf '%s\n' "     6. Rotate SSH key"
+            info_desc "        Generate a new SSH key for secure access to this VPS and disable the old key."
+            printf '%s\n' "     7. Delete VPN server"
+            info_desc "        Delete the Xray installation and clean up the VPS."
+            info_desc "        The Vault is changed only after remote deletion succeeds."
+            echo
+            printf '%s\n' "  Manage access keys"
+            printf '%s\n' "     1. Show"
+            info_desc "        Display the Vision and XHTTP connection links for each key."
+            printf '%s\n' "     2. Add"
+            info_desc "        Add from 1 to 50 access keys and deploy them to the VPS."
+            printf '%s\n' "     3. Delete"
+            info_desc "        Select a key by number and delete both protocol UUIDs together."
+            info_desc "        Choose the last number to delete every access key at once."
+            ;;
+    esac
+    echo
+    read -r -e -p "Press Enter to return" _
+}

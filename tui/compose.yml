@@ -3,6 +3,8 @@ services:
     build:
       context: ..
       dockerfile: tui/Dockerfile
+      args:
+        XRAY_TUI_UID: ${XRAY_TUI_UID:-1000}
     image: local/xray-tui:latest
     pull_policy: never
     container_name: xray-tui
@@ -12,6 +14,8 @@ services:
     entrypoint: ["/bin/bash", "/workspace/xray-tui.sh"]
     environment:
       TERM: ${TERM:-xterm-256color}
+      COLORTERM: ${COLORTERM:-truecolor}
+      ANSIBLE_FORCE_COLOR: "true"
       XDG_STATE_HOME: /state
       XRAY_TUI_HOST_STATE_DIR: ${XDG_STATE_HOME:-${HOME}/.local/state}/xray
     read_only: true
