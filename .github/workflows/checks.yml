@@ -43,9 +43,13 @@ jobs:
           bash -n xray-tui.sh
           bash -n run.sh
           bash -n legacy/xray-tui.sh
+          bash -n tests/test_navigation.sh
 
       - name: Run ShellCheck
-        run: shellcheck --severity=error xray-tui.sh run.sh legacy/xray-tui.sh
+        run: shellcheck --severity=error xray-tui.sh run.sh legacy/xray-tui.sh tests/test_navigation.sh
+
+      - name: Run TUI navigation smoke test
+        run: bash tests/test_navigation.sh
 
       - name: Check Python syntax
         run: python -m compileall -q scripts
