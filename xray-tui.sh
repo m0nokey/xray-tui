@@ -6,6 +6,8 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 VAULT_FILE="$STATE_DIR/vault.json"
 HOST_STATE_DIR="${XRAY_TUI_HOST_STATE_DIR:-$STATE_DIR}"
 HOST_VAULT_FILE="$HOST_STATE_DIR/vault.json"
+RUNTIME_TMP_DIR="${TMPDIR:-/tmp}/xray-tui-${BASHPID}"
+readonly VAULT_BACKUP_KEEP_COUNT=20
 VAULT_PASSWORD_FILE=""
 MAIN_MENU_REQUESTED=0
 LAST_ANSIBLE_OUTPUT=""
@@ -21,6 +23,10 @@ readonly BOOTSTRAP_PREFLIGHT_FAILED=128
 readonly NODE_REMOVED_STATUS=124
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
+rm -f "$STATE_DIR"/.vault.* 2>/dev/null || true
+mkdir -p "$RUNTIME_TMP_DIR"
+chmod 700 "$RUNTIME_TMP_DIR"
+export TMPDIR="$RUNTIME_TMP_DIR"
 export ANSIBLE_LOCAL_TEMP=/tmp/ansible-local
 export ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp
 export ANSIBLE_CONFIG="$ROOT_DIR/ansible/ansible.cfg"
@@ -51,28 +57,31 @@ fi
 
 cleanup() {
     [[ -n "$VAULT_PASSWORD_FILE" ]] && rm -f "$VAULT_PASSWORD_FILE"
+    rm -f "$STATE_DIR"/.vault.* 2>/dev/null || true
+    declare -F prune_vault_backups >/dev/null 2>&1 && prune_vault_backups
+    rm -rf "$RUNTIME_TMP_DIR"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-read_ascii_secret() {
+read_secret() {
     local prompt="$1" value read_status
     printf '%s' "$prompt" >&2
-    read -r -s value
+    IFS= read -r -s value
     read_status=$?
     printf '\n' >&2
     if ((read_status != 0)); then
         unset value
         return 1
     fi
-    if (export LC_ALL=C; [[ -n "$value" && "$value" =~ ^[[:print:]]+$ ]]); then
+    if [[ -n "$value" ]]; then
         REPLY="$value"
         unset value
         return 0
     fi
     unset value
-    printf '%s\n' "Invalid password. Use printable ASCII characters with the English keyboard layout." >&2
+    printf '%s\n' "Password cannot be empty." >&2
     sleep 1
     clear_screen
     return 1
@@ -88,11 +97,11 @@ create_vault_password_file() {
         printf '%s\n' "It will store your VPS access data and VPN keys." >&2
         printf '%s\n' "Create and remember a strong Vault password." >&2
         printf '\n' >&2
-        if ! read_ascii_secret "Create Vault password (attempt ${attempt}/3): "; then
+        if ! read_secret "Create Vault password (attempt ${attempt}/3): "; then
             continue
         fi
         password="$REPLY"
-        if ! read_ascii_secret "Confirm Vault password (attempt ${attempt}/3): "; then
+        if ! read_secret "Confirm Vault password (attempt ${attempt}/3): "; then
             unset password
             continue
         fi
@@ -147,7 +156,7 @@ ensure_vault_password_file() {
         printf '\n' >&2
         VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
         chmod 600 "$VAULT_PASSWORD_FILE"
-        if ! read_ascii_secret "Vault password (attempt ${attempt}/3): "; then
+        if ! read_secret "Vault password (attempt ${attempt}/3): "; then
             rm -f "$VAULT_PASSWORD_FILE"
             VAULT_PASSWORD_FILE=""
             continue
@@ -257,7 +266,7 @@ vault_view() {
             printf '{"nodes":{}}\n'
             return 0
         fi
-        output="$(mktemp "$STATE_DIR/.view.XXXXXX")"
+        output="$(mktemp "$RUNTIME_TMP_DIR/.view.XXXXXX")"
         if ! ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" >"$output"; then
             rm -f "$output"
             return 1
@@ -278,18 +287,17 @@ read_vault_state() {
     local output="$1"
     if ! vault_view >"$output"; then
         rm -f "$output"
-        clear_screen
-        printf '%s\n' "Unable to read the encrypted Vault state."
-        printf '%s\n' "Restore a valid backup or delete the invalid Vault before continuing."
-        printf '%s\n' "The Vault was not changed."
-        read -r -p "Press Enter to continue" _
+        show_result_screen \
+            "Unable to read the encrypted Vault state." \
+            "Restore a valid backup or delete the invalid Vault before continuing." \
+            "The Vault was not changed."
         return 1
     fi
 }
 
 vault_state_command() {
     local state command_status
-    state="$(mktemp "$STATE_DIR/.read.XXXXXX")"
+    state="$(mktemp "$RUNTIME_TMP_DIR/.read.XXXXXX")"
     if ! read_vault_state "$state"; then
         rm -f "$state"
         return 1
@@ -313,7 +321,7 @@ vault_save() {
         return 1
     fi
     encrypted="$(mktemp "$STATE_DIR/.vault.XXXXXX")"
-    checked="$(mktemp "$STATE_DIR/.decrypted.XXXXXX")"
+    checked="$(mktemp "$RUNTIME_TMP_DIR/.decrypted.XXXXXX")"
     chmod 600 "$encrypted" "$checked"
     if ! ansible-vault encrypt "$input" --output "$encrypted" --vault-password-file "$VAULT_PASSWORD_FILE"; then
         rm -f "$encrypted" "$checked"
@@ -324,16 +332,18 @@ vault_save() {
         printf '%s\n' "Refusing to install an invalid encrypted Vault." >&2
         return 1
     fi
-    mv -f "$encrypted" "$VAULT_FILE"
-    chmod 600 "$VAULT_FILE"
+    if ! install_encrypted_vault "$encrypted"; then
+        rm -f "$encrypted" "$checked"
+        return 1
+    fi
     rm -f "$checked"
 }
 
 state_mutate() {
     local action="$1"; shift
     local before after
-    before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
-    after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
+    before="$(mktemp "$RUNTIME_TMP_DIR/.before.XXXXXX")"
+    after="$(mktemp "$RUNTIME_TMP_DIR/.after.XXXXXX")"
     read_vault_state "$before" || { rm -f "$before" "$after"; return 1; }
     if ! python3 "$ROOT_DIR/scripts/state_cli.py" "$action" "$@" <"$before" >"$after"; then
         rm -f "$before" "$after"
@@ -341,9 +351,7 @@ state_mutate() {
     fi
     if ! vault_save "$after"; then
         rm -f "$before" "$after"
-        clear_screen
-        printf '%s\n' "The Vault was not changed."
-        read -r -p "Press Enter to continue" _
+        show_result_screen "The Vault was not changed."
         return 1
     fi
     rm -f "$before" "$after"
@@ -351,29 +359,48 @@ state_mutate() {
 
 initialize_vault() {
     local temp
-    temp="$(mktemp "$STATE_DIR/.initial-state.XXXXXX")"
+    temp="$(mktemp "$RUNTIME_TMP_DIR/.initial-state.XXXXXX")"
     printf '{"nodes":{}}\n' >"$temp"
     if ! vault_save "$temp"; then
         rm -f "$temp"
-        printf '%s\n' "Vault creation failed."
-        read -r -p "Press Enter to continue" _
+        show_result_screen "Vault creation failed."
         return 1
     fi
     rm -f "$temp"
-    printf '%s\n' "Vault created."
-    read -r -p "Press Enter to continue" _
+    show_result_screen "Vault created."
 }
 
 delete_vault() {
     local confirm
     while true; do
         clear_screen
-        echo
         menu_heading "Delete Vault:"
         echo
-        printf '%s\n' "This will delete the Vault, its backups, and all saved VPS/VPN access data."
+        printf '%s\n' "This permanently deletes the Vault, all automatic and manual backups, saved VPS access credentials, SSH keys, and VPN access keys."
         echo
-        printf '%s\n' "Are you sure you want to delete the Vault? (y/n)"
+        menu_option 1 "Delete the Vault"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read_required_choice confirm '?: '; then continue; fi
+        case "$confirm" in
+            1) break ;;
+            b) return 0 ;;
+            m) MAIN_MENU_REQUESTED=1; return 0 ;;
+            i) show_info vault ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+    while true; do
+        clear_screen
+        menu_heading "Confirm Vault deletion:"
+        echo
+        printf '%s\n' "This action cannot be undone."
+        printf '%s\n' "Are you sure you want to delete the Vault and all backups? (y/n)"
         echo
         menu_control b back
         menu_control m main
@@ -391,15 +418,214 @@ delete_vault() {
         esac
     done
     rm -f "$VAULT_FILE" "$STATE_DIR/vault.json.backup" "$VAULT_PASSWORD_FILE"
+    rm -f "$VAULT_FILE".bak.*
     rm -rf "$STATE_DIR/backups"
     rm -f "$STATE_DIR"/vault.json.restore.*
     VAULT_PASSWORD_FILE=""
-    printf '%s\n' "Vault deleted."
-    read -r -p "Press Enter to continue" _
+    while true; do
+        clear_screen
+        menu_heading "Vault deleted:"
+        echo
+        printf '%s\n' "The Vault, all backups, saved VPS access credentials, SSH keys, and VPN access keys were deleted."
+        echo
+        menu_option 1 "Create new Vault"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! prompt_nav; then continue; fi
+        case "$REPLY" in
+            1) initialize_vault || true; return 0 ;;
+            b) return 0 ;;
+            m) MAIN_MENU_REQUESTED=1; return 0 ;;
+            i) show_info vault ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
+vault_backup_paths() {
+    local backup_path
+    shopt -s nullglob
+    for backup_path in "$STATE_DIR"/backups/vault-*.tar.gz; do
+        [[ -f "$backup_path" ]] && printf '%s\n' "$backup_path"
+    done
+    shopt -u nullglob
 }
 
 has_vault_backups() {
-    compgen -G "$STATE_DIR/backups/vault-*.tar.gz" >/dev/null
+    local backup_path
+    while IFS= read -r backup_path; do
+        [[ -n "$backup_path" ]] && return 0
+    done < <(vault_backup_paths)
+    return 1
+}
+
+vault_backup_timestamp() {
+    local backup_path="$1" backup_name date_part time_part
+    backup_name="${backup_path##*/}"
+    backup_name="${backup_name#vault-}"
+    backup_name="${backup_name%.tar.gz}"
+    if [[ "$backup_name" =~ ^([0-9]{8})T([0-9]{6})Z$ ]]; then
+        date_part="${BASH_REMATCH[1]}"
+        time_part="${BASH_REMATCH[2]}"
+        printf '%s-%s-%s %s:%s:%s UTC\n' \
+            "${date_part:0:4}" "${date_part:4:2}" "${date_part:6:2}" \
+            "${time_part:0:2}" "${time_part:2:2}" "${time_part:4:2}"
+        return 0
+    fi
+    printf '%s\n' "$backup_name"
+}
+
+vault_backup_display_path() {
+    local backup_path="$1"
+    if [[ "$backup_path" == "$STATE_DIR"/* ]]; then
+        printf '%s/%s\n' "${HOST_STATE_DIR%/}" "${backup_path#"$STATE_DIR"/}"
+    else
+        printf '%s\n' "$backup_path"
+    fi
+}
+
+print_vault_backups() {
+    local index=1 backup_path
+    local -a backups=()
+
+    mapfile -t backups < <(vault_backup_paths | LC_ALL=C sort -r)
+    if ((${#backups[@]} == 0)); then
+        printf '%s\n' "No Vault backups found."
+        return 1
+    fi
+
+    for backup_path in "${backups[@]}"; do
+        printf '%d. Manual backup | %s\n' \
+            "$index" \
+            "$(vault_backup_timestamp "$backup_path")"
+        printf '   Path: %s\n' "$(vault_backup_display_path "$backup_path")"
+        index=$((index + 1))
+    done
+}
+
+show_vault_backups() {
+    while true; do
+        clear_screen
+        menu_heading "Vault backups:"
+        echo
+        print_vault_backups || true
+        echo
+        if ! prompt_nav; then continue; fi
+        case "$REPLY" in
+            b) return 0 ;;
+            m) MAIN_MENU_REQUESTED=1; return 0 ;;
+            i) show_info vault ;;
+            x) exit_tui ;;
+            *) invalid_choice ;;
+        esac
+    done
+}
+
+select_vault_backup() {
+    local choice backup_path index
+    local -a backups=()
+
+    mapfile -t backups < <(vault_backup_paths | LC_ALL=C sort -r)
+    ((${#backups[@]} > 0)) || {
+        show_result_screen "No Vault backups found."
+        return 1
+    }
+
+    while true; do
+        clear_screen
+        menu_heading "Restore encrypted state"
+        echo
+        printf '%s\n' "Choose a Vault backup to restore."
+        echo
+        index=1
+        for backup_path in "${backups[@]}"; do
+            printf '%d. Manual backup | %s\n' \
+                "$index" \
+                "$(vault_backup_timestamp "$backup_path")"
+            printf '   Path: %s\n' "$(vault_backup_display_path "$backup_path")"
+            index=$((index + 1))
+        done
+        if ! prompt_nav; then continue; fi
+        case "$REPLY" in
+            b) return 1 ;;
+            m) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i) show_info vault ;;
+            x) exit_tui ;;
+            ''|*[!0-9]*) invalid_choice ;;
+            *)
+                choice=$((10#$REPLY))
+                if ((choice >= 1 && choice <= ${#backups[@]})); then
+                    SELECTED_VAULT_BACKUP="${backups[choice - 1]}"
+                    return 0
+                fi
+                invalid_choice
+                ;;
+        esac
+    done
+}
+
+next_vault_backup_path() {
+    local timestamp candidate suffix=0
+    timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+    candidate="$VAULT_FILE.bak.$timestamp"
+    while [[ -e "$candidate" ]]; do
+        suffix=$((suffix + 1))
+        candidate="$VAULT_FILE.bak.$timestamp.$suffix"
+    done
+    printf '%s\n' "$candidate"
+}
+
+prune_vault_backups() {
+    local backup_file
+    local -a backups=() sorted_backups=()
+
+    shopt -s nullglob
+    backups=( "$VAULT_FILE".bak.* )
+    shopt -u nullglob
+
+    for backup_file in "${backups[@]}"; do
+        [[ -f "$backup_file" ]] && sorted_backups+=("$backup_file")
+    done
+    ((${#sorted_backups[@]} > VAULT_BACKUP_KEEP_COUNT)) || return 0
+
+    mapfile -t sorted_backups < <(printf '%s\n' "${sorted_backups[@]}" | LC_ALL=C sort -r)
+    for backup_file in "${sorted_backups[@]:VAULT_BACKUP_KEEP_COUNT}"; do
+        rm -f -- "$backup_file"
+    done
+}
+
+install_encrypted_vault() {
+    local encrypted_tmp="$1" backup_path
+
+    [[ -s "$encrypted_tmp" ]] || {
+        printf '%s\n' "Encrypted Vault output is empty; keeping the existing Vault." >&2
+        return 1
+    }
+
+    if ! chmod 600 "$encrypted_tmp"; then
+        printf '%s\n' "Could not secure the encrypted Vault before installation." >&2
+        return 1
+    fi
+
+    if [[ -f "$VAULT_FILE" ]]; then
+        backup_path="$(next_vault_backup_path)"
+        if ! cp -p -- "$VAULT_FILE" "$backup_path" || ! chmod 600 "$backup_path"; then
+            rm -f -- "$backup_path"
+            printf '%s\n' "Could not back up the current encrypted Vault." >&2
+            return 1
+        fi
+    fi
+
+    if ! mv -f -- "$encrypted_tmp" "$VAULT_FILE"; then
+        printf '%s\n' "Could not replace the encrypted Vault." >&2
+        return 1
+    fi
+    prune_vault_backups
 }
 
 backup_vault() {
@@ -410,56 +636,54 @@ backup_vault() {
     backup_file="$backup_dir/vault-$(date -u '+%Y%m%dT%H%M%SZ').tar.gz"
     if ! tar -C "$STATE_DIR" -czf "$backup_file" "$(basename "$VAULT_FILE")"; then
         rm -f "$backup_file"
-        printf '%s\n' "Could not create the encrypted Vault backup."
-        read -r -p "Press Enter to continue" _
+        show_result_screen "Could not create the encrypted Vault backup."
         return 1
     fi
     chmod 600 "$backup_file"
-    printf '%s\n' "Encrypted Vault backup created:"
-    printf '%s\n' "$backup_file"
-    read -r -p "Press Enter to continue" _
+    show_result_screen "Encrypted Vault backup created:" "$backup_file"
 }
 
 restore_vault() {
-    local archive tmpdir entry restored current_backup
-    read -r -e -p 'Encrypted Vault backup path: ' archive
-    if [[ ! -f "$archive" ]]; then
-        printf '%s\n' "Backup file not found."
-        read -r -p "Press Enter to continue" _
-        return 1
+    local archive tmpdir entry restored staged
+    if ! select_vault_backup; then
+        return 0
     fi
+    archive="$SELECTED_VAULT_BACKUP"
     entry="$(tar -tzf "$archive" 2>/dev/null | awk '$0 == "vault.json" { print; exit }')"
     if [[ -z "$entry" ]]; then
-        printf '%s\n' "Invalid backup: vault.json was not found."
-        read -r -p "Press Enter to continue" _
-        return 1
+        show_result_screen "Invalid backup: vault.json was not found."
+        return 0
     fi
-    tmpdir="$(mktemp -d /tmp/xray-vault-restore.XXXXXX)"
+    tmpdir="$(mktemp -d "$RUNTIME_TMP_DIR/restore.XXXXXX")"
     if ! tar -xzf "$archive" -C "$tmpdir" "$entry"; then
         rm -rf "$tmpdir"
-        printf '%s\n' "Could not extract the encrypted Vault backup."
-        read -r -p "Press Enter to continue" _
-        return 1
+        show_result_screen "Could not extract the encrypted Vault backup."
+        return 0
     fi
     restored="$tmpdir/$entry"
     if [[ ! -s "$restored" ]]; then
         rm -rf "$tmpdir"
-        printf '%s\n' "Invalid backup: the encrypted Vault is empty."
-        read -r -p "Press Enter to continue" _
-        return 1
+        show_result_screen "Invalid backup: the encrypted Vault is empty."
+        return 0
     fi
-    if [[ -f "$VAULT_FILE" ]]; then
-        current_backup="$STATE_DIR/vault.json.restore.$(date -u '+%Y%m%dT%H%M%SZ')"
-        mv "$VAULT_FILE" "$current_backup"
-        chmod 600 "$current_backup"
+    staged="$(mktemp "$STATE_DIR/.vault.XXXXXX")"
+    if ! cp -- "$restored" "$staged" || ! chmod 600 "$staged"; then
+        rm -f "$staged"
+        rm -rf "$tmpdir"
+        show_result_screen "Could not stage the restored encrypted Vault."
+        return 0
     fi
-    mv "$restored" "$VAULT_FILE"
-    chmod 600 "$VAULT_FILE"
-    rm -rf "$tmpdir"
+    if ! install_encrypted_vault "$staged"; then
+        rm -f "$staged"
+        [[ -n "${tmpdir:-}" ]] && rm -rf "$tmpdir"
+        show_result_screen "The current Vault was kept unchanged."
+        return 0
+    fi
+    [[ -n "${tmpdir:-}" ]] && rm -rf "$tmpdir"
+    prune_vault_backups
     rm -f "$VAULT_PASSWORD_FILE"
     VAULT_PASSWORD_FILE=""
-    printf '%s\n' "Encrypted Vault restored."
-    read -r -p "Press Enter to continue" _
+    show_result_screen "Encrypted Vault restored."
 }
 
 read_required_choice() {
@@ -593,7 +817,7 @@ add_node_password_prompt() {
     printf '%s\n' "Enter the password for the first VPS connection."
     printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "The password is used only to verify access and start deployment." "$COLOR_RESET"
     echo
-    if ! read_ascii_secret 'Enter VPS password: '; then
+    if ! read_secret 'Enter VPS password: '; then
         return 1
     fi
     ADD_NODE_PASSWORD="$REPLY"
@@ -646,8 +870,8 @@ review_node_connection() {
         printf '%-16s %s\n' "Port:" "$3"
         printf '%-16s %s\n' "Password:" "entered"
         echo
-        menu_control a continue
-        menu_control e edit
+        menu_option 1 Continue
+        menu_option 2 Edit
         echo
         menu_control b back
         menu_control m main
@@ -658,8 +882,8 @@ review_node_connection() {
             continue
         fi
         case "$choice" in
-            a|A) return 0 ;;
-            e|E) return 1 ;;
+            1) return 0 ;;
+            2) return 1 ;;
             b|B) return 2 ;;
             m|M) MAIN_MENU_REQUESTED=1; return 2 ;;
             i|I) show_info general ;;
@@ -1010,6 +1234,10 @@ show_info() {
             info_desc "The Vault is encrypted local storage for VPS access data and VPN keys."
             info_desc "It is unlocked only when an operation needs the saved data."
             info_desc "Keep the Vault password safe: it cannot be recovered from the file."
+            info_desc "Before each successful Vault replacement, the previous encrypted file is saved as a recovery copy."
+            info_desc "The newest 20 automatic recovery copies are kept; older copies are removed automatically."
+            info_desc "Automatic recovery copies are internal and are not shown in the backup browser."
+            info_desc "Backup encrypted state creates a manual tar.gz archive for user recovery and migration."
             echo
             printf '%b  Vault menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Change encryption password"
@@ -1020,7 +1248,9 @@ show_info() {
             info_desc "       Replace the current Vault with a selected encrypted backup."
             printf '%s\n' "    4. Delete Vault"
             info_desc "       Delete local Vault data, backups, VPS credentials, and VPN keys."
-            info_desc "When no Vault exists, option 1 creates it and option 2 restores a backup."
+            printf '%s\n' "    5. View backups"
+            info_desc "       Show manual encrypted archives with their paths and timestamps."
+            info_desc "When no Vault exists, option 1 creates it, option 2 restores a backup, and option 3 lists backups."
             ;;
         removal)
             printf '%b  Remote cleanup:%b\n' "$blue" "$reset"
@@ -1070,6 +1300,8 @@ show_info() {
             info_desc "        Replace the current Vault with a selected encrypted backup."
             printf '%s\n' "     4. Delete Vault"
             info_desc "        Delete local VPS access data, VPN keys, and Vault backups."
+            printf '%s\n' "     5. View backups"
+            info_desc "        List automatic recovery copies and manual encrypted archives with their paths and timestamps."
             echo
             printf '%s\n' "  Manage VPN server"
             printf '%s\n' "     1. Check VPN status"
@@ -1136,6 +1368,20 @@ wait_action_return() {
     done
 }
 
+show_result_screen() {
+    clear_screen
+    printf '%s\n' "$@"
+    echo
+    printf '%s\n' "Press Enter to continue."
+    read -r _ || true
+}
+
+pause_result_screen() {
+    echo
+    printf '%s\n' "Press Enter to continue."
+    read -r _ || true
+}
+
 exit_tui() {
     clear_screen
     exit 0
@@ -1148,7 +1394,7 @@ invalid_choice() {
 
 show_nodes() {
     local state
-    state="$(mktemp "$STATE_DIR/.nodes.XXXXXX")"
+    state="$(mktemp "$RUNTIME_TMP_DIR/.nodes.XXXXXX")"
     if materialize_vault_state "$state"; then
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
     fi
@@ -1157,7 +1403,7 @@ show_nodes() {
 
 materialize_vault_state() {
     local state="$1" normalized
-    normalized="$(mktemp "$STATE_DIR/.normalized.XXXXXX")"
+    normalized="$(mktemp "$RUNTIME_TMP_DIR/.normalized.XXXXXX")"
     if ! read_vault_state "$state"; then
         rm -f "$normalized"
         return 1
@@ -1179,7 +1425,7 @@ materialize_vault_state() {
 
 show_node_status() {
     local node="$1" state
-    state="$(mktemp "$STATE_DIR/.node.XXXXXX")"
+    state="$(mktemp "$RUNTIME_TMP_DIR/.node.XXXXXX")"
     if materialize_vault_state "$state"; then
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check --node "$node" <"$state"
     fi
@@ -1188,7 +1434,7 @@ show_node_status() {
 
 open_node_ssh_session() {
     local node="$1" state host user port private_key key_file known_hosts_file ssh_status
-    state="$(mktemp "$STATE_DIR/.ssh-session.XXXXXX")"
+    state="$(mktemp "$RUNTIME_TMP_DIR/.ssh-session.XXXXXX")"
     if ! read_vault_state "$state"; then
         rm -f "$state"
         return 1
@@ -1593,6 +1839,7 @@ local_region_selected_summary() {
 
 select_local_region_countries() {
     local query="" choice index code name status page=0 page_size=20 page_count start end
+    local search_action next_action previous_action apply_action action_base
     local -a matches=()
     while true; do
         clear_screen
@@ -1615,12 +1862,17 @@ select_local_region_countries() {
             for ((index = start; index < end; index++)); do
                 IFS=$'\t' read -r code name <<<"${matches[$index]}"
                 if local_region_has_country "${code,,}"; then status="ON"; else status="-"; fi
-                printf '  %2d. %-42s [%s] (%s)\n' "$((index - start + 1))" "$name" "$status" "${code^^}"
+                printf '%d. %-42s [%s] (%s)\n' "$((index - start + 1))" "$name" "$status" "${code^^}"
             done
             echo
-            menu_control s "search country"
-            if ((page < page_count - 1)); then menu_control n "next page"; fi
-            if ((page > 0)); then menu_control p "previous page"; fi
+            action_base=$page_size
+            search_action=$((action_base + 1))
+            next_action=$((action_base + 2))
+            previous_action=$((action_base + 3))
+            apply_action=$((action_base + 4))
+            menu_option "$search_action" "Search country"
+            if ((page < page_count - 1)); then menu_option "$next_action" "Next page"; fi
+            if ((page > 0)); then menu_option "$previous_action" "Previous page"; fi
         else
             mapfile -t matches < <(country_matches "$query")
             page=0
@@ -1636,27 +1888,30 @@ select_local_region_countries() {
                 for ((index = start; index < end; index++)); do
                     IFS=$'\t' read -r code name <<<"${matches[$index]}"
                     if local_region_has_country "${code,,}"; then status="ON"; else status="-"; fi
-                    printf '  %2d. %-42s [%s] (%s)\n' "$((index + 1))" "$name" "$status" "${code^^}"
+                    printf '%d. %-42s [%s] (%s)\n' "$((index + 1))" "$name" "$status" "${code^^}"
                 done
                 if ((${#matches[@]} > 30)); then printf '%s\n' "      More matches exist; refine the search."; fi
             fi
             echo
-            menu_control s "new search"
+            action_base=30
+            search_action=$((action_base + 1))
+            apply_action=$((action_base + 2))
+            menu_option "$search_action" "New search"
         fi
-        menu_control a "apply selection"
+        menu_option "$apply_action" "Apply selection"
         if ! prompt_nav; then continue; fi
         choice="$REPLY"
         case "$choice" in
-            s|S)
+            "$search_action")
                 if ! read_required_choice query "Country name or ISO code: "; then continue; fi
                 ;;
-            n|N)
+            "$next_action")
                 [[ -z "$query" ]] && page=$((page + 1)) || invalid_choice
                 ;;
-            p|P)
+            "$previous_action")
                 [[ -z "$query" ]] && page=$((page - 1)) || invalid_choice
                 ;;
-            a|A)
+            "$apply_action")
                 return 0
                 ;;
             b) return 1 ;;
@@ -1677,7 +1932,7 @@ select_local_region_countries() {
 }
 
 select_custom_dns_profile() {
-    local choice source index status entries memory rpz_memory
+    local choice source index status entries memory rpz_memory apply_action
     local -a sources=(
         urlhaus hagezi-tif-mini hagezi-doh hagezi-bypass
         adguard-cname-trackers adguard-cname-mail threatfox hagezi-pro-plus
@@ -1700,7 +1955,7 @@ select_custom_dns_profile() {
         for index in "${!sources[@]}"; do
             source="${sources[$index]}"
             if dns_custom_has_source "$source"; then status="ON"; else status="-"; fi
-            printf '  %2d. %-48s [%s] %s entries\n' \
+            printf '%d. %-48s [%s] %s entries\n' \
                 "$((index + 1))" "$(dns_source_label "$source")" "$status" "$(dns_source_entries "$source")"
         done
         entries="$(dns_custom_entries)"
@@ -1719,10 +1974,11 @@ select_custom_dns_profile() {
             printf '%s\n' "Warning: encrypted DNS/bypass protection may affect Smart TVs and Hiddify."
         fi
         echo
-        menu_control a "apply custom profile"
+        apply_action=$((${#sources[@]} + 1))
+        menu_option "$apply_action" "Apply custom profile"
         if ! prompt_nav; then continue; fi
         case "$REPLY" in
-            a|A)
+            "$apply_action")
                 if [[ -z "${DNS_FILTER_LISTS:-}" ]]; then
                     printf '%s\n' "Select at least one list, or use Disabled for no lists."
                     wait_action_return
@@ -1770,12 +2026,12 @@ select_dns_profile() {
         printf '%s\n' "Optional. Blocks malware, phishing, scams, ads, trackers, and telemetry."
         printf '%s\n' "Current: ${DNS_FILTER_CURRENT_PROFILE:-disabled}"
         echo
-        printf '  %s1.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Disabled" "No blocking" "available"
-        printf '  %s2.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Minimal" "Malware protection" "$(dns_profile_is_available minimal && printf available || printf 'not available')"
-        printf '  %s3.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Optimal" "Malware, phishing and scams" "$(dns_profile_is_available optimal && printf available || printf 'not available')"
-        printf '  %s4.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Full" "Malware, ads and tracking" "$(dns_profile_is_available full && printf available || printf 'not available')"
-        printf '  %s5.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Maximum" "Broad protection and DNS bypass" "$(dns_profile_is_available maximum && printf available || printf 'not available')"
-        printf '  %s6.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Custom" "Choose protection categories" "$(dns_profile_is_available custom && printf available || printf 'not available')"
+        printf '%s1.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Disabled" "No blocking" "available"
+        printf '%s2.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Minimal" "Malware protection" "$(dns_profile_is_available minimal && printf available || printf 'not available')"
+        printf '%s3.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Optimal" "Malware, phishing and scams" "$(dns_profile_is_available optimal && printf available || printf 'not available')"
+        printf '%s4.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Full" "Malware, ads and tracking" "$(dns_profile_is_available full && printf available || printf 'not available')"
+        printf '%s5.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Maximum" "Broad protection and DNS bypass" "$(dns_profile_is_available maximum && printf available || printf 'not available')"
+        printf '%s6.%s %-9s %-43s [%s]\n' "$COLOR_LINE" "$COLOR_RESET" "Custom" "Choose protection categories" "$(dns_profile_is_available custom && printf available || printf 'not available')"
         echo
         if [[ "$mode" == "initial" ]]; then
             printf '%s\n' "Not sure what to choose? Press Enter to keep it disabled."
@@ -1821,19 +2077,33 @@ select_dns_profile() {
 }
 
 run_ansible_playbook() {
-    local log rc
+    local log rc quiet=0
+    if [[ "${1:-}" == "--quiet" ]]; then
+        quiet=1
+        shift
+    fi
     LAST_ANSIBLE_OUTPUT=""
-    log="$(mktemp "$STATE_DIR/.ansible.XXXXXX")"
-    if ansible-playbook "$@" 2>&1 | tee "$log"; then
-        rc=0
+    log="$(mktemp "$RUNTIME_TMP_DIR/.ansible.XXXXXX")"
+    if ((quiet)); then
+        if ansible-playbook "$@" >"$log" 2>&1; then
+            rc=0
+        else
+            rc=$?
+        fi
     else
-        rc="${PIPESTATUS[0]}"
+        if ansible-playbook "$@" 2>&1 | tee "$log"; then
+            rc=0
+        else
+            rc="${PIPESTATUS[0]}"
+        fi
     fi
     if ((rc != 0)); then
         LAST_ANSIBLE_OUTPUT="$(tail -n 24 "$log")"
-        echo
-        printf '%s\n' "Ansible failed with exit code ${rc}. Last output:"
-        printf '%s\n' "$LAST_ANSIBLE_OUTPUT"
+        if (( ! quiet )); then
+            echo
+            printf '%s\n' "Ansible failed with exit code ${rc}. Last output:"
+            printf '%s\n' "$LAST_ANSIBLE_OUTPUT"
+        fi
     else
         LAST_ANSIBLE_OUTPUT="$(tail -n 80 "$log")"
     fi
@@ -1890,12 +2160,12 @@ retry_existing_node_with_bootstrap() {
         printf '%s\n' "Using the encrypted initial SSH password from the Vault."
         sleep 1
     else
-        if ! read_ascii_secret 'VPS password: '; then
+        if ! read_secret 'VPS password: '; then
             return 1
         fi
         password="$REPLY"
     fi
-    retry_state="$(mktemp "$STATE_DIR/.retry.XXXXXX")"
+    retry_state="$(mktemp "$RUNTIME_TMP_DIR/.retry.XXXXXX")"
     if ! XRAY_BOOTSTRAP_PASSWORD="$password" python3 "$ROOT_DIR/scripts/state_cli.py" set-bootstrap "$node" "$user" "$port" <"$state_file" >"$retry_state"; then
         unset password
         rm -f "$retry_state"
@@ -1916,7 +2186,7 @@ retry_existing_node_with_bootstrap() {
 
 retry_existing_node_with_saved_key() {
     local node="$1" state_file="$2" connect_port="$3" recovery_state key_file known_hosts_file probe_known_hosts host user target_port management_port bootstrap_port probe_port recovery_rc
-    recovery_state="$(mktemp "$STATE_DIR/.recovery.XXXXXX")"
+    recovery_state="$(mktemp "$RUNTIME_TMP_DIR/.recovery.XXXXXX")"
     if ! python3 "$ROOT_DIR/scripts/state_cli.py" ensure-ssh-port "$node" "$connect_port" <"$state_file" >"$recovery_state"; then
         rm -f "$recovery_state"
         return 1
@@ -1926,7 +2196,7 @@ retry_existing_node_with_saved_key() {
     target_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_port"])' "$node" <"$recovery_state")"
     management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("management_port", ""))' "$node" <"$recovery_state")"
     bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", ""))' "$node" <"$recovery_state")"
-    key_file="$(mktemp "$STATE_DIR/.probe.XXXXXX")"
+    key_file="$(mktemp "$RUNTIME_TMP_DIR/.probe.XXXXXX")"
     known_hosts_file="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
     probe_known_hosts="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
     : >"$known_hosts_file"
@@ -1983,8 +2253,11 @@ add_node() {
         clear_screen
         printf '%s\n' "Checking local Internet connection..."
         if ! local_internet_available; then
-            local_internet_failure_menu
-            internet_action=$?
+            if local_internet_failure_menu; then
+                internet_action=0
+            else
+                internet_action=$?
+            fi
             if ((internet_action == 0)); then
                 continue
             fi
@@ -2005,8 +2278,8 @@ add_node() {
         fi
         bootstrap_port="$ADD_NODE_PORT"
         unset ADD_NODE_PORT
-        before="$(mktemp "$STATE_DIR/.before.XXXXXX")"
-        after="$(mktemp "$STATE_DIR/.after.XXXXXX")"
+        before="$(mktemp "$RUNTIME_TMP_DIR/.before.XXXXXX")"
+        after="$(mktemp "$RUNTIME_TMP_DIR/.after.XXXXXX")"
         if ! read_vault_state "$before"; then
             rm -f "$before" "$after"
             return 1
@@ -2024,36 +2297,34 @@ add_node() {
             echo
             if retry_existing_node_with_bootstrap "$existing_node" "$before" "$host" "$bootstrap_user" "$bootstrap_port"; then
                 rm -f "$before" "$after"
-                printf '%s\n' "VPN server already exists in Vault. Bootstrap deployment completed idempotently."
+                show_result_screen "VPN server already exists in Vault. Bootstrap deployment completed idempotently."
             else
                 rm -f "$before" "$after"
-                printf '%s\n' "Deployment failed. The existing Vault was not changed."
+                show_result_screen "Deployment failed. The existing Vault was not changed."
             fi
-            wait_action_return
             return 0
         fi
         if deploy_node "$existing_node" "$before"; then
             if vault_save "$before"; then
                 rm -f "$before" "$after"
-                printf '%s\n' "VPN server already exists in Vault. Deployment completed idempotently."
+                show_result_screen "VPN server already exists in Vault. Deployment completed idempotently."
             else
                 rm -f "$before" "$after"
-                printf '%s\n' "The VPN server was deployed, but the encrypted Vault could not be updated."
+                show_result_screen "The VPN server was deployed, but the encrypted Vault could not be updated."
             fi
         elif retry_existing_node_with_saved_key "$existing_node" "$before" "$bootstrap_port"; then
             rm -f "$before" "$after"
-            printf '%s\n' "VPN server already exists in Vault. SSH access recovered on the bootstrap port."
+            show_result_screen "VPN server already exists in Vault. SSH access recovered on the bootstrap port."
         else
             recovery_rc=$?
             if ((recovery_rc == NO_SAVED_SSH_ACCESS)) && retry_existing_node_with_bootstrap "$existing_node" "$before" "$host" "$bootstrap_user" "$bootstrap_port" 1; then
                 rm -f "$before" "$after"
-                printf '%s\n' "VPN server already exists in Vault. Bootstrap deployment completed idempotently."
+                show_result_screen "VPN server already exists in Vault. Bootstrap deployment completed idempotently."
             else
                 rm -f "$before" "$after"
-                printf '%s\n' "Deployment failed. The existing Vault was not changed."
+                show_result_screen "Deployment failed. The existing Vault was not changed."
             fi
         fi
-            wait_action_return
             return 0
         fi
 
@@ -2085,8 +2356,11 @@ add_node() {
                 probe_rc=$?
             fi
             if ((probe_rc == UNAVAILABLE_BOOTSTRAP_CONNECTION)); then
-                bootstrap_connection_failure_menu "$host" "$bootstrap_port"
-                auth_action=$?
+                if bootstrap_connection_failure_menu "$host" "$bootstrap_port"; then
+                    auth_action=0
+                else
+                    auth_action=$?
+                fi
                 unset bootstrap_password
                 rm -f "$before" "$after"
                 if ((auth_action == 0)); then
@@ -2095,8 +2369,11 @@ add_node() {
                 return 0
             fi
             if ((probe_rc == BOOTSTRAP_PREFLIGHT_FAILED)); then
-                bootstrap_preflight_failure_menu
-                auth_action=$?
+                if bootstrap_preflight_failure_menu; then
+                    auth_action=0
+                else
+                    auth_action=$?
+                fi
                 unset bootstrap_password
                 rm -f "$before" "$after"
                 if ((auth_action == 0)); then
@@ -2134,7 +2411,7 @@ add_node() {
     if ! select_dns_profile initial; then
         unset bootstrap_password
         rm -f "$before" "$after"
-        return 1
+        return 0
     fi
     dns_profile="$DNS_FILTER_PROFILE"
     dns_lists="${DNS_FILTER_LISTS:-}"
@@ -2157,20 +2434,18 @@ PY
     rm -f "$before"
     if ! deploy_node "$name" "$after" "" 1; then
         rm -f "$after"
-        printf '%s\n' "Initial deployment failed. The VPN server was not added."
-        wait_action_return
+        show_result_screen "Initial deployment failed. The VPN server was not added."
         return 1
     fi
     if ! vault_save "$after"; then
         rm -f "$after"
-        printf '%s\n' "The VPN server was deployed, but the encrypted Vault could not be saved."
-        printf '%s\n' "The server was not added to the local menu."
-        wait_action_return
+        show_result_screen \
+            "The VPN server was deployed, but the encrypted Vault could not be saved." \
+            "The server was not added to the local menu."
         return 1
     fi
     rm -f "$after"
-    printf '%s\n' "VPN server installed and added to the encrypted Vault."
-    wait_action_return
+    show_result_screen "VPN server installed and added to the encrypted Vault."
 }
 
 deploy_node() {
@@ -2189,7 +2464,7 @@ deploy_node() {
     legacy_port="$(python3 -c 'import json,sys; value=json.load(sys.stdin)["nodes"][sys.argv[1]].get("ssh_port"); print(value if value is not None else "")' "$node" <"$before")"
     bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", 22))' "$node" <"$before")"
     if [[ -z "$legacy_port" || "$legacy_port" == "22" || "$legacy_port" == "$bootstrap_port" ]]; then
-        migrated_state="$(mktemp "$STATE_DIR/.migrated.XXXXXX")"
+        migrated_state="$(mktemp "$RUNTIME_TMP_DIR/.migrated.XXXXXX")"
         if ! python3 "$ROOT_DIR/scripts/state_cli.py" ensure-ssh-port "$node" "$bootstrap_port" <"$before" >"$migrated_state"; then
             rm -f "$before" "$extra" "$migrated_state"; rm -rf "$inventory_dir"
             return 1
@@ -2350,7 +2625,7 @@ deploy_node() {
     fi
 
     if [[ -n "$state_file" || "$user" == root || -n "$bootstrap" || -n "$bootstrap_password" ]]; then
-        marked="$(mktemp "$STATE_DIR/.marked.XXXXXX")"
+        marked="$(mktemp "$RUNTIME_TMP_DIR/.marked.XXXXXX")"
         if ! python3 "$ROOT_DIR/scripts/state_cli.py" mark-deployed "$node" <"$before" >"$marked"; then
             rm -f "$before" "$extra" "$key_file" "$marked"; rm -rf "$inventory_dir"
             return 1
@@ -2443,7 +2718,7 @@ run_remove_with_management_key() {
         >"$inventory"
     chmod 600 "$inventory"
 
-    if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml" --private-key "$key_file"; then
+    if run_ansible_playbook --quiet -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml" --private-key "$key_file"; then
         rc=0
     else
         rc=$?
@@ -2470,16 +2745,16 @@ run_remove_with_bootstrap() {
     password="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_password", ""), end="")' "$node" <"$before")"
     python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
 
-    clear_screen
-    printf '%s\n' "Remote cleanup needs the initial SSH credentials."
-    printf '%s\n' "VPS address: ${host}"
-    printf '%s\n' "SSH user: ${user}"
-    printf '%s\n' "SSH port: ${port}"
-    echo
     if [[ -n "$password" ]]; then
-        printf '%s\n' "Using the encrypted initial SSH password from the Vault."
+        :
     else
-        if ! read_ascii_secret 'Initial SSH password: '; then
+        clear_screen
+        printf '%s\n' "Remote cleanup needs the initial SSH password."
+        printf '%s\n' "VPS address: ${host}"
+        printf '%s\n' "SSH user: ${user}"
+        printf '%s\n' "SSH port: ${port}"
+        echo
+        if ! read_secret 'Initial SSH password: '; then
             rm -f "$before" "$extra"
             rm -rf "$inventory_dir"
             return 1
@@ -2505,7 +2780,7 @@ run_remove_with_bootstrap() {
     unset password_yaml
     chmod 600 "$inventory"
 
-    if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml"; then
+    if run_ansible_playbook --quiet -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml"; then
         rc=0
     else
         rc=$?
@@ -2584,9 +2859,10 @@ add_access_keys_menu() {
                 fi
                 clear_screen
                 if mutate_access_keys_and_deploy "$node" add-keys "$count"; then
-                    printf '%s\n' "Access keys added: $count."
+                    show_result_screen "Access keys added: $count."
+                else
+                    show_result_screen "Access key change failed. The existing Vault was not changed."
                 fi
-                read -r -p "Press Enter to continue" _
                 return 0
                 ;;
         esac
@@ -2595,7 +2871,7 @@ add_access_keys_menu() {
 
 remove_access_key_menu() {
     local node="$1" state key_list selection key_id vision_id xhttp_id confirm key_count remove_all_selection
-    state="$(mktemp "$STATE_DIR/.keys.XXXXXX")"
+    state="$(mktemp "$RUNTIME_TMP_DIR/.keys.XXXXXX")"
     if ! read_vault_state "$state"; then
         rm -f "$state"
         return 1
@@ -2620,17 +2896,17 @@ PY
         if [[ -z "$key_list" ]]; then
             key_count=0
             remove_all_selection=1
-            printf '%s\n' "  No access keys configured."
+            printf '%s\n' "No access keys configured."
         else
             key_count="$(printf '%s\n' "$key_list" | awk 'END {print NR}')"
             remove_all_selection=$((key_count + 1))
             while IFS=$'\t' read -r selection key_id vision_id xhttp_id; do
-                printf '  %s%s.%s %sKey id:%s %s\n' "$COLOR_LINE" "$selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET" "$key_id"
+                printf '%s%s.%s %sKey id:%s %s\n' "$COLOR_LINE" "$selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET" "$key_id"
                 printf '     Vision ID: %s\n' "$vision_id"
                 printf '     XHTTP ID: %s\n' "$xhttp_id"
             done <<<"$key_list"
             echo
-            printf '  %s%s.%s %sremove all access keys%s\n' "$COLOR_LINE" "$remove_all_selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET"
+            printf '%s%s.%s %sRemove all access keys%s\n' "$COLOR_LINE" "$remove_all_selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET"
         fi
         echo
         if ! prompt_nav; then continue; fi
@@ -2659,9 +2935,10 @@ PY
                         [Yy])
                             clear_screen
                             if mutate_access_keys_and_deploy "$node" remove-all-keys; then
-                                printf '%s\n' "All access keys removed."
+                                show_result_screen "All access keys removed."
+                            else
+                                show_result_screen "Access key change failed. The existing Vault was not changed."
                             fi
-                            read -r -p "Press Enter to continue" _
                             rm -f "$state"
                             return 0
                             ;;
@@ -2720,9 +2997,10 @@ PY
                         [Yy])
                             clear_screen
                             if mutate_access_keys_and_deploy "$node" remove-key "$key_id"; then
-                                printf '%s\n' "Access key removed."
+                                show_result_screen "Access key removed."
+                            else
+                                show_result_screen "Access key change failed. The existing Vault was not changed."
                             fi
-                            read -r -p "Press Enter to continue" _
                             rm -f "$state"
                             return 0
                             ;;
@@ -2745,11 +3023,11 @@ rotate_ssh_key() {
     inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
     inventory="$inventory_dir/hosts.yml"
     known_hosts_file="$inventory_dir/known_hosts"
-    key_dir="$(mktemp -d "$STATE_DIR/.ssh-rotate.XXXXXX")"
+    key_dir="$(mktemp -d "$RUNTIME_TMP_DIR/.ssh-rotate.XXXXXX")"
     old_key="$key_dir/old"
     new_key="$key_dir/new"
     new_pub="${new_key}.pub"
-    rotated_state="$(mktemp "$STATE_DIR/.rotated-state.XXXXXX")"
+    rotated_state="$(mktemp "$RUNTIME_TMP_DIR/.rotated-state.XXXXXX")"
     read_vault_state "$before" || { rm -f "$before" "$extra" "$rotated_state"; rm -rf "$inventory_dir" "$key_dir"; return 1; }
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
     port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node["ssh_port"])))' "$node" <"$before")"
@@ -2870,9 +3148,7 @@ manage_dns_protection() {
     unset DNS_FILTER_CURRENT_LISTS
     if [[ "$selected_profile" == "$current_profile" && "$selected_profile" != "custom" ]] || \
        [[ "$selected_profile" == "custom" && "$current_profile" == "custom" && "$selected_lists" == "$current_lists" ]]; then
-        clear_screen
-        printf '%s\n' "DNS protection profile was not changed."
-        wait_action_return
+        show_result_screen "DNS protection profile was not changed."
         rm -f "$before" "$known_hosts_file"
         return 0
     fi
@@ -2886,20 +3162,18 @@ manage_dns_protection() {
     printf '%s\n' "Applying DNS protection profile: ${selected_profile}"
     if ! run_node_playbook "$node" site.yml "$after"; then
         rm -f "$before" "$after" "$known_hosts_file"
-        printf '%s\n' "DNS protection change failed. The existing Vault was not changed."
-        wait_action_return
+        show_result_screen "DNS protection change failed. The existing Vault was not changed."
         return 1
     fi
     if ! vault_save "$after"; then
         rm -f "$before" "$after"
-        printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
-        printf '%s\n' "The existing DNS profile remains recorded in the Vault."
-        wait_action_return
+        show_result_screen \
+            "The VPN was updated, but the encrypted Vault could not be saved." \
+            "The existing DNS profile remains recorded in the Vault."
         return 1
     fi
     rm -f "$before" "$after" "$known_hosts_file"
-    printf '%s\n' "DNS protection profile updated: ${selected_profile}."
-    wait_action_return
+    show_result_screen "DNS protection profile updated: ${selected_profile}."
 }
 
 manage_local_region_policy() {
@@ -2937,9 +3211,7 @@ manage_local_region_policy() {
         esac
         selected_countries="${LOCAL_REGION_COUNTRIES:-}"
         if [[ "$selected_countries" == "$current_countries" ]]; then
-            clear_screen
-            printf '%s\n' "Country blocking settings were not changed."
-            wait_action_return
+            show_result_screen "Country blocking settings were not changed."
             unset LOCAL_REGION_COUNTRIES
             rm -f "$before"
             return 0
@@ -2960,22 +3232,20 @@ manage_local_region_policy() {
         if ! run_node_playbook "$node" site.yml "$after"; then
             rm -f "$before" "$after"
             unset LOCAL_REGION_COUNTRIES
-            printf '%s\n' "Country blocking change failed. The existing Vault was not changed."
-            wait_action_return
+            show_result_screen "Country blocking change failed. The existing Vault was not changed."
             return 1
         fi
         if ! vault_save "$after"; then
             rm -f "$before" "$after"
             unset LOCAL_REGION_COUNTRIES
-            printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
-            printf '%s\n' "The previous country blocking settings remain recorded in the Vault."
-            wait_action_return
+            show_result_screen \
+                "The VPN was updated, but the encrypted Vault could not be saved." \
+                "The previous country blocking settings remain recorded in the Vault."
             return 1
         fi
         rm -f "$before" "$after"
         unset LOCAL_REGION_COUNTRIES
-        printf '%s\n' "Country blocking settings updated."
-        wait_action_return
+        show_result_screen "Country blocking settings updated."
         return 0
     done
 }
@@ -2993,15 +3263,16 @@ manage_keys() {
         echo
         if ! prompt_nav; then continue; fi
         case "$REPLY" in
-            1) clear_screen; vault_state_command python3 "$ROOT_DIR/scripts/render_keys.py" "$node"; read -r -p "Press Enter to continue" _ ;;
-            2) add_access_keys_menu "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
-            3) remove_access_key_menu "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            1) clear_screen; vault_state_command python3 "$ROOT_DIR/scripts/render_keys.py" "$node" || true; pause_result_screen ;;
+            2) add_access_keys_menu "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            3) remove_access_key_menu "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             i) show_info access_keys ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
             x) exit_tui ;;
             *) invalid_choice ;;
         esac
+        [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return
     done
 }
 
@@ -3055,11 +3326,11 @@ manage_server() {
         echo
         if ! prompt_nav; then continue; fi
         case "$REPLY" in
-            1) clear_screen; show_node_status "$node"; read -r -p "Press Enter" _ ;;
-            2) clear_screen; run_node_playbook "$node" restart.yml; read -r -p "Press Enter" _ ;;
-            3) manage_dns_protection "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
-            4) manage_local_region_policy "$node"; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
-            5) clear_screen; rotate_ssh_key "$node"; read -r -p "Press Enter" _ ;;
+            1) clear_screen; show_node_status "$node" || true; pause_result_screen ;;
+            2) clear_screen; run_node_playbook "$node" restart.yml || true; pause_result_screen ;;
+            3) manage_dns_protection "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            4) manage_local_region_policy "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            5) clear_screen; rotate_ssh_key "$node" || true; pause_result_screen ;;
             6)
                 clear_screen
                 if remove_node "$node"; then
@@ -3072,7 +3343,7 @@ manage_server() {
                 fi
                 return
                 ;;
-            7) open_node_ssh_session "$node" ;;
+            7) open_node_ssh_session "$node" || true ;;
             i) show_info server ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
@@ -3096,7 +3367,7 @@ remove_remote_node() {
 }
 
 remove_node() {
-    local node="$1" confirm local_confirm removed=0
+    local node="$1" confirm local_confirm removed=0 host management_port bootstrap_port state
     clear_screen
     while true; do
         clear_screen
@@ -3121,26 +3392,45 @@ remove_node() {
         esac
     done
 
+    state="$(mktemp)"
+    if read_vault_state "$state"; then
+        host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$state")"
+        management_port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", ""))))' "$node" <"$state")"
+        bootstrap_port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_ssh_port", node.get("initial_port", 22)))' "$node" <"$state")"
+    fi
+    rm -f "$state"
+
+    clear_screen
+    menu_heading "Removing VPN server:"
+    echo
+    printf '%s\n' "VPS address: ${host:-unknown}"
+    printf '%s\n' "Cleaning up the remote VPN server."
+    echo
     if remove_remote_node "$node"; then
-        state_mutate remove-node "$node"
-        printf '%s\n' "VPN server removed from the VPS and Vault."
-        return "$NODE_REMOVED_STATUS"
+        if state_mutate remove-node "$node"; then
+            show_result_screen "VPN server removed from the VPS and Vault."
+            return "$NODE_REMOVED_STATUS"
+        fi
+        show_result_screen "The VPS was cleaned, but the local Vault could not be updated."
+        return 0
     fi
 
     while true; do
         clear_screen
+        menu_heading "VPN server was not removed:"
         echo
-        printf '%s\n' "Remote cleanup failed; the VPN server was not removed from the Vault."
-        printf '%s\n' "The VPS may be unreachable, or the cleanup playbook may have failed."
+        printf '%s\n' "VPS address: ${host:-unknown}"
+        printf '%s\n' "Management SSH port: ${management_port:-unknown}"
+        printf '%s\n' "Initial SSH port: ${bootstrap_port:-22}"
         echo
-        if [[ -n "$LAST_ANSIBLE_OUTPUT" ]]; then
-            printf '%s\n' "Last Ansible output:"
-            printf '%s\n' "$LAST_ANSIBLE_OUTPUT"
-            echo
-        fi
-        printf '%s\n' "Remove this VPN server from the local Vault anyway? (y/n)"
+        printf '%s\n' "Remote cleanup did not complete."
+        printf '%s\n' "The VPS may be unreachable or its SSH service may be unavailable."
+        printf '%s\n' "The VPN server is still saved in the local Vault."
         echo
-        menu_control r "retry remote cleanup with the initial SSH credentials"
+        menu_option 1 "Remove from local Vault only"
+        menu_option 2 "Try remote cleanup again"
+        menu_option 3 "Keep the server in the Vault"
+        echo
         menu_control b back
         menu_control m main
         menu_control i info
@@ -3148,28 +3438,29 @@ remove_node() {
         echo
         if ! read_required_choice local_confirm '?: '; then continue; fi
         case "$local_confirm" in
-            [Yy])
-                state_mutate remove-node "$node"
-                printf '%s\n' "VPN server removed from the local Vault."
-                removed=1
+            1)
+                if state_mutate remove-node "$node"; then
+                    show_result_screen "VPN server removed from the local Vault."
+                    removed=1
+                fi
                 break
                 ;;
-            r)
+            2)
                 if remove_remote_node "$node"; then
-                    state_mutate remove-node "$node"
-                    printf '%s\n' "VPN server removed from the VPS and Vault."
-                    removed=1
+                    if state_mutate remove-node "$node"; then
+                        show_result_screen "VPN server removed from the VPS and Vault."
+                        removed=1
+                    fi
                     break
                 fi
                 ;;
             i) show_info removal ;;
-            [Nn]|b) break ;;
+            3|b) break ;;
             m) MAIN_MENU_REQUESTED=1; break ;;
             x) exit_tui ;;
             *) invalid_choice ;;
         esac
     done
-    read -r -p "Press Enter" _
     if ((removed)); then
         return "$NODE_REMOVED_STATUS"
     fi
@@ -3180,7 +3471,7 @@ vpn_servers() {
     local count names choice node state node_status
     while true; do
         clear_screen
-        state="$(mktemp "$STATE_DIR/.servers.XXXXXX")"
+        state="$(mktemp "$RUNTIME_TMP_DIR/.servers.XXXXXX")"
         if ! materialize_vault_state "$state"; then
             rm -f "$state"
             return 1
@@ -3199,7 +3490,7 @@ vpn_servers() {
             echo
             if ! prompt_nav; then continue; fi
             case "$REPLY" in
-                1) rm -f "$state"; add_node; return ;;
+                1) rm -f "$state"; add_node || true; return ;;
                 i) show_info status; rm -f "$state"; continue ;;
                 b) rm -f "$state"; return ;;
                 m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return ;;
@@ -3272,13 +3563,17 @@ secure_state() {
             menu_option 2 "Backup encrypted state"
             menu_option 3 "Restore encrypted state"
             menu_option 4 "Delete Vault"
+            menu_option 5 "View backups"
         else
             printf '  %sStatus:%s %sNot initialized%s\n' "$COLOR_TEXT" "$COLOR_RESET" "$COLOR_WARN" "$COLOR_RESET"
             printf '  %sNo encrypted Vault exists on this computer.%s\n' "$COLOR_TEXT" "$COLOR_RESET"
             printf '  %sExpected location:%s %s%s%s\n' "$COLOR_TEXT" "$COLOR_RESET" "$COLOR_TEXT" "$HOST_VAULT_FILE" "$COLOR_RESET"
             echo
             menu_option 1 "Create Vault"
-            has_vault_backups && menu_option 2 "Restore encrypted state"
+            if has_vault_backups; then
+                menu_option 2 "Restore encrypted state"
+                menu_option 3 "View backups"
+            fi
         fi
         echo
         if ! prompt_nav; then continue; fi
@@ -3287,20 +3582,20 @@ secure_state() {
                 clear_screen
                 if [[ -f "$VAULT_FILE" ]]; then
                     if ensure_vault_password_file && [[ -f "$VAULT_FILE" ]]; then
-                        ansible-vault rekey --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE"
+                        ansible-vault rekey --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" || true
                         rm -f "$VAULT_PASSWORD_FILE"
                         VAULT_PASSWORD_FILE=""
                     fi
                 else
-                    initialize_vault
+                    initialize_vault || true
                 fi
                 ;;
             2)
                 clear_screen
                 if [[ -f "$VAULT_FILE" ]]; then
-                    backup_vault
+                    backup_vault || true
                 elif has_vault_backups; then
-                    restore_vault
+                    restore_vault || true
                 else
                     invalid_choice
                 fi
@@ -3308,7 +3603,9 @@ secure_state() {
             3)
                 clear_screen
                 if [[ -f "$VAULT_FILE" ]]; then
-                    restore_vault
+                    restore_vault || true
+                elif has_vault_backups; then
+                    show_vault_backups || true
                 else
                     invalid_choice
                 fi
@@ -3322,12 +3619,21 @@ secure_state() {
                     invalid_choice
                 fi
                 ;;
+            5)
+                clear_screen
+                if [[ -f "$VAULT_FILE" ]]; then
+                    show_vault_backups || true
+                else
+                    invalid_choice
+                fi
+                ;;
             i) show_info vault ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
             x) exit_tui ;;
             *) invalid_choice ;;
         esac
+        [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return
     done
 }
 
@@ -3344,9 +3650,9 @@ while true; do
     if ! read_required_choice choice '?: '; then continue; fi
     MAIN_MENU_REQUESTED=0
     case "$choice" in
-        1) vpn_servers ;;
-        2) add_node ;;
-        3) secure_state ;;
+        1) vpn_servers || true ;;
+        2) add_node || true ;;
+        3) secure_state || true ;;
         i) show_info general ;;
         x) exit_tui ;;
         *) invalid_choice ;;
