@@ -705,7 +705,6 @@ read_required_choice() {
     local variable="$1" prompt="$2" allowed="${3:-}" value=''
     if [[ -n "$allowed" ]]; then
         CURRENT_INPUT_HINT="Enter ${allowed}."
-        printf '%s\n' "  $CURRENT_INPUT_HINT"
     fi
     if ! read -r -e -p "$prompt" value; then
         return 1
@@ -731,14 +730,13 @@ prompt_nav() {
             if [[ -z "$options_text" ]]; then
                 options_text="$option"
             else
-                options_text="${options_text} or ${option}"
+                options_text="${options_text}, ${option}"
             fi
         done
-        CURRENT_INPUT_HINT="Enter ${options_text}, or b, m, i, x."
+        CURRENT_INPUT_HINT="Enter ${options_text}, b, m, i, or x."
     else
         CURRENT_INPUT_HINT='Enter b, m, i, or x.'
     fi
-    printf '%s\n' "  $CURRENT_INPUT_HINT"
     read_required_choice REPLY '?: '
 }
 
@@ -2366,8 +2364,7 @@ select_dns_profile() {
             menu_control i info
             menu_control x exit
             echo
-            CURRENT_INPUT_HINT='Enter 1, 2, 3, 4, 5, or 6, or b, m, i, x. Press Enter for Disabled.'
-            printf '%s\n' "  $CURRENT_INPUT_HINT"
+            CURRENT_INPUT_HINT='Enter 1, 2, 3, 4, 5, 6, b, m, i, or x. Press Enter for Disabled.'
             if ! read -r -e -p '?: ' REPLY; then return 1; fi
             [[ -z "$REPLY" ]] && REPLY=1
         else
@@ -4038,7 +4035,7 @@ while true; do
     menu_control i info
     menu_control x exit
     echo
-    if ! read_required_choice choice '?: ' '1, 2, or 3, or i or x'; then continue; fi
+    if ! read_required_choice choice '?: ' '1, 2, 3, i, or x'; then continue; fi
     MAIN_MENU_REQUESTED=0
     case "$choice" in
         1) vpn_servers || true ;;
