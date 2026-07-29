@@ -11,6 +11,7 @@ readonly VAULT_BACKUP_KEEP_COUNT=20
 DEBUG_MODE=0
 PIPELINE_ACTIVE=0
 PIPELINE_TITLE=''
+PIPELINE_OPERATION=''
 PIPELINE_PERCENT=0
 PIPELINE_LABEL=''
 PIPELINE_FRAME=0
@@ -1349,6 +1350,7 @@ pipeline_start() {
     ((DEBUG_MODE)) && return 0
     PIPELINE_ACTIVE=1
     PIPELINE_TITLE="$1"
+    PIPELINE_OPERATION="${2:-}"
     PIPELINE_PERCENT=0
     PIPELINE_LABEL="Preparing..."
     PIPELINE_FRAME=0
@@ -1398,6 +1400,7 @@ pipeline_complete() {
     fi
     PIPELINE_ACTIVE=0
     PIPELINE_TITLE=''
+    PIPELINE_OPERATION=''
     PIPELINE_LABEL=''
     PIPELINE_FRAME=0
 }
@@ -1411,6 +1414,7 @@ pipeline_abort() {
     fi
     PIPELINE_ACTIVE=0
     PIPELINE_TITLE=''
+    PIPELINE_OPERATION=''
     PIPELINE_LABEL=''
     PIPELINE_FRAME=0
 }
@@ -1425,9 +1429,18 @@ pipeline_stage_for_playbook() {
     case "$playbook" in
         bootstrap.yml) pipeline_stage 25 'Preparing the VPS' ;;
         harden_ssh.yml) pipeline_stage 50 'Hardening SSH access' ;;
-        site.yml) pipeline_stage 85 'Installing Xray and Docker' ;;
+        site.yml)
+            case "$PIPELINE_OPERATION" in
+                access_keys) pipeline_stage 80 'Applying access key changes' ;;
+                dns) pipeline_stage 80 'Applying DNS protection' ;;
+                countries) pipeline_stage 80 'Applying country blocking' ;;
+                *) pipeline_stage 85 'Installing Xray and Docker' ;;
+            esac
+            ;;
         restart.yml) pipeline_stage 80 'Restarting the VPN service' ;;
-        rotate-ssh.yml) pipeline_stage 70 'Rotating the SSH key' ;;
+        rotate-ssh.yml)
+            [[ "$PIPELINE_OPERATION" == rotate ]] || pipeline_stage 70 'Rotating the SSH key'
+            ;;
         remove.yml) pipeline_stage 80 'Removing the VPN service' ;;
     esac
 }
@@ -1690,7 +1703,7 @@ probe_vps_resources() {
 
 probe_vps_resources_with_key() {
     local host="$1" user="$2" port="$3" private_key="$4" known_hosts_file="${5:-}"
-    local inventory_dir inventory key_file log facts_line ssh_common_args
+    local inventory_dir inventory key_file log facts_line ssh_common_args preflight_pid preflight_rc=0 pipeline_owned=0
     inventory_dir="$(mktemp -d /tmp/xray-preflight.XXXXXX)"
     inventory="$inventory_dir/hosts.yml"
     key_file="$inventory_dir/id_ed25519"
@@ -1717,26 +1730,49 @@ probe_vps_resources_with_key() {
         >"$inventory"
     chmod 600 "$inventory"
 
-    clear_screen
-    printf '%s\n' "Checking VPS resources..."
-    if ! ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1; then
-        cat "$log"
+    if ((DEBUG_MODE)); then
+        if ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" 2>&1 | tee "$log"; then
+            preflight_rc=0
+        else
+            preflight_rc="${PIPESTATUS[0]}"
+        fi
+    else
+        pipeline_start "Checking VPN server resources" preflight
+        pipeline_owned=1
+        pipeline_stage 15 'Checking VPN access and resources'
+        ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1 &
+        preflight_pid=$!
+        while kill -0 "$preflight_pid" 2>/dev/null; do
+            pipeline_render
+            sleep 0.4
+        done
+        wait "$preflight_pid" || preflight_rc=$?
+    fi
+    if ((preflight_rc != 0)); then
+        ((pipeline_owned)) && pipeline_abort
         rm -rf "$inventory_dir"
         printf '%s\n' "The VPS resources could not be checked. The DNS profile was not changed."
+        if ((DEBUG_MODE)); then
+            printf '%s\n' "The raw Ansible output is shown above."
+        fi
         wait_action_return
         return 1
     fi
     facts_line="$(grep -o 'XRAY_RESOURCE_FACTS vcpus=[0-9][0-9]* ram_mb=[0-9][0-9]*' "$log" | tail -n 1 || true)"
     if [[ ! "$facts_line" =~ vcpus=([0-9]+)[[:space:]]ram_mb=([0-9]+) ]]; then
-        cat "$log"
+        ((pipeline_owned)) && pipeline_abort
         rm -rf "$inventory_dir"
         printf '%s\n' "The VPS resource report was invalid. The DNS profile was not changed."
+        if ((DEBUG_MODE)); then
+            printf '%s\n' "The raw Ansible output is shown above."
+        fi
         wait_action_return
         return 1
     fi
     VPS_VCPUS="${BASH_REMATCH[1]}"
     VPS_RAM_MB="${BASH_REMATCH[2]}"
     rm -rf "$inventory_dir"
+    ((pipeline_owned)) && pipeline_complete "VPS resources available"
     return 0
 }
 
@@ -2790,7 +2826,7 @@ deploy_node() {
 }
 
 run_node_playbook() {
-    local node="$1" playbook="$2" state_file="${3:-}" before extra inventory inventory_dir key_file known_hosts_file host port rc
+    local node="$1" playbook="$2" state_file="${3:-}" operation_title="${4:-Updating VPN server}" operation="${5:-}" before extra inventory inventory_dir key_file known_hosts_file host port rc pipeline_owned=0
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
@@ -2814,6 +2850,10 @@ run_node_playbook() {
     python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
     printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
     chmod 600 "$key_file"
+    if ((DEBUG_MODE == 0 && PIPELINE_ACTIVE == 0)); then
+        pipeline_start "$operation_title" "$operation"
+        pipeline_owned=1
+    fi
     if run_ansible_playbook -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/$playbook" --private-key "$key_file"; then
         rc=0
     else
@@ -2821,11 +2861,18 @@ run_node_playbook() {
     fi
     rm -f "$before" "$extra" "$key_file"
     rm -rf "$inventory_dir"
+    if ((pipeline_owned)); then
+        if ((rc == 0)); then
+            pipeline_complete "Operation complete"
+        else
+            pipeline_abort
+        fi
+    fi
     return "$rc"
 }
 
 run_remove_with_management_key() {
-    local node="$1" before extra inventory inventory_dir key_file host user port private_key rc
+    local node="$1" before extra inventory inventory_dir key_file host user port private_key rc pipeline_owned=0
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
@@ -2863,6 +2910,10 @@ run_remove_with_management_key() {
         >"$inventory"
     chmod 600 "$inventory"
 
+    if ((DEBUG_MODE == 0 && PIPELINE_ACTIVE == 0)); then
+        pipeline_start "Removing VPN server" remove
+        pipeline_owned=1
+    fi
     if run_ansible_playbook --quiet -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml" --private-key "$key_file"; then
         rc=0
     else
@@ -2870,11 +2921,14 @@ run_remove_with_management_key() {
     fi
     rm -f "$before" "$extra" "$key_file"
     rm -rf "$inventory_dir"
+    if ((pipeline_owned)); then
+        if ((rc == 0)); then pipeline_complete "VPN server removed"; else pipeline_abort; fi
+    fi
     return "$rc"
 }
 
 run_remove_with_bootstrap() {
-    local node="$1" before extra inventory inventory_dir host user port password password_yaml rc
+    local node="$1" before extra inventory inventory_dir host user port password password_yaml rc pipeline_owned=0
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
@@ -2925,6 +2979,10 @@ run_remove_with_bootstrap() {
     unset password_yaml
     chmod 600 "$inventory"
 
+    if ((DEBUG_MODE == 0 && PIPELINE_ACTIVE == 0)); then
+        pipeline_start "Removing VPN server" remove
+        pipeline_owned=1
+    fi
     if run_ansible_playbook --quiet -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml"; then
         rc=0
     else
@@ -2932,6 +2990,9 @@ run_remove_with_bootstrap() {
     fi
     rm -f "$before" "$extra"
     rm -rf "$inventory_dir"
+    if ((pipeline_owned)); then
+        if ((rc == 0)); then pipeline_complete "VPN server removed"; else pipeline_abort; fi
+    fi
     return "$rc"
 }
 
@@ -2954,7 +3015,7 @@ mutate_access_keys_and_deploy() {
             return 1
         }
     fi
-    if ! run_node_playbook "$node" site.yml "$after"; then
+    if ! run_node_playbook "$node" site.yml "$after" "Updating access keys" access_keys; then
         rm -f "$before" "$after"
         printf '%s\n' "Access key change failed. The existing Vault was not changed."
         return 1
@@ -3205,44 +3266,55 @@ json.dump(data, sys.stdout, indent=2)
 print()
 PY
     printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    pipeline_start "Rotating SSH key" rotate
+    pipeline_stage 25 'Adding the new SSH key'
     if ! run_ansible_playbook -i "$inventory" -e "@$extra" -e rotate_remove_old_key=false "$ROOT_DIR/ansible/rotate-ssh.yml" --private-key "$old_key"; then
+        pipeline_abort
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
+    pipeline_stage 50 'Verifying the new SSH key'
     if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts_file" -o LogLevel=ERROR deploy@"$host" true; then
         printf '%s\n' "The new SSH key could not be verified. The old key remains active."
+        pipeline_abort
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
     if ! python3 "$ROOT_DIR/scripts/state_cli.py" set-deploy-key "$node" "$new_key" "$new_pub" <"$before" >"$rotated_state"; then
+        pipeline_abort
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
     if ! vault_save "$rotated_state"; then
         printf '%s\n' "The new SSH key is active, but the encrypted Vault was not changed. The old key remains active."
+        pipeline_abort
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
 
     printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_private_key_file: $new_key" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
+    pipeline_stage 75 'Removing the old SSH key'
     if ! run_ansible_playbook -i "$inventory" -e "@$extra" -e rotate_remove_old_key=true "$ROOT_DIR/ansible/rotate-ssh.yml" --private-key "$new_key"; then
         printf '%s\n' "The new SSH key is stored in the Vault, but the old key could not be revoked."
+        pipeline_abort
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
     if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts_file" -o LogLevel=ERROR deploy@"$host" true; then
         printf '%s\n' "The old key was revoked, but the new SSH key could not be verified afterward."
+        pipeline_abort
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
     rm -f "$before" "$extra" "$rotated_state"
     rm -rf "$inventory_dir" "$key_dir"
+    pipeline_complete "SSH key rotation complete"
     printf '%s\n' "SSH key rotated."
 }
 
@@ -3305,7 +3377,7 @@ manage_dns_protection() {
     fi
     clear_screen
     printf '%s\n' "Applying DNS protection profile: ${selected_profile}"
-    if ! run_node_playbook "$node" site.yml "$after"; then
+    if ! run_node_playbook "$node" site.yml "$after" "Applying DNS protection" dns; then
         rm -f "$before" "$after" "$known_hosts_file"
         show_result_screen "DNS protection change failed. The existing Vault was not changed."
         return 1
@@ -3374,7 +3446,7 @@ manage_local_region_policy() {
         else
             printf '%s\n' "Disabling country blocking."
         fi
-        if ! run_node_playbook "$node" site.yml "$after"; then
+        if ! run_node_playbook "$node" site.yml "$after" "Applying country blocking" countries; then
             rm -f "$before" "$after"
             unset LOCAL_REGION_COUNTRIES
             show_result_screen "Country blocking change failed. The existing Vault was not changed."
@@ -3472,7 +3544,7 @@ manage_server() {
         if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) clear_screen; show_node_status "$node" || true; pause_result_screen ;;
-            2) clear_screen; run_node_playbook "$node" restart.yml || true; pause_result_screen ;;
+            2) clear_screen; run_node_playbook "$node" restart.yml "" "Restarting VPN service" restart || true; pause_result_screen ;;
             3) manage_dns_protection "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             4) manage_local_region_policy "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             5) clear_screen; rotate_ssh_key "$node" || true; pause_result_screen ;;
