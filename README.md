@@ -413,31 +413,12 @@ separate key database is created on the VPS.
 
 ```text
 xray-tui.sh       interactive console manager
+lib/              focused Bash runtime modules
 run.sh            local launcher
 tui/              local controller container
 ansible/          VPS playbooks and roles
 scripts/          encrypted state and output helpers
 ```
-
-## Legacy Version
-
-The previous direct-SSH version is still available for reference and
-compatibility.
-
-Run it directly from GitHub:
-
-```bash
-bash -c "$(curl -sSfL --http2 --proto '=https' 'https://raw.githubusercontent.com/m0nokey/xray-tui/refs/heads/main/legacy/xray-tui.sh')"
-```
-
-Or run the local copy:
-
-```bash
-bash legacy/xray-tui.sh
-```
-
-The legacy version does not include the current Vault, Ansible deployment, or
-current server management flow. It will be deleted in a future release.
 
 ## License
 
