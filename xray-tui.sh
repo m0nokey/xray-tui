@@ -1380,7 +1380,7 @@ pipeline_render() {
         3) frame='\\' ;;
     esac
     if [[ -t 1 ]]; then
-        printf '\r\033[2K  [%3d%%] %-44s %s' "$PIPELINE_PERCENT" "$PIPELINE_LABEL" "$frame"
+        printf '\r\033[K  [%3d%%] %-44s %s' "$PIPELINE_PERCENT" "$PIPELINE_LABEL" "$frame"
     else
         printf '  [%3d%%] %s\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
@@ -1416,19 +1416,18 @@ pipeline_stage() {
         pipeline_start "Working on VPN server"
     fi
     if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' && -t 1 ]]; then
-        printf '\r\033[2K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+        printf '\r\033[K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
     PIPELINE_PERCENT="$1"
     PIPELINE_LABEL="$2"
     PIPELINE_FRAME=0
-    pipeline_render
 }
 
 pipeline_complete() {
     local label="${1:-Complete}"
     ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
     if [[ -t 1 ]]; then
-        printf '\r\033[2K  [100%%] %-44s done\n' "$label"
+        printf '\r\033[K  [100%%] %-44s done\n' "$label"
     else
         printf '  [100%%] %s\n' "$label"
     fi
@@ -1443,7 +1442,7 @@ pipeline_complete() {
 pipeline_abort() {
     ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
     if [[ -t 1 ]]; then
-        printf '\r\033[2K  [%3d%%] %-44s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+        printf '\r\033[K  [%3d%%] %-44s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     else
         printf '  [%3d%%] %s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
@@ -2798,6 +2797,7 @@ deploy_node() {
     chmod 600 "$known_hosts_file"
 
     pipeline_stage 70 'Verifying hardened SSH access'
+    pipeline_render
     local verify_attempt verified=0
     for verify_attempt in {1..12}; do
         if ssh -i "$key_file" -p "$target_port" \
@@ -3311,6 +3311,7 @@ PY
         return 1
     fi
     pipeline_stage 50 'Verifying the new SSH key'
+    pipeline_render
     if ! ssh -i "$new_key" -p "$port" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts_file" -o LogLevel=ERROR deploy@"$host" true; then
         printf '%s\n' "The new SSH key could not be verified. The old key remains active."
         pipeline_abort
