@@ -15,6 +15,8 @@ PIPELINE_OPERATION=''
 PIPELINE_PERCENT=0
 PIPELINE_LABEL=''
 PIPELINE_FRAME=0
+PIPELINE_TTY_ACTIVE=0
+PIPELINE_TTY_STATE=''
 VAULT_PASSWORD_FILE=""
 MAIN_MENU_REQUESTED=0
 LAST_ANSIBLE_OUTPUT=""
@@ -66,6 +68,7 @@ else
 fi
 
 cleanup() {
+    declare -F pipeline_restore_terminal >/dev/null 2>&1 && pipeline_restore_terminal || true
     [[ -n "$VAULT_PASSWORD_FILE" ]] && rm -f "$VAULT_PASSWORD_FILE"
     rm -f "$STATE_DIR"/.vault.* 2>/dev/null || true
     declare -F prune_vault_backups >/dev/null 2>&1 && prune_vault_backups
@@ -1354,6 +1357,13 @@ pipeline_start() {
     PIPELINE_PERCENT=0
     PIPELINE_LABEL="Preparing..."
     PIPELINE_FRAME=0
+    if [[ -t 0 && -t 1 ]]; then
+        PIPELINE_TTY_STATE="$(stty -g 2>/dev/null || true)"
+        if [[ -n "$PIPELINE_TTY_STATE" ]] && stty -echo -icanon -isig 2>/dev/null; then
+            printf '\033[?25l'
+            PIPELINE_TTY_ACTIVE=1
+        fi
+    fi
     clear_screen
     printf '%s\n\n' "$PIPELINE_TITLE"
     pipeline_render
@@ -1362,6 +1372,7 @@ pipeline_start() {
 pipeline_render() {
     local frame
     ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
+    pipeline_drain_input
     frame='|'
     case "$((PIPELINE_FRAME % 4))" in
         1) frame='/' ;;
@@ -1374,6 +1385,29 @@ pipeline_render() {
         printf '  [%3d%%] %s\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
     PIPELINE_FRAME=$((PIPELINE_FRAME + 1))
+}
+
+pipeline_drain_input() {
+    ((PIPELINE_TTY_ACTIVE)) || return 0
+    local pipeline_input=''
+    while IFS= read -r -t 0 -n 10000 pipeline_input 2>/dev/null; do
+        :
+    done
+    unset pipeline_input
+}
+
+pipeline_restore_terminal() {
+    if ((PIPELINE_TTY_ACTIVE)); then
+        pipeline_drain_input
+        if [[ -n "$PIPELINE_TTY_STATE" ]]; then
+            stty "$PIPELINE_TTY_STATE" 2>/dev/null || stty sane 2>/dev/null || true
+        else
+            stty sane 2>/dev/null || true
+        fi
+        printf '\033[?25h'
+    fi
+    PIPELINE_TTY_ACTIVE=0
+    PIPELINE_TTY_STATE=''
 }
 
 pipeline_stage() {
@@ -1398,6 +1432,7 @@ pipeline_complete() {
     else
         printf '  [100%%] %s\n' "$label"
     fi
+    pipeline_restore_terminal
     PIPELINE_ACTIVE=0
     PIPELINE_TITLE=''
     PIPELINE_OPERATION=''
@@ -1412,6 +1447,7 @@ pipeline_abort() {
     else
         printf '  [%3d%%] %s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
+    pipeline_restore_terminal
     PIPELINE_ACTIVE=0
     PIPELINE_TITLE=''
     PIPELINE_OPERATION=''
@@ -1675,7 +1711,7 @@ probe_vps_resources() {
     preflight_pid=$!
     while kill -0 "$preflight_pid" 2>/dev/null; do
         pipeline_render
-        sleep 0.4
+        sleep 0.1
     done
     wait "$preflight_pid" || preflight_rc=$?
     if ((preflight_rc != 0)); then
@@ -1744,7 +1780,7 @@ probe_vps_resources_with_key() {
         preflight_pid=$!
         while kill -0 "$preflight_pid" 2>/dev/null; do
             pipeline_render
-            sleep 0.4
+            sleep 0.1
         done
         wait "$preflight_pid" || preflight_rc=$?
     fi
@@ -2253,7 +2289,7 @@ run_ansible_playbook() {
         ansible_pid=$!
         while kill -0 "$ansible_pid" 2>/dev/null; do
             pipeline_render
-            sleep 0.4
+            sleep 0.1
         done
         if wait "$ansible_pid"; then
             rc=0
