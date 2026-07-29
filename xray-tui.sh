@@ -44,8 +44,8 @@ rm -f "$STATE_DIR"/.vault.* 2>/dev/null || true
 mkdir -p "$RUNTIME_TMP_DIR"
 chmod 700 "$RUNTIME_TMP_DIR"
 export TMPDIR="$RUNTIME_TMP_DIR"
-export ANSIBLE_LOCAL_TEMP=/tmp/ansible-local
-export ANSIBLE_SSH_CONTROL_PATH_DIR=/tmp/ansible-cp
+export ANSIBLE_LOCAL_TEMP="$RUNTIME_TMP_DIR/ansible-local"
+export ANSIBLE_SSH_CONTROL_PATH_DIR="$RUNTIME_TMP_DIR/ansible-cp"
 export ANSIBLE_CONFIG="$ROOT_DIR/ansible/ansible.cfg"
 export ANSIBLE_FORCE_COLOR=true
 mkdir -p "$ANSIBLE_LOCAL_TEMP" "$ANSIBLE_SSH_CONTROL_PATH_DIR"

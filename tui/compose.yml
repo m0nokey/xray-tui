@@ -3,10 +3,11 @@ services:
     build:
       context: ..
       dockerfile: tui/Dockerfile
+      args:
+        XRAY_TUI_UID: ${XRAY_TUI_UID:-1000}
     image: local/xray-tui:latest
     pull_policy: never
     container_name: xray-tui
-    user: "${XRAY_TUI_UID:-1000}:${XRAY_TUI_GID:-1000}"
     working_dir: /workspace
     stdin_open: true
     tty: true

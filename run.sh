@@ -10,7 +10,6 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 # Match the container process to the host user so the 0700 Vault directory
 # remains writable without granting the controller root privileges.
 export XRAY_TUI_UID="${XRAY_TUI_UID:-$(id -u)}"
-export XRAY_TUI_GID="${XRAY_TUI_GID:-$(id -g)}"
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
@@ -55,13 +54,14 @@ image_label() {
 }
 
 build_if_needed() {
-    local digest dockerfile_hash current_digest current_hash
+    local digest dockerfile_hash current_digest current_hash current_uid
     digest="$(resolve_digest)"
     dockerfile_hash="$(file_sha256 "$ROOT_DIR/tui/Dockerfile")"
     current_digest="$(image_label xray.tui.base-image)"
     current_hash="$(image_label xray.tui.dockerfile-sha256)"
+    current_uid="$(image_label xray.tui.runtime-uid)"
 
-    if [[ -n "$digest" && "$current_digest" == "$BASE_IMAGE@$digest" && "$current_hash" == "$dockerfile_hash" ]]; then
+    if [[ -n "$digest" && "$current_digest" == "$BASE_IMAGE@$digest" && "$current_hash" == "$dockerfile_hash" && "$current_uid" == "$XRAY_TUI_UID" ]]; then
         return 0
     fi
     if [[ -z "$digest" && -n "$(docker image inspect "$IMAGE" 2>/dev/null)" ]]; then
