@@ -151,7 +151,7 @@ ensure_vault_password_file() {
         rm -f "$VAULT_FILE" "$VAULT_PASSWORD_FILE"
         VAULT_PASSWORD_FILE=""
         clear_screen
-        printf '%s\n' "The existing Vault is damaged and was removed." >&2
+        printf '%s\n' "The existing Vault is damaged and was deleted." >&2
         printf '%s\n' "A new encrypted Vault will be created now." >&2
         sleep 2.5
         create_vault_password_file || return 1
@@ -191,7 +191,7 @@ ensure_vault_password_file() {
             VAULT_PASSWORD_FILE=""
             rm -f "$VAULT_FILE"
             clear_screen
-            printf '%s\n' "The existing Vault state is damaged and was removed." >&2
+            printf '%s\n' "The existing Vault state is damaged and was deleted." >&2
             printf '%s\n' "A new encrypted Vault will be created now." >&2
             sleep 2.5
             create_vault_password_file || return 1
@@ -1126,27 +1126,27 @@ show_info() {
             printf '%s\n' "    1. Manage VPN server"
             info_desc "       Open server operations, ad and threat blocking, country blocking, or deletion."
             printf '%s\n' "    2. Manage access keys"
-            info_desc "       Show, add, or remove the VPN client keys for this server."
+            info_desc "       Show, add, or delete the VPN client keys for this server."
             ;;
         access_keys)
             printf '%b  Access keys:%b\n' "$blue" "$reset"
             info_desc "Each access key contains one Vision UUID and one XHTTP UUID."
-            info_desc "Both UUIDs are deployed together and removed together."
+            info_desc "Both UUIDs are deployed together and deleted together."
             info_desc "You can add up to 50 access keys at once."
-            info_desc "In the remove screen, enter a key number or the last number to remove all keys."
+            info_desc "In the delete screen, enter a key number or the last number to delete all keys."
             echo
             printf '%b  Manage access keys menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Show"
             info_desc "       Display the Vision and XHTTP connection links for each key."
             printf '%s\n' "    2. Add"
             info_desc "       Generate 1 to 50 new access keys and deploy them to the VPS."
-            printf '%s\n' "    3. Remove"
-            info_desc "       Remove one key, or choose the final number to remove all keys."
+            printf '%s\n' "    3. Delete"
+            info_desc "       Delete one key, or choose the final number to delete all keys."
             echo
             printf '%b  Access-key screens:%b\n' "$blue" "$reset"
             info_desc "Add: enter the number of keys to generate, from 1 to 50."
-            info_desc "Remove: select a key number, then confirm with y or cancel with n."
-            info_desc "Remove all: confirm that every Vision and XHTTP key should be deleted."
+            info_desc "Delete: select a key number, then confirm with y or cancel with n."
+            info_desc "Delete all: confirm that every Vision and XHTTP key should be deleted."
             ;;
         dns)
             printf '%b  Block ads and threats:%b\n' "$blue" "$reset"
@@ -1163,7 +1163,7 @@ show_info() {
             echo
             printf '%b  Block ads and threats menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Disabled"
-            info_desc "       Remove DNS blocklists from the VPS."
+            info_desc "       Delete DNS blocklists from the VPS."
             printf '%s\n' "    2. Minimal"
             info_desc "       Enable malware and malicious website protection."
             printf '%s\n' "    3. Optimal"
@@ -1222,7 +1222,7 @@ show_info() {
             printf '%s\n' "    1. Select countries"
             info_desc "       Search by country name or ISO code and toggle multiple checkboxes."
             printf '%s\n' "    2. Disable policy"
-            info_desc "       Remove all country blocking rules from this VPN node."
+            info_desc "       Delete all country blocking rules from this VPN node."
             info_desc "Use Apply after selecting countries; the Vault changes only after deployment succeeds."
             ;;
         server)
@@ -1248,7 +1248,7 @@ show_info() {
             info_desc "It is unlocked only when an operation needs the saved data."
             info_desc "Keep the Vault password safe: it cannot be recovered from the file."
             info_desc "Before each successful Vault replacement, the previous encrypted file is saved as a recovery copy."
-            info_desc "The newest 20 automatic recovery copies are kept; older copies are removed automatically."
+            info_desc "The newest 20 automatic recovery copies are kept; older copies are deleted automatically."
             info_desc "Automatic recovery copies are internal and are not shown in the backup browser."
             info_desc "Backup encrypted state creates a manual tar.gz archive for user recovery and migration."
             echo
@@ -1269,7 +1269,7 @@ show_info() {
             printf '%b  VPN server deletion:%b\n' "$blue" "$reset"
             info_desc "Confirm with y to delete the VPN server from the VPS."
             info_desc "Cancel with n or b to leave the VPS and Vault unchanged."
-            info_desc "Xray, Docker, updater services, and the deploy user are removed from the VPS."
+            info_desc "Xray, Docker, updater services, and the deploy user are deleted from the VPS."
             info_desc "The original SSH configuration is restored from its backup."
             info_desc "The server stays in the Vault if remote deletion fails."
             info_desc "After a failed cleanup, choose 1 to retry or 2 to delete only the local Vault entry."
@@ -1290,9 +1290,9 @@ show_info() {
             echo
             printf '%s\n' "     Selected server menu:"
             printf '%s\n' "     1. Manage VPN server"
-            info_desc "        Check status, restart Xray, manage DNS and country policy, rotate the SSH key, or remove the server."
+            info_desc "        Check status, restart Xray, manage DNS and country policy, rotate the SSH key, or delete the server."
             printf '%s\n' "     2. Manage access keys"
-            info_desc "        Show, add, or remove VPN access keys for this server."
+            info_desc "        Show, add, or delete VPN access keys for this server."
             echo
             printf '%s\n' "  2. Add VPN server"
             info_desc " - Enter the VPS IP address, SSH user, SSH port, and password on separate screens."
@@ -1330,7 +1330,7 @@ show_info() {
             printf '%s\n' "     6. Rotate SSH key"
             info_desc "        Generate a new SSH key for secure access to this VPS and disable the old key."
             printf '%s\n' "     7. Delete VPN server"
-            info_desc "        Remove the Xray installation and clean up the VPS."
+            info_desc "        Delete the Xray installation and clean up the VPS."
             info_desc "        The Vault is changed only after remote deletion succeeds."
             echo
             printf '%s\n' "  Manage access keys"
@@ -1338,9 +1338,9 @@ show_info() {
             info_desc "        Display the Vision and XHTTP connection links for each key."
             printf '%s\n' "     2. Add"
             info_desc "        Add from 1 to 50 access keys and deploy them to the VPS."
-            printf '%s\n' "     3. Remove"
-            info_desc "        Select a key by number and remove both protocol UUIDs together."
-            info_desc "        Choose the last number to remove every access key at once."
+            printf '%s\n' "     3. Delete"
+            info_desc "        Select a key by number and delete both protocol UUIDs together."
+            info_desc "        Choose the last number to delete every access key at once."
             ;;
     esac
     echo
@@ -3124,7 +3124,7 @@ remove_access_key_menu() {
     while true; do
         clear_screen
         echo
-        menu_heading "Remove access key:"
+        menu_heading "Delete access key:"
         echo
         key_list="$(python3 - "$node" "$state" <<'PY'
 import json
@@ -3150,7 +3150,7 @@ PY
                 printf '     XHTTP ID: %s\n' "$xhttp_id"
             done <<<"$key_list"
             echo
-            printf '%s%s.%s %sRemove all access keys%s\n' "$COLOR_LINE" "$remove_all_selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET"
+            printf '%s%s.%s %sDelete all access keys%s\n' "$COLOR_LINE" "$remove_all_selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET"
         fi
         echo
         if ! prompt_nav; then continue; fi
@@ -3164,10 +3164,10 @@ PY
                 while true; do
                     clear_screen
                     echo
-                    menu_heading "Remove all access keys:"
+                    menu_heading "Delete all access keys:"
                     echo
-                    printf '%s\n' "This will remove every Vision and XHTTP access key from the VPS."
-                    printf '%s\n' "Are you sure you want to remove all access keys? (y/n)"
+                    printf '%s\n' "This will delete every Vision and XHTTP access key from the VPS."
+                    printf '%s\n' "Are you sure you want to delete all access keys? (y/n)"
                     echo
                     menu_control b back
                     menu_control m main
@@ -3179,7 +3179,7 @@ PY
                         [Yy])
                             clear_screen
                             if mutate_access_keys_and_deploy "$node" remove-all-keys; then
-                                show_result_screen "All access keys removed."
+                                show_result_screen "All access keys deleted."
                             else
                                 show_result_screen "Access key change failed. The existing Vault was not changed."
                             fi
@@ -3223,13 +3223,13 @@ PY
                 while true; do
                     clear_screen
                     echo
-                    menu_heading "Remove access key:"
+                    menu_heading "Delete access key:"
                     echo
                     printf '%s\n' "  Key id: $key_id"
                     printf '%s\n' "  Vision ID: $vision_id"
                     printf '%s\n' "  XHTTP ID: $xhttp_id"
                     echo
-                    printf '%s\n' "  Are you sure you want to remove this access key? (y/n)"
+                    printf '%s\n' "  Are you sure you want to delete this access key? (y/n)"
                     echo
                     menu_control b back
                     menu_control m main
@@ -3241,7 +3241,7 @@ PY
                         [Yy])
                             clear_screen
                             if mutate_access_keys_and_deploy "$node" remove-key "$key_id"; then
-                                show_result_screen "Access key removed."
+                                show_result_screen "Access key deleted."
                             else
                                 show_result_screen "Access key change failed. The existing Vault was not changed."
                             fi
@@ -3336,7 +3336,7 @@ PY
     fi
 
     printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_private_key_file: $new_key" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
-    pipeline_stage 75 'Removing the old SSH key'
+    pipeline_stage 75 'Deleting the old SSH key'
     if ! run_ansible_playbook -i "$inventory" -e "@$extra" -e rotate_remove_old_key=true "$ROOT_DIR/ansible/rotate-ssh.yml" --private-key "$new_key"; then
         printf '%s\n' "The new SSH key is stored in the Vault, but the old key could not be revoked."
         pipeline_abort
@@ -3515,7 +3515,7 @@ manage_keys() {
         echo
         menu_option 1 Show
         menu_option 2 Add
-        menu_option 3 Remove
+        menu_option 3 Delete
         echo
         if ! prompt_nav; then continue; fi
         case "$REPLY" in

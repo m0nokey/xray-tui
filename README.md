@@ -262,7 +262,7 @@ data can cause false positives.
 ```text
 1. Show
 2. Add
-3. Remove
+3. Delete
 ```
 
 Each access key contains two paired client links:
@@ -272,7 +272,7 @@ Each access key contains two paired client links:
 - VLESS XHTTP
 ```
 
-Removing a key removes both links together. Other keys are not changed.
+Deleting a key deletes both links together. Other keys are not changed.
 
 ## Vault
 
@@ -298,7 +298,7 @@ encrypted file.
 
 Before each successful Vault replacement, the previous encrypted file is saved
 as an automatic recovery copy. The newest 20 copies are kept and older copies
-are removed automatically. `Backup encrypted state` creates a separate manual
+are deleted automatically. `Backup encrypted state` creates a separate manual
 `tar.gz` archive; manual archives are not part of the automatic rotation.
 `View backups` lists manual archives with their UTC timestamp and full path.
 Automatic recovery copies are internal and are not shown. `Restore encrypted
@@ -354,11 +354,11 @@ and migration.
 `Delete VPN server` cleans the VPS before deleting its Vault record.
 
 ```text
-- stops and removes the Xray Docker stack
-- removes updater services and Xray files
-- removes the management user created by xray-tui
+- stops and deletes the Xray Docker stack
+- deletes updater services and Xray files
+- deletes the management user created by xray-tui
 - restores the original SSH configuration
-- removes the server from the local Vault after successful cleanup
+- deletes the server from the local Vault after successful cleanup
 ```
 
 If remote deletion fails, the Vault entry is kept so the operation can be
@@ -427,7 +427,7 @@ bash legacy/xray-tui.sh
 ```
 
 The legacy version does not include the current Vault, Ansible deployment, or
-current server management flow. It will be removed in a future release.
+current server management flow. It will be deleted in a future release.
 
 ## License
 
