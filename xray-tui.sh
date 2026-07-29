@@ -9,6 +9,11 @@ HOST_VAULT_FILE="$HOST_STATE_DIR/vault.json"
 RUNTIME_TMP_DIR="${TMPDIR:-/tmp}/xray-tui-${BASHPID}"
 readonly VAULT_BACKUP_KEEP_COUNT=20
 DEBUG_MODE=0
+PIPELINE_ACTIVE=0
+PIPELINE_TITLE=''
+PIPELINE_PERCENT=0
+PIPELINE_LABEL=''
+PIPELINE_FRAME=0
 VAULT_PASSWORD_FILE=""
 MAIN_MENU_REQUESTED=0
 LAST_ANSIBLE_OUTPUT=""
@@ -1340,6 +1345,93 @@ clear_screen() {
     printf '\033[H\033[2J\033[3J' >&2
 }
 
+pipeline_start() {
+    ((DEBUG_MODE)) && return 0
+    PIPELINE_ACTIVE=1
+    PIPELINE_TITLE="$1"
+    PIPELINE_PERCENT=0
+    PIPELINE_LABEL="Preparing..."
+    PIPELINE_FRAME=0
+    clear_screen
+    printf '%s\n\n' "$PIPELINE_TITLE"
+    pipeline_render
+}
+
+pipeline_render() {
+    local frame
+    ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
+    frame='|'
+    case "$((PIPELINE_FRAME % 4))" in
+        1) frame='/' ;;
+        2) frame='-' ;;
+        3) frame='\\' ;;
+    esac
+    if [[ -t 1 ]]; then
+        printf '\r\033[2K  [%3d%%] %-44s %s' "$PIPELINE_PERCENT" "$PIPELINE_LABEL" "$frame"
+    else
+        printf '  [%3d%%] %s\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+    fi
+    PIPELINE_FRAME=$((PIPELINE_FRAME + 1))
+}
+
+pipeline_stage() {
+    ((DEBUG_MODE)) && return 0
+    if ((PIPELINE_ACTIVE == 0)); then
+        pipeline_start "Working on VPN server"
+    fi
+    if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' && -t 1 ]]; then
+        printf '\r\033[2K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+    fi
+    PIPELINE_PERCENT="$1"
+    PIPELINE_LABEL="$2"
+    PIPELINE_FRAME=0
+    pipeline_render
+}
+
+pipeline_complete() {
+    local label="${1:-Complete}"
+    ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
+    if [[ -t 1 ]]; then
+        printf '\r\033[2K  [100%%] %-44s done\n' "$label"
+    else
+        printf '  [100%%] %s\n' "$label"
+    fi
+    PIPELINE_ACTIVE=0
+    PIPELINE_TITLE=''
+    PIPELINE_LABEL=''
+    PIPELINE_FRAME=0
+}
+
+pipeline_abort() {
+    ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
+    if [[ -t 1 ]]; then
+        printf '\r\033[2K  [%3d%%] %-44s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+    else
+        printf '  [%3d%%] %s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+    fi
+    PIPELINE_ACTIVE=0
+    PIPELINE_TITLE=''
+    PIPELINE_LABEL=''
+    PIPELINE_FRAME=0
+}
+
+pipeline_stage_for_playbook() {
+    local argument playbook=''
+    for argument in "$@"; do
+        case "$argument" in
+            *.yml) playbook="${argument##*/}" ;;
+        esac
+    done
+    case "$playbook" in
+        bootstrap.yml) pipeline_stage 25 'Preparing the VPS' ;;
+        harden_ssh.yml) pipeline_stage 50 'Hardening SSH access' ;;
+        site.yml) pipeline_stage 85 'Installing Xray and Docker' ;;
+        restart.yml) pipeline_stage 80 'Restarting the VPN service' ;;
+        rotate-ssh.yml) pipeline_stage 70 'Rotating the SSH key' ;;
+        remove.yml) pipeline_stage 80 'Removing the VPN service' ;;
+    esac
+}
+
 local_internet_available() {
     local url
     command -v curl >/dev/null 2>&1 || return 1
@@ -1508,7 +1600,7 @@ yaml_scalar() {
 
 probe_vps_resources() {
     local host="$1" user="$2" port="$3" password="$4"
-    local inventory_dir inventory log password_yaml facts_line auth_output auth_rc
+    local inventory_dir inventory log password_yaml facts_line auth_output auth_rc preflight_pid preflight_rc=0
     inventory_dir="$(mktemp -d /tmp/xray-preflight.XXXXXX)"
     inventory="$inventory_dir/hosts.yml"
     log="$inventory_dir/ansible.log"
@@ -1528,6 +1620,9 @@ probe_vps_resources() {
         >"$inventory"
     chmod 600 "$inventory"
 
+    if ((PIPELINE_ACTIVE)); then
+        pipeline_stage 10 'Checking the VPS connection'
+    fi
     # Reject bad credentials before Ansible starts its retry loop.
     if command -v sshpass >/dev/null 2>&1; then
         auth_rc=0
@@ -1557,9 +1652,20 @@ probe_vps_resources() {
     fi
     unset password password_yaml
 
-    clear_screen
-    printf '%s\n' "Checking VPS resources..."
-    if ! ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1; then
+    if ((PIPELINE_ACTIVE)); then
+        pipeline_stage 15 'Checking VPS access and resources'
+    else
+        clear_screen
+        printf '%s\n' "Checking VPS resources..."
+    fi
+    ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1 &
+    preflight_pid=$!
+    while kill -0 "$preflight_pid" 2>/dev/null; do
+        pipeline_render
+        sleep 0.4
+    done
+    wait "$preflight_pid" || preflight_rc=$?
+    if ((preflight_rc != 0)); then
         if grep -Eiq 'permission denied|authentication failed|authentication refused|failed password' "$log"; then
             rm -rf "$inventory_dir"
             return "$INVALID_BOOTSTRAP_CREDENTIALS"
@@ -2087,7 +2193,7 @@ select_dns_profile() {
 }
 
 run_ansible_playbook() {
-    local log rc quiet=0 debug_output=''
+    local log rc quiet=0 debug_output='' ansible_pid pipeline_owned=0
     if [[ "${1:-}" == "--quiet" ]]; then
         quiet=1
         shift
@@ -2101,8 +2207,19 @@ run_ansible_playbook() {
         fi
         LAST_ANSIBLE_OUTPUT="$debug_output"
     else
+        if ((PIPELINE_ACTIVE == 0)); then
+            pipeline_start "Working on VPN server"
+            pipeline_owned=1
+        fi
+        pipeline_stage_for_playbook "$@"
         log="$(mktemp "$RUNTIME_TMP_DIR/.ansible.XXXXXX")"
-        if ansible-playbook "$@" >"$log" 2>&1; then
+        ansible-playbook "$@" >"$log" 2>&1 &
+        ansible_pid=$!
+        while kill -0 "$ansible_pid" 2>/dev/null; do
+            pipeline_render
+            sleep 0.4
+        done
+        if wait "$ansible_pid"; then
             rc=0
         else
             rc=$?
@@ -2119,6 +2236,13 @@ run_ansible_playbook() {
             printf '\n%s\n' "Ansible failed with exit code ${rc}."
         elif (( ! quiet )); then
             printf '%s\n' "Ansible failed with exit code ${rc}."
+        fi
+    fi
+    if ((pipeline_owned)); then
+        if ((rc == 0)); then
+            pipeline_complete
+        else
+            pipeline_abort
         fi
     fi
     return "$rc"
@@ -2363,10 +2487,13 @@ add_node() {
                 *) rm -f "$before" "$after"; return 0 ;;
             esac
 
+            pipeline_start "Checking VPS resources"
             if probe_vps_resources "$host" "$bootstrap_user" "$bootstrap_port" "$bootstrap_password"; then
+                pipeline_complete "VPS resources available"
                 break 2
             else
                 probe_rc=$?
+                pipeline_abort
             fi
             if ((probe_rc == UNAVAILABLE_BOOTSTRAP_CONNECTION)); then
                 if bootstrap_connection_failure_menu "$host" "$bootstrap_port"; then
@@ -2445,12 +2572,15 @@ print(next(name for name in after["nodes"] if name not in before.get("nodes", {}
 PY
 )"
     rm -f "$before"
+    pipeline_start "Installing VPN server"
     if ! deploy_node "$name" "$after" "" 1; then
+        pipeline_abort
         rm -f "$after"
         show_result_screen "Initial deployment failed. The VPN server was not added."
         return 1
     fi
     if ! vault_save "$after"; then
+        pipeline_abort
         rm -f "$after"
         show_result_screen \
             "The VPN server was deployed, but the encrypted Vault could not be saved." \
@@ -2458,6 +2588,7 @@ PY
         return 1
     fi
     rm -f "$after"
+    pipeline_complete "Installation complete"
     show_result_screen "VPN server installed and added to the encrypted Vault."
 }
 
@@ -2594,6 +2725,7 @@ deploy_node() {
     printf '[%s]:%s %s\n' "$host" "$target_port" "$ssh_host_public_key" >"$known_hosts_file"
     chmod 600 "$known_hosts_file"
 
+    pipeline_stage 70 'Verifying hardened SSH access'
     local verify_attempt verified=0
     for verify_attempt in {1..12}; do
         if ssh -i "$key_file" -p "$target_port" \

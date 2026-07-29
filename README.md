@@ -107,6 +107,22 @@ country and camouflage strategy.
 Choose a profile or press Enter for `Disabled`. You can enable blocking later
 from `Manage VPN server`. Wait for the deployment to finish.
 
+During deployment, normal mode shows a short stage-based progress screen:
+
+```text
+Installing VPN server
+
+  [ 25%] Preparing the VPS                         done
+  [ 50%] Hardening SSH access                      done
+  [ 70%] Verifying hardened SSH access             done
+  [ 85%] Installing Xray and Docker                done
+  [100%] Installation complete                     done
+```
+
+The percentages represent deployment stages, not individual Ansible tasks.
+They are intended to show what the manager is doing while the remote operation
+is running.
+
 After a successful deployment, the manager saves the VPN ports, keys, and
 connection data in the encrypted Vault.
 
