@@ -79,9 +79,9 @@ Enter VPS password:
 ```
 
 Before connecting, the manager shows the entered IP, user, port, and the
-password status. Use `e. edit` if something is wrong.
+password status. Choose `2. Edit` if something is wrong.
 
-Choose `a. continue`. The manager then checks:
+Choose `1. Continue`. The manager then checks:
 
 ```text
 - SSH access
@@ -255,6 +255,7 @@ ports, REALITY keys, and access-key pairs.
 2. Backup encrypted state
 3. Restore encrypted state
 4. Delete Vault
+5. View backups
 ```
 
 The Vault is stored at:
@@ -265,6 +266,39 @@ $HOME/.local/state/xray/vault.json
 
 The Vault password is not stored on the VPS and cannot be recovered from the
 encrypted file.
+
+Before each successful Vault replacement, the previous encrypted file is saved
+as an automatic recovery copy. The newest 20 copies are kept and older copies
+are removed automatically. `Backup encrypted state` creates a separate manual
+`tar.gz` archive; manual archives are not part of the automatic rotation.
+`View backups` lists manual archives with their UTC timestamp and full path.
+Automatic recovery copies are internal and are not shown. `Restore encrypted
+state` lets you select a manual archive by number, so you do not need to enter
+a path manually.
+
+### Restore On Another Computer
+
+Use a manual encrypted backup when moving the Vault to another computer.
+
+1. On the old computer, choose `Vault` and `Backup encrypted state`.
+2. Copy the created `vault-*.tar.gz` file to this directory on the new computer:
+
+```text
+$HOME/.local/state/xray/backups/
+```
+
+3. Start xray-tui and choose `Vault` and `Restore encrypted state`.
+4. Select the backup by number and enter the Vault password when requested.
+
+Create the `backups` directory first if it does not exist. The Vault does not
+need to be initialized before restoring a backup. With the Docker launcher,
+`/state/xray` is the path inside the container; the host path above is the
+directory to use for copying files. The password is not included in the
+backup and must be remembered separately.
+
+Automatic `.bak.*` files are intended for internal local recovery. They are
+not part of the user backup browser; use a manual `tar.gz` backup for recovery
+and migration.
 
 ## Remove A VPN Server
 
