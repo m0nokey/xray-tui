@@ -8,9 +8,13 @@ HOST_STATE_DIR="${XRAY_TUI_HOST_STATE_DIR:-$STATE_DIR}"
 HOST_VAULT_FILE="$HOST_STATE_DIR/vault.json"
 RUNTIME_TMP_DIR="${TMPDIR:-/tmp}/xray-tui-${BASHPID}"
 readonly VAULT_BACKUP_KEEP_COUNT=20
+DEBUG_MODE=0
 VAULT_PASSWORD_FILE=""
 MAIN_MENU_REQUESTED=0
 LAST_ANSIBLE_OUTPUT=""
+for argument in "$@"; do
+    [[ "$argument" == "--debug" ]] && DEBUG_MODE=1
+done
 # Internal status used to distinguish missing saved SSH access from deployment errors.
 readonly NO_SAVED_SSH_ACCESS=125
 # Internal status used to return to the VPS password prompt after auth failure.
@@ -1369,6 +1373,12 @@ wait_action_return() {
 }
 
 show_result_screen() {
+    if ((DEBUG_MODE)); then
+        printf '\n%s\n' "$@"
+        printf '%s\n' "Press Enter to continue."
+        read -r _ || true
+        return 0
+    fi
     clear_screen
     printf '%s\n' "$@"
     echo
@@ -2077,37 +2087,40 @@ select_dns_profile() {
 }
 
 run_ansible_playbook() {
-    local log rc quiet=0
+    local log rc quiet=0 debug_output=''
     if [[ "${1:-}" == "--quiet" ]]; then
         quiet=1
         shift
     fi
     LAST_ANSIBLE_OUTPUT=""
-    log="$(mktemp "$RUNTIME_TMP_DIR/.ansible.XXXXXX")"
-    if ((quiet)); then
+    if ((DEBUG_MODE)); then
+        if debug_output="$(set -o pipefail; ansible-playbook "$@" 2>&1 | tee /dev/stderr)"; then
+            rc=0
+        else
+            rc=$?
+        fi
+        LAST_ANSIBLE_OUTPUT="$debug_output"
+    else
+        log="$(mktemp "$RUNTIME_TMP_DIR/.ansible.XXXXXX")"
         if ansible-playbook "$@" >"$log" 2>&1; then
             rc=0
         else
             rc=$?
         fi
-    else
-        if ansible-playbook "$@" 2>&1 | tee "$log"; then
-            rc=0
+        if ((rc != 0)); then
+            LAST_ANSIBLE_OUTPUT="$(tail -n 24 "$log")"
         else
-            rc="${PIPESTATUS[0]}"
+            LAST_ANSIBLE_OUTPUT="$(tail -n 80 "$log")"
         fi
+        rm -f "$log"
     fi
     if ((rc != 0)); then
-        LAST_ANSIBLE_OUTPUT="$(tail -n 24 "$log")"
-        if (( ! quiet )); then
-            echo
-            printf '%s\n' "Ansible failed with exit code ${rc}. Last output:"
-            printf '%s\n' "$LAST_ANSIBLE_OUTPUT"
+        if ((DEBUG_MODE)); then
+            printf '\n%s\n' "Ansible failed with exit code ${rc}."
+        elif (( ! quiet )); then
+            printf '%s\n' "Ansible failed with exit code ${rc}."
         fi
-    else
-        LAST_ANSIBLE_OUTPUT="$(tail -n 80 "$log")"
     fi
-    rm -f "$log"
     return "$rc"
 }
 

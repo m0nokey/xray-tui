@@ -110,6 +110,19 @@ from `Manage VPN server`. Wait for the deployment to finish.
 After a successful deployment, the manager saves the VPN ports, keys, and
 connection data in the encrypted Vault.
 
+### Debug mode
+
+If an operation fails and you need the technical output for an issue, run:
+
+```sh
+bash run.sh --debug
+```
+
+Debug mode shows the raw Ansible output in the terminal and keeps it visible
+until you press Enter. This makes it possible to copy the failure details into
+an issue. It does not create a permanent log file on the host. The normal mode
+shows only the user-facing progress and result messages.
+
 ## Main Menu
 
 ```text
