@@ -11,7 +11,7 @@ LABEL xray.tui.base-image="${XRAY_TUI_BASE_IMAGE}" \
       xray.tui.dockerfile-sha256="${XRAY_TUI_DOCKERFILE_SHA256}"
 
 RUN apk add --no-cache \
-    ansible \
+    ansible-core \
     bash \
     curl \
     openssh-client \
@@ -19,7 +19,10 @@ RUN apk add --no-cache \
     python3 \
     sshpass
 
-RUN ansible-galaxy collection install community.docker
+ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
+
+RUN ansible-galaxy collection install community.docker \
+    --collections-path /usr/share/ansible/collections
 
 RUN addgroup -S user \
     && adduser -S -D -H -G user -s /sbin/nologin user
