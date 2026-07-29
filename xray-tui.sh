@@ -1372,15 +1372,10 @@ pipeline_start() {
 }
 
 pipeline_render() {
-    local frame
+    local frames='|/-\' frame
     ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
     pipeline_drain_input
-    frame='|'
-    case "$((PIPELINE_FRAME % 4))" in
-        1) frame='/' ;;
-        2) frame='-' ;;
-        3) frame='\\' ;;
-    esac
+    frame="${frames:PIPELINE_FRAME%4:1}"
     if [[ -t 1 ]]; then
         printf '\r\033[K  [%3d%%] %-44s %s' "$PIPELINE_PERCENT" "$PIPELINE_LABEL" "$frame"
     else
