@@ -10,7 +10,7 @@ It runs on your computer and helps you:
 - block ads, trackers, and known threats
 - block selected countries on the VPS
 - open an SSH session without remembering the port or password
-- update or remove the VPN server
+- update or delete the VPN server
 ```
 
 The connection data is stored in an encrypted local Vault.
@@ -186,12 +186,12 @@ x. exit
 
 ```text
 1. Check VPN status
-2. Restart VPN server
-3. Block ads and threats
-4. Block countries
-5. Rotate SSH key
-6. Remove VPN server
-7. Open SSH session
+2. Open SSH session
+3. Restart VPN server
+4. Block ads and threats
+5. Block countries
+6. Rotate SSH key
+7. Delete VPN server
 ```
 
 `Open SSH session` uses the saved management key and port from the Vault.
@@ -283,8 +283,8 @@ ports, REALITY keys, and access-key pairs.
 1. Change encryption password
 2. Backup encrypted state
 3. Restore encrypted state
-4. Delete Vault
-5. View backups
+4. View backups
+5. Delete Vault
 ```
 
 The Vault is stored at:
@@ -349,9 +349,9 @@ Automatic `.bak.*` files are intended for internal local recovery. They are
 not part of the user backup browser; use a manual `tar.gz` backup for recovery
 and migration.
 
-## Remove A VPN Server
+## Delete A VPN Server
 
-`Remove VPN server` cleans the VPS before deleting its Vault record.
+`Delete VPN server` cleans the VPS before deleting its Vault record.
 
 ```text
 - stops and removes the Xray Docker stack
@@ -361,7 +361,7 @@ and migration.
 - removes the server from the local Vault after successful cleanup
 ```
 
-If remote cleanup fails, the Vault entry is kept so the operation can be
+If remote deletion fails, the Vault entry is kept so the operation can be
 retried.
 
 ## Technical Overview

@@ -1124,7 +1124,7 @@ show_info() {
             echo
             printf '%b  Selected server menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Manage VPN server"
-            info_desc "       Open server operations, ad and threat blocking, country blocking, or removal."
+            info_desc "       Open server operations, ad and threat blocking, country blocking, or deletion."
             printf '%s\n' "    2. Manage access keys"
             info_desc "       Show, add, or remove the VPN client keys for this server."
             ;;
@@ -1229,18 +1229,18 @@ show_info() {
             printf '%b  Manage VPN server:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Check VPN status"
             info_desc "       Test management SSH, the Xray container, and both VPN ports."
-            printf '%s\n' "    2. Restart VPN server"
-            info_desc "       Restart the Xray Docker stack without changing keys or profiles."
-            printf '%s\n' "    3. Block ads and threats"
-            info_desc "       Choose protection against ads, trackers, malware, phishing, and other known threats."
-            printf '%s\n' "    4. Block countries"
-            info_desc "       Stop connections to selected countries when direct bypass is unavailable."
-            printf '%s\n' "    5. Rotate SSH key"
-            info_desc "       Generate a new management key, verify it, then revoke the old key."
-            printf '%s\n' "    6. Remove VPN server"
-            info_desc "       Clean Xray and Docker from the VPS before removing its Vault entry."
-            printf '%s\n' "    7. Open SSH session"
+            printf '%s\n' "    2. Open SSH session"
             info_desc "       Connect as the saved management user using the saved SSH key and port."
+            printf '%s\n' "    3. Restart VPN server"
+            info_desc "       Restart the Xray Docker stack without changing keys or profiles."
+            printf '%s\n' "    4. Block ads and threats"
+            info_desc "       Choose protection against ads, trackers, malware, phishing, and other known threats."
+            printf '%s\n' "    5. Block countries"
+            info_desc "       Stop connections to selected countries when direct bypass is unavailable."
+            printf '%s\n' "    6. Rotate SSH key"
+            info_desc "       Generate a new SSH key for secure access to this VPS and disable the old key."
+            printf '%s\n' "    7. Delete VPN server"
+            info_desc "       Clean Xray and Docker from the VPS before deleting its Vault entry."
             ;;
         vault)
             printf '%b  Vault:%b\n' "$blue" "$reset"
@@ -1259,21 +1259,21 @@ show_info() {
             info_desc "       Create a copy of the encrypted Vault for recovery."
             printf '%s\n' "    3. Restore encrypted state"
             info_desc "       Replace the current Vault with a selected encrypted backup."
-            printf '%s\n' "    4. Delete Vault"
-            info_desc "       Delete local Vault data, backups, VPS credentials, and VPN keys."
-            printf '%s\n' "    5. View backups"
+            printf '%s\n' "    4. View backups"
             info_desc "       Show manual encrypted archives with their paths and timestamps."
+            printf '%s\n' "    5. Delete Vault"
+            info_desc "       Delete local Vault data, backups, VPS credentials, and VPN keys."
             info_desc "When no Vault exists, option 1 creates it, option 2 restores a backup, and option 3 lists backups."
             ;;
         removal)
-            printf '%b  Remote cleanup:%b\n' "$blue" "$reset"
-            info_desc "Confirm with y to remove the VPN server from the VPS."
+            printf '%b  VPN server deletion:%b\n' "$blue" "$reset"
+            info_desc "Confirm with y to delete the VPN server from the VPS."
             info_desc "Cancel with n or b to leave the VPS and Vault unchanged."
             info_desc "Xray, Docker, updater services, and the deploy user are removed from the VPS."
             info_desc "The original SSH configuration is restored from its backup."
-            info_desc "The server stays in the Vault if remote cleanup fails."
-            info_desc "After a failed cleanup, r retries with the initial SSH credentials."
-            info_desc "You can remove only the local Vault entry with y after a failed cleanup; verify the VPS separately."
+            info_desc "The server stays in the Vault if remote deletion fails."
+            info_desc "After a failed cleanup, choose 1 to retry or 2 to delete only the local Vault entry."
+            info_desc "Press b to keep the server in the Vault and return."
             ;;
         *)
             printf '%b  Xray TUI:%b\n' "$blue" "$reset"
@@ -1311,25 +1311,27 @@ show_info() {
             info_desc "        Create a backup containing the encrypted Vault file."
             printf '%s\n' "     3. Restore encrypted state"
             info_desc "        Replace the current Vault with a selected encrypted backup."
-            printf '%s\n' "     4. Delete Vault"
-            info_desc "        Delete local VPS access data, VPN keys, and Vault backups."
-            printf '%s\n' "     5. View backups"
+            printf '%s\n' "     4. View backups"
             info_desc "        List automatic recovery copies and manual encrypted archives with their paths and timestamps."
+            printf '%s\n' "     5. Delete Vault"
+            info_desc "        Delete local VPS access data, VPN keys, and Vault backups."
             echo
             printf '%s\n' "  Manage VPN server"
             printf '%s\n' "     1. Check VPN status"
             info_desc "        Test SSH access, the Xray container, and both VPN ports."
-            printf '%s\n' "     2. Restart VPN server"
+            printf '%s\n' "     2. Open SSH session"
+            info_desc "        Connect using the saved management key and port."
+            printf '%s\n' "     3. Restart VPN server"
             info_desc "        Restart the Xray Docker stack without changing access keys."
-            printf '%s\n' "     3. Block ads and threats"
+            printf '%s\n' "     4. Block ads and threats"
             info_desc "        Enable, disable, or change protection against ads and known threats."
-            printf '%s\n' "     4. Block countries"
+            printf '%s\n' "     5. Block countries"
             info_desc "        Stop connections to selected countries when client bypass is unavailable."
-            printf '%s\n' "     5. Rotate SSH key"
-            info_desc "        Generate a new deploy SSH key and revoke the old one."
-            printf '%s\n' "     6. Remove VPN server"
+            printf '%s\n' "     6. Rotate SSH key"
+            info_desc "        Generate a new SSH key for secure access to this VPS and disable the old key."
+            printf '%s\n' "     7. Delete VPN server"
             info_desc "        Remove the Xray installation and clean up the VPS."
-            info_desc "        The Vault is changed only after remote cleanup succeeds."
+            info_desc "        The Vault is changed only after remote deletion succeeds."
             echo
             printf '%s\n' "  Manage access keys"
             printf '%s\n' "     1. Show"
@@ -1476,7 +1478,7 @@ pipeline_stage_for_playbook() {
         rotate-ssh.yml)
             [[ "$PIPELINE_OPERATION" == rotate ]] || pipeline_stage 70 'Rotating the SSH key'
             ;;
-        remove.yml) pipeline_stage 80 'Removing the VPN service' ;;
+        remove.yml) pipeline_stage 80 'Deleting the VPN service' ;;
     esac
 }
 
@@ -2947,7 +2949,7 @@ run_remove_with_management_key() {
     chmod 600 "$inventory"
 
     if ((DEBUG_MODE == 0 && PIPELINE_ACTIVE == 0)); then
-        pipeline_start "Removing VPN server" remove
+        pipeline_start "Deleting VPN server" remove
         pipeline_owned=1
     fi
     if run_ansible_playbook --quiet -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml" --private-key "$key_file"; then
@@ -2958,7 +2960,7 @@ run_remove_with_management_key() {
     rm -f "$before" "$extra" "$key_file"
     rm -rf "$inventory_dir"
     if ((pipeline_owned)); then
-        if ((rc == 0)); then pipeline_complete "VPN server removed"; else pipeline_abort; fi
+        if ((rc == 0)); then pipeline_complete "VPN server deleted"; else pipeline_abort; fi
     fi
     return "$rc"
 }
@@ -2984,7 +2986,7 @@ run_remove_with_bootstrap() {
         :
     else
         clear_screen
-        printf '%s\n' "Remote cleanup needs the initial SSH password."
+        printf '%s\n' "Remote deletion needs the initial SSH password."
         printf '%s\n' "VPS address: ${host}"
         printf '%s\n' "SSH user: ${user}"
         printf '%s\n' "SSH port: ${port}"
@@ -3016,7 +3018,7 @@ run_remove_with_bootstrap() {
     chmod 600 "$inventory"
 
     if ((DEBUG_MODE == 0 && PIPELINE_ACTIVE == 0)); then
-        pipeline_start "Removing VPN server" remove
+        pipeline_start "Deleting VPN server" remove
         pipeline_owned=1
     fi
     if run_ansible_playbook --quiet -i "$inventory" -e "@$extra" "$ROOT_DIR/ansible/remove.yml"; then
@@ -3027,7 +3029,7 @@ run_remove_with_bootstrap() {
     rm -f "$before" "$extra"
     rm -rf "$inventory_dir"
     if ((pipeline_owned)); then
-        if ((rc == 0)); then pipeline_complete "VPN server removed"; else pipeline_abort; fi
+        if ((rc == 0)); then pipeline_complete "VPN server deleted"; else pipeline_abort; fi
     fi
     return "$rc"
 }
@@ -3571,21 +3573,22 @@ manage_server() {
         menu_heading "Manage VPN server:"
         echo
         menu_option 1 "Check VPN status"
-        menu_option 2 "Restart VPN server"
-        menu_option 3 "Block ads and threats"
-        menu_option 4 "Block countries"
-        menu_option 5 "Rotate SSH key"
-        menu_option 6 "Remove VPN server"
-        menu_option 7 "Open SSH session"
+        menu_option 2 "Open SSH session"
+        menu_option 3 "Restart VPN server"
+        menu_option 4 "Block ads and threats"
+        menu_option 5 "Block countries"
+        menu_option 6 "Rotate SSH key"
+        menu_option 7 "Delete VPN server"
         echo
         if ! prompt_nav; then continue; fi
         case "$REPLY" in
             1) clear_screen; show_node_status "$node" || true; pause_result_screen ;;
-            2) clear_screen; run_node_playbook "$node" restart.yml "" "Restarting VPN service" restart || true; pause_result_screen ;;
-            3) manage_dns_protection "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
-            4) manage_local_region_policy "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
-            5) clear_screen; rotate_ssh_key "$node" || true; pause_result_screen ;;
-            6)
+            2) open_node_ssh_session "$node" || true ;;
+            3) clear_screen; run_node_playbook "$node" restart.yml "" "Restarting VPN service" restart || true; pause_result_screen ;;
+            4) manage_dns_protection "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            5) manage_local_region_policy "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
+            6) clear_screen; rotate_ssh_key "$node" || true; pause_result_screen ;;
+            7)
                 clear_screen
                 if remove_node "$node"; then
                     return
@@ -3597,7 +3600,6 @@ manage_server() {
                 fi
                 return
                 ;;
-            7) open_node_ssh_session "$node" || true ;;
             i) show_info server ;;
             b) return ;;
             m) MAIN_MENU_REQUESTED=1; return ;;
@@ -3626,9 +3628,9 @@ remove_node() {
     while true; do
         clear_screen
         echo
-        menu_heading "Remove VPN server:"
+        menu_heading "Delete VPN server:"
         echo
-        printf '%s\n' "Are you sure you want to remove this VPN server? (y/n)"
+        printf '%s\n' "Are you sure you want to delete this VPN server? (y/n)"
         echo
         menu_control b back
         menu_control m main
@@ -3655,14 +3657,14 @@ remove_node() {
     rm -f "$state"
 
     clear_screen
-    menu_heading "Removing VPN server:"
+    menu_heading "Deleting VPN server:"
     echo
     printf '%s\n' "VPS address: ${host:-unknown}"
-    printf '%s\n' "Cleaning up the remote VPN server."
+    printf '%s\n' "Deleting the remote VPN server."
     echo
     if remove_remote_node "$node"; then
         if state_mutate remove-node "$node"; then
-            show_result_screen "VPN server removed from the VPS and Vault."
+            show_result_screen "VPN server deleted from the VPS and Vault."
             return "$NODE_REMOVED_STATUS"
         fi
         show_result_screen "The VPS was cleaned, but the local Vault could not be updated."
@@ -3671,19 +3673,18 @@ remove_node() {
 
     while true; do
         clear_screen
-        menu_heading "VPN server was not removed:"
+        menu_heading "VPN server was not deleted:"
         echo
         printf '%s\n' "VPS address: ${host:-unknown}"
         printf '%s\n' "Management SSH port: ${management_port:-unknown}"
         printf '%s\n' "Initial SSH port: ${bootstrap_port:-22}"
         echo
-        printf '%s\n' "Remote cleanup did not complete."
+        printf '%s\n' "Remote deletion did not complete."
         printf '%s\n' "The VPS may be unreachable or its SSH service may be unavailable."
         printf '%s\n' "The VPN server is still saved in the local Vault."
         echo
-        menu_option 1 "Remove from local Vault only"
-        menu_option 2 "Try remote cleanup again"
-        menu_option 3 "Keep the server in the Vault"
+        menu_option 1 "Try delete again"
+        menu_option 2 "Delete from local Vault only"
         echo
         menu_control b back
         menu_control m main
@@ -3692,24 +3693,24 @@ remove_node() {
         echo
         if ! read_required_choice local_confirm '?: '; then continue; fi
         case "$local_confirm" in
-            1)
+            2)
                 if state_mutate remove-node "$node"; then
-                    show_result_screen "VPN server removed from the local Vault."
+                    show_result_screen "VPN server deleted from the local Vault."
                     removed=1
                 fi
                 break
                 ;;
-            2)
+            1)
                 if remove_remote_node "$node"; then
                     if state_mutate remove-node "$node"; then
-                        show_result_screen "VPN server removed from the VPS and Vault."
+                        show_result_screen "VPN server deleted from the VPS and Vault."
                         removed=1
                     fi
                     break
                 fi
                 ;;
             i) show_info removal ;;
-            3|b) break ;;
+            b) break ;;
             m) MAIN_MENU_REQUESTED=1; break ;;
             x) exit_tui ;;
             *) invalid_choice ;;
@@ -3816,8 +3817,8 @@ secure_state() {
             menu_option 1 "Change encryption password"
             menu_option 2 "Backup encrypted state"
             menu_option 3 "Restore encrypted state"
-            menu_option 4 "Delete Vault"
-            menu_option 5 "View backups"
+            menu_option 4 "View backups"
+            menu_option 5 "Delete Vault"
         else
             printf '  %sStatus:%s %sNot initialized%s\n' "$COLOR_TEXT" "$COLOR_RESET" "$COLOR_WARN" "$COLOR_RESET"
             printf '  %sNo encrypted Vault exists on this computer.%s\n' "$COLOR_TEXT" "$COLOR_RESET"
@@ -3864,7 +3865,7 @@ secure_state() {
                     invalid_choice
                 fi
                 ;;
-            4)
+            5)
                 clear_screen
                 if [[ -f "$VAULT_FILE" ]]; then
                     delete_vault
@@ -3873,7 +3874,7 @@ secure_state() {
                     invalid_choice
                 fi
                 ;;
-            5)
+            4)
                 clear_screen
                 if [[ -f "$VAULT_FILE" ]]; then
                     show_vault_backups || true
