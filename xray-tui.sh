@@ -17,6 +17,8 @@ PIPELINE_LABEL=''
 PIPELINE_FRAME=0
 PIPELINE_TTY_ACTIVE=0
 PIPELINE_TTY_STATE=''
+MENU_NUMERIC_OPTIONS=''
+CURRENT_INPUT_HINT=''
 VAULT_PASSWORD_FILE=""
 MAIN_MENU_REQUESTED=0
 LAST_ANSIBLE_OUTPUT=""
@@ -398,7 +400,7 @@ delete_vault() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice confirm '?: '; then continue; fi
+        if ! read_required_choice confirm '?: ' '1, or b, m, i, x'; then continue; fi
         case "$confirm" in
             1) break ;;
             b) return 0 ;;
@@ -420,7 +422,7 @@ delete_vault() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice confirm '?: '; then continue; fi
+        if ! read_required_choice confirm '?: ' 'y or n, or b, m, i, x'; then continue; fi
         case "$confirm" in
             [Yy]) break ;;
             [Nn]|b) return 0 ;;
@@ -563,7 +565,7 @@ select_vault_backup() {
             printf '   Path: %s\n' "$(vault_backup_display_path "$backup_path")"
             index=$((index + 1))
         done
-        if ! prompt_nav; then continue; fi
+        if ! prompt_nav "1-${#backups[@]}"; then continue; fi
         case "$REPLY" in
             b) return 1 ;;
             m) MAIN_MENU_REQUESTED=1; return 1 ;;
@@ -700,7 +702,11 @@ restore_vault() {
 }
 
 read_required_choice() {
-    local variable="$1" prompt="$2" value=''
+    local variable="$1" prompt="$2" allowed="${3:-}" value=''
+    if [[ -n "$allowed" ]]; then
+        CURRENT_INPUT_HINT="Enter ${allowed}."
+        printf '%s\n' "  $CURRENT_INPUT_HINT"
+    fi
     if ! read -r -e -p "$prompt" value; then
         return 1
     fi
@@ -713,12 +719,26 @@ read_required_choice() {
 }
 
 prompt_nav() {
+    local option options_text='' numeric_options="${1:-$MENU_NUMERIC_OPTIONS}"
     echo
     menu_control b back
     menu_control m main
     menu_control i info
     menu_control x exit
     echo
+    if [[ -n "$numeric_options" ]]; then
+        for option in $numeric_options; do
+            if [[ -z "$options_text" ]]; then
+                options_text="$option"
+            else
+                options_text="${options_text} or ${option}"
+            fi
+        done
+        CURRENT_INPUT_HINT="Enter ${options_text}, or b, m, i, x."
+    else
+        CURRENT_INPUT_HINT='Enter b, m, i, or x.'
+    fi
+    printf '%s\n' "  $CURRENT_INPUT_HINT"
     read_required_choice REPLY '?: '
 }
 
@@ -735,7 +755,7 @@ add_node_ip_prompt() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice ip_value 'Enter VPS IP: '; then
+        if ! read_required_choice ip_value 'Enter VPS IP: ' 'a public IPv4 address, or b, m, i, x'; then
             continue
         fi
         case "$ip_value" in
@@ -891,7 +911,7 @@ review_node_connection() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice choice '?: '; then
+        if ! read_required_choice choice '?: ' '1 or 2, or b, m, i, x'; then
             continue
         fi
         case "$choice" in
@@ -921,7 +941,7 @@ bootstrap_auth_failure_menu() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice choice '?: '; then
+        if ! read_required_choice choice '?: ' '1 or 2, or b, m, i, x'; then
             continue
         fi
         case "$choice" in
@@ -953,7 +973,7 @@ bootstrap_connection_failure_menu() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice choice '?: '; then
+        if ! read_required_choice choice '?: ' '1, or b, m, i, x'; then
             continue
         fi
         case "$choice" in
@@ -982,7 +1002,7 @@ local_internet_failure_menu() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice choice '?: '; then
+        if ! read_required_choice choice '?: ' '1, or b, m, i, x'; then
             continue
         fi
         case "$choice" in
@@ -1012,7 +1032,7 @@ bootstrap_preflight_failure_menu() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice choice '?: '; then
+        if ! read_required_choice choice '?: ' '1, or b, m, i, x'; then
             continue
         fi
         case "$choice" in
@@ -1031,6 +1051,9 @@ menu_heading() {
 }
 
 menu_option() {
+    if [[ "$1" =~ ^[0-9]+$ ]] && [[ " $MENU_NUMERIC_OPTIONS " != *" $1 "* ]]; then
+        MENU_NUMERIC_OPTIONS="${MENU_NUMERIC_OPTIONS:+$MENU_NUMERIC_OPTIONS }$1"
+    fi
     printf '%s%s.%s %s%s%s\n' "$COLOR_LINE" "$1" "$COLOR_RESET" "$COLOR_TEXT" "$2" "$COLOR_RESET"
 }
 
@@ -1348,6 +1371,8 @@ show_info() {
 }
 
 clear_screen() {
+    MENU_NUMERIC_OPTIONS=''
+    CURRENT_INPUT_HINT=''
     printf '\033[H\033[2J\033[3J' >&2
 }
 
@@ -1636,7 +1661,11 @@ exit_tui() {
 }
 
 invalid_choice() {
-    printf '%s\n' "Invalid input. Enter a menu option using the English keyboard layout."
+    if [[ -n "$CURRENT_INPUT_HINT" ]]; then
+        printf '%s\n' "Invalid input. $CURRENT_INPUT_HINT"
+    else
+        printf '%s\n' "Invalid input. Enter a valid menu option."
+    fi
     sleep 1
 }
 
@@ -2125,7 +2154,7 @@ local_region_selected_summary() {
 }
 
 select_local_region_countries() {
-    local query="" choice index code name status page=0 page_size=20 page_count start end
+    local query="" choice index code name status page=0 page_size=20 page_count start end input_options
     local search_action next_action previous_action apply_action action_base
     local -a matches=()
     while true; do
@@ -2186,11 +2215,17 @@ select_local_region_countries() {
             menu_option "$search_action" "New search"
         fi
         menu_option "$apply_action" "Apply selection"
-        if ! prompt_nav; then continue; fi
+        input_options=""
+        if ((end > start)); then input_options="1-$((end - start))"; fi
+        input_options="${input_options:+$input_options }$search_action"
+        if [[ -z "$query" && $page -lt $((page_count - 1)) ]]; then input_options="$input_options $next_action"; fi
+        if [[ -z "$query" && $page -gt 0 ]]; then input_options="$input_options $previous_action"; fi
+        input_options="$input_options $apply_action"
+        if ! prompt_nav "$input_options"; then continue; fi
         choice="$REPLY"
         case "$choice" in
             "$search_action")
-                if ! read_required_choice query "Country name or ISO code: "; then continue; fi
+                if ! read_required_choice query "Country name or ISO code: " 'a country name or ISO code, or b, m, i, x'; then continue; fi
                 ;;
             "$next_action")
                 [[ -z "$query" ]] && page=$((page + 1)) || invalid_choice
@@ -2263,7 +2298,7 @@ select_custom_dns_profile() {
         echo
         apply_action=$((${#sources[@]} + 1))
         menu_option "$apply_action" "Apply custom profile"
-        if ! prompt_nav; then continue; fi
+        if ! prompt_nav "1-${#sources[@]} $apply_action"; then continue; fi
         case "$REPLY" in
             "$apply_action")
                 if [[ -z "${DNS_FILTER_LISTS:-}" ]]; then
@@ -2331,10 +2366,12 @@ select_dns_profile() {
             menu_control i info
             menu_control x exit
             echo
+            CURRENT_INPUT_HINT='Enter 1, 2, 3, 4, 5, or 6, or b, m, i, x. Press Enter for Disabled.'
+            printf '%s\n' "  $CURRENT_INPUT_HINT"
             if ! read -r -e -p '?: ' REPLY; then return 1; fi
             [[ -z "$REPLY" ]] && REPLY=1
         else
-            if ! prompt_nav; then continue; fi
+            if ! prompt_nav '1 2 3 4 5 6'; then continue; fi
         fi
         case "$REPLY" in
             1) DNS_FILTER_PROFILE=disabled; DNS_FILTER_LISTS=""; return 0 ;;
@@ -3182,7 +3219,7 @@ add_access_keys_menu() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice count '?: '; then continue; fi
+        if ! read_required_choice count '?: ' 'a number from 1 to 50, or b, m, i, x'; then continue; fi
         case "$count" in
             b) return 0 ;;
             m) MAIN_MENU_REQUESTED=1; return 0 ;;
@@ -3252,7 +3289,7 @@ PY
             printf '%s%s.%s %sDelete all access keys%s\n' "$COLOR_LINE" "$remove_all_selection" "$COLOR_RESET" "$COLOR_TEXT" "$COLOR_RESET"
         fi
         echo
-        if ! prompt_nav; then continue; fi
+        if ! prompt_nav "1-$remove_all_selection"; then continue; fi
         case "$REPLY" in
             i) show_info access_keys ;;
             "$remove_all_selection")
@@ -3273,7 +3310,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    if ! read_required_choice confirm '?: '; then continue; fi
+                    if ! read_required_choice confirm '?: ' 'y or n, or b, m, i, x'; then continue; fi
                     case "$confirm" in
                         [Yy])
                             clear_screen
@@ -3335,7 +3372,7 @@ PY
                     menu_control i info
                     menu_control x exit
                     echo
-                    if ! read_required_choice confirm '?: '; then continue; fi
+                    if ! read_required_choice confirm '?: ' 'y or n, or b, m, i, x'; then continue; fi
                     case "$confirm" in
                         [Yy])
                             clear_screen
@@ -3736,7 +3773,7 @@ remove_node() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice confirm '?: '; then continue; fi
+        if ! read_required_choice confirm '?: ' 'y or n, or b, m, i, x'; then continue; fi
         case "$confirm" in
             [Yy]) break ;;
             [Nn]|b) return 0 ;;
@@ -3790,7 +3827,7 @@ remove_node() {
         menu_control i info
         menu_control x exit
         echo
-        if ! read_required_choice local_confirm '?: '; then continue; fi
+        if ! read_required_choice local_confirm '?: ' '1 or 2, or b, m, i, x'; then continue; fi
         case "$local_confirm" in
             2)
                 if state_mutate remove-node "$node"; then
@@ -3871,7 +3908,7 @@ vpn_servers() {
         fi
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
         echo
-        if ! prompt_nav; then continue; fi
+        if ! prompt_nav "1-$count"; then continue; fi
         case "$REPLY" in
             i) show_info status; rm -f "$state"; continue ;;
             b) rm -f "$state"; return ;;
@@ -4001,7 +4038,7 @@ while true; do
     menu_control i info
     menu_control x exit
     echo
-    if ! read_required_choice choice '?: '; then continue; fi
+    if ! read_required_choice choice '?: ' '1, 2, or 3, or i or x'; then continue; fi
     MAIN_MENU_REQUESTED=0
     case "$choice" in
         1) vpn_servers || true ;;
