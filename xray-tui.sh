@@ -6,6 +6,9 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 VAULT_FILE="$STATE_DIR/vault.json"
 HOST_STATE_DIR="${XRAY_TUI_HOST_STATE_DIR:-$STATE_DIR}"
 HOST_VAULT_FILE="$HOST_STATE_DIR/vault.json"
+BACKUPS_DIR="$STATE_DIR/backups"
+USER_BACKUP_DIR="$BACKUPS_DIR/user"
+SYSTEM_BACKUP_DIR="$BACKUPS_DIR/system"
 RUNTIME_TMP_DIR="${TMPDIR:-/tmp}/xray-tui-${BASHPID}"
 readonly VAULT_BACKUP_KEEP_COUNT=20
 DEBUG_MODE=0
@@ -55,6 +58,7 @@ if [[ -t 1 ]]; then
     COLOR_INFO=$'\033[38;5;117m'
     COLOR_WARN=$'\033[38;5;221m'
     COLOR_ERROR=$'\033[38;5;203m'
+    COLOR_SUCCESS=$'\033[32m'
     COLOR_MUTED=$'\033[38;5;245m'
     COLOR_MUTED_ITALIC=$'\033[3;38;5;245m'
 else
@@ -65,6 +69,7 @@ else
     COLOR_INFO=''
     COLOR_WARN=''
     COLOR_ERROR=''
+    COLOR_SUCCESS=''
     COLOR_MUTED=''
     COLOR_MUTED_ITALIC=''
 fi
@@ -394,7 +399,7 @@ delete_vault() {
         clear_screen
         menu_heading "Delete Vault:"
         echo
-        printf '%s\n' "This permanently deletes the Vault, all automatic and manual backups, saved VPS access credentials, SSH keys, and VPN access keys."
+        printf '%s\n' "This permanently deletes the Vault, all system and user backups, saved VPS access credentials, SSH keys, and VPN access keys."
         echo
         menu_option 1 "Delete the Vault"
         echo
@@ -437,7 +442,7 @@ delete_vault() {
     done
     rm -f "$VAULT_FILE" "$STATE_DIR/vault.json.backup" "$VAULT_PASSWORD_FILE"
     rm -f "$VAULT_FILE".bak.*
-    rm -rf "$STATE_DIR/backups"
+    rm -rf "$BACKUPS_DIR"
     rm -f "$STATE_DIR"/vault.json.restore.*
     VAULT_PASSWORD_FILE=""
     while true; do
@@ -468,10 +473,53 @@ delete_vault() {
 vault_backup_paths() {
     local backup_path
     shopt -s nullglob
-    for backup_path in "$STATE_DIR"/backups/vault-*.tar.gz; do
+    for backup_path in "$USER_BACKUP_DIR"/vault-*.tar.gz; do
         [[ -f "$backup_path" ]] && printf '%s\n' "$backup_path"
     done
     shopt -u nullglob
+}
+
+ensure_backup_directories() {
+    mkdir -p "$USER_BACKUP_DIR" "$SYSTEM_BACKUP_DIR"
+    chmod 700 "$USER_BACKUP_DIR" "$SYSTEM_BACKUP_DIR"
+}
+
+migrate_legacy_vault_backups() {
+    local backup_path target base suffix
+    local -a legacy_backups=()
+
+    ensure_backup_directories
+
+    shopt -s nullglob
+    legacy_backups=( "$VAULT_FILE".bak.* )
+    shopt -u nullglob
+    for backup_path in "${legacy_backups[@]}"; do
+        [[ -f "$backup_path" ]] || continue
+        base="${backup_path##*/}"
+        target="$SYSTEM_BACKUP_DIR/$base"
+        suffix=0
+        while [[ -e "$target" ]]; do
+            suffix=$((suffix + 1))
+            target="$SYSTEM_BACKUP_DIR/${base}.${suffix}"
+        done
+        mv -- "$backup_path" "$target"
+    done
+
+    legacy_backups=()
+    shopt -s nullglob
+    legacy_backups=( "$BACKUPS_DIR"/vault-*.tar.gz )
+    shopt -u nullglob
+    for backup_path in "${legacy_backups[@]}"; do
+        [[ -f "$backup_path" ]] || continue
+        base="${backup_path##*/}"
+        target="$USER_BACKUP_DIR/$base"
+        suffix=0
+        while [[ -e "$target" ]]; do
+            suffix=$((suffix + 1))
+            target="$USER_BACKUP_DIR/${base%.tar.gz}.${suffix}.tar.gz"
+        done
+        mv -- "$backup_path" "$target"
+    done
 }
 
 has_vault_backups() {
@@ -518,7 +566,7 @@ print_vault_backups() {
     fi
 
     for backup_path in "${backups[@]}"; do
-        printf '%d. Manual backup | %s\n' \
+        printf '%d. User backup | %s\n' \
             "$index" \
             "$(vault_backup_timestamp "$backup_path")"
         printf '   Path: %s\n' "$(vault_backup_display_path "$backup_path")"
@@ -562,7 +610,7 @@ select_vault_backup() {
         echo
         index=1
         for backup_path in "${backups[@]}"; do
-            printf '%d. Manual backup | %s\n' \
+            printf '%d. User backup | %s\n' \
                 "$index" \
                 "$(vault_backup_timestamp "$backup_path")"
             printf '   Path: %s\n' "$(vault_backup_display_path "$backup_path")"
@@ -589,11 +637,12 @@ select_vault_backup() {
 
 next_vault_backup_path() {
     local timestamp candidate suffix=0
+    ensure_backup_directories
     timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
-    candidate="$VAULT_FILE.bak.$timestamp"
+    candidate="$SYSTEM_BACKUP_DIR/vault.json.bak.$timestamp"
     while [[ -e "$candidate" ]]; do
         suffix=$((suffix + 1))
-        candidate="$VAULT_FILE.bak.$timestamp.$suffix"
+        candidate="$SYSTEM_BACKUP_DIR/vault.json.bak.$timestamp.$suffix"
     done
     printf '%s\n' "$candidate"
 }
@@ -603,7 +652,7 @@ prune_vault_backups() {
     local -a backups=() sorted_backups=()
 
     shopt -s nullglob
-    backups=( "$VAULT_FILE".bak.* )
+    backups=( "$SYSTEM_BACKUP_DIR"/vault.json.bak.* )
     shopt -u nullglob
 
     for backup_file in "${backups[@]}"; do
@@ -648,9 +697,8 @@ install_encrypted_vault() {
 
 backup_vault() {
     local backup_dir backup_file
-    backup_dir="$STATE_DIR/backups"
-    mkdir -p "$backup_dir"
-    chmod 700 "$backup_dir"
+    backup_dir="$USER_BACKUP_DIR"
+    ensure_backup_directories
     backup_file="$backup_dir/vault-$(date -u '+%Y%m%dT%H%M%SZ').tar.gz"
     if ! tar -C "$STATE_DIR" -czf "$backup_file" "$(basename "$VAULT_FILE")"; then
         rm -f "$backup_file"
@@ -658,7 +706,7 @@ backup_vault() {
         return 1
     fi
     chmod 600 "$backup_file"
-    show_result_screen "Encrypted Vault backup created:" "$backup_file"
+    show_result_screen "Encrypted Vault backup created:" "$(vault_backup_display_path "$backup_file")"
 }
 
 restore_vault() {
@@ -747,7 +795,7 @@ add_node_ip_prompt() {
     local ip_value error=''
     while true; do
         clear_screen
-        printf '%s\n' "Add VPN server"
+        menu_heading "Add VPN server"
         printf '%s\n' "Enter the public IPv4 address of the VPS."
         [[ -n "$error" ]] && printf '%s\n' "$error"
         echo
@@ -779,7 +827,7 @@ add_node_user_prompt() {
     local user_value error=''
     while true; do
         clear_screen
-        printf '%s\n' "Add VPN server"
+        menu_heading "Add VPN server"
         printf '%s\n' "Enter the SSH user used for the first VPS connection."
         [[ -n "$error" ]] && printf '%s\n' "$error"
         echo
@@ -814,7 +862,7 @@ add_node_port_prompt() {
     local port_value error=''
     while true; do
         clear_screen
-        printf '%s\n' "Add VPN server"
+        menu_heading "Add VPN server"
         printf '%s\n' "Enter the SSH port used for the first VPS connection."
         [[ -n "$error" ]] && printf '%s\n' "$error"
         echo
@@ -847,7 +895,7 @@ add_node_port_prompt() {
 
 add_node_password_prompt() {
     clear_screen
-    printf '%s\n' "Add VPN server"
+    menu_heading "Add VPN server"
     printf '%s\n' "Enter the password for the first VPS connection."
     printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "The password is used only to verify access and start deployment." "$COLOR_RESET"
     echo
@@ -861,7 +909,7 @@ add_node_domain_prompt() {
     local domain_value error=''
     while true; do
         clear_screen
-        printf '%s\n' "Add VPN server"
+        menu_heading "Add VPN server"
         printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "This domain helps the VPN connection look like normal HTTPS traffic." "$COLOR_RESET"
         printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Use a real HTTPS website that supports TLS 1.3." "$COLOR_RESET"
         printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Press Enter to use the default value shown in [brackets]." "$COLOR_RESET"
@@ -897,7 +945,7 @@ review_node_connection() {
     local choice
     while true; do
         clear_screen
-        printf '%s\n' "Review VPS connection"
+        menu_heading "Review VPS connection"
         echo
         printf '%-16s %s\n' "IP address:" "$1"
         printf '%-16s %s\n' "User:" "$2"
@@ -1284,7 +1332,7 @@ show_info() {
             printf '%s\n' "    3. Restore encrypted state"
             info_desc "       Replace the current Vault with a selected encrypted backup."
             printf '%s\n' "    4. View backups"
-            info_desc "       Show manual encrypted archives with their paths and timestamps."
+            info_desc "       Show user encrypted archives with their paths and timestamps."
             printf '%s\n' "    5. Delete Vault"
             info_desc "       Delete local Vault data, backups, VPS credentials, and VPN keys."
             info_desc "When no Vault exists, option 1 creates it, option 2 restores a backup, and option 3 lists backups."
@@ -1336,7 +1384,7 @@ show_info() {
             printf '%s\n' "     3. Restore encrypted state"
             info_desc "        Replace the current Vault with a selected encrypted backup."
             printf '%s\n' "     4. View backups"
-            info_desc "        List automatic recovery copies and manual encrypted archives with their paths and timestamps."
+            info_desc "        List user encrypted archives with their paths and timestamps."
             printf '%s\n' "     5. Delete Vault"
             info_desc "        Delete local VPS access data, VPN keys, and Vault backups."
             echo
@@ -1402,7 +1450,7 @@ pipeline_start() {
         fi
     fi
     clear_screen
-    printf '%s\n\n' "$PIPELINE_TITLE"
+    printf '%s%s%s\n\n' "$COLOR_LINE" "$PIPELINE_TITLE" "$COLOR_RESET"
     pipeline_render
 }
 
@@ -1412,7 +1460,8 @@ pipeline_render() {
     pipeline_drain_input
     frame="${frames:PIPELINE_FRAME%4:1}"
     if [[ -t 1 ]]; then
-        printf '\r\033[K  [%3d%%] %-44s %s' "$PIPELINE_PERCENT" "$PIPELINE_LABEL" "$frame"
+        printf '\r\033[K  %b[%3d%%]%b %-44s %s' \
+            "$COLOR_LINE" "$PIPELINE_PERCENT" "$COLOR_RESET" "$PIPELINE_LABEL" "$frame"
     else
         printf '  [%3d%%] %-44s\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
@@ -1454,7 +1503,9 @@ pipeline_stage() {
         return 0
     fi
     if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' && -t 1 ]]; then
-        printf '\r\033[K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+        printf '\r\033[K  %b[%3d%%]%b %-44s %b%s%b\n' \
+            "$COLOR_LINE" "$PIPELINE_PERCENT" "$COLOR_RESET" "$PIPELINE_LABEL" \
+            "$COLOR_SUCCESS" "done" "$COLOR_RESET"
     fi
     PIPELINE_PERCENT="$1"
     PIPELINE_LABEL="$2"
@@ -1567,14 +1618,20 @@ pipeline_complete() {
     ((PIPELINE_ACTIVE)) || return 0
     if [[ -t 1 ]]; then
         if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' ]]; then
-            printf '\r\033[K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+            printf '\r\033[K  %b[%3d%%]%b %-44s %b%s%b\n' \
+                "$COLOR_LINE" "$PIPELINE_PERCENT" "$COLOR_RESET" "$PIPELINE_LABEL" \
+                "$COLOR_SUCCESS" "done" "$COLOR_RESET"
         fi
-        printf '\r\033[K  [100%%] %-44s done\n' "$final_message"
+        printf '\r\033[K  %b[100%%]%b %-44s %b%s%b\n' \
+            "$COLOR_LINE" "$COLOR_RESET" "$final_message" \
+            "$COLOR_SUCCESS" "done" "$COLOR_RESET"
     else
         if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' ]]; then
-            printf '  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+            printf '  [%3d%%] %-44s %b%s%b\n' \
+                "$PIPELINE_PERCENT" "$PIPELINE_LABEL" "$COLOR_SUCCESS" "done" "$COLOR_RESET"
         fi
-        printf '  [100%%] %-44s done\n' "$final_message"
+        printf '  [100%%] %-44s %b%s%b\n' \
+            "$final_message" "$COLOR_SUCCESS" "done" "$COLOR_RESET"
     fi
     sleep 1.5
     pipeline_restore_terminal
@@ -1589,7 +1646,8 @@ pipeline_complete() {
 pipeline_abort() {
     ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
     if [[ -t 1 ]]; then
-        printf '\r\033[K  [%3d%%] %-44s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+        printf '\r\033[K  %b[%3d%%]%b %-44s failed\n' \
+            "$COLOR_LINE" "$PIPELINE_PERCENT" "$COLOR_RESET" "$PIPELINE_LABEL"
     else
         printf '  [%3d%%] %-44s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
@@ -2187,7 +2245,7 @@ select_local_region_countries() {
     local -a matches=()
     while true; do
         clear_screen
-        printf '%s\n' "Block countries"
+        menu_heading "Block countries"
         printf '%s\n' "Select one or more countries to block on the VPN server."
         printf '%s\n' "Current selection: $(local_region_selected_summary)"
         echo
@@ -2369,9 +2427,9 @@ select_dns_profile() {
     while true; do
         clear_screen
         if [[ "$mode" == "initial" ]]; then
-            printf '%s\n' "Block ads and threats"
+            menu_heading "Block ads and threats"
         else
-            printf '%s\n' "Current profile: Block ads and threats"
+            menu_heading "Current profile: Block ads and threats"
         fi
         printf '%s\n' "Optional. Blocks malware, phishing, scams, ads, trackers, and telemetry."
         printf '%s\n' "Current: ${DNS_FILTER_CURRENT_PROFILE:-disabled}"
@@ -3622,7 +3680,7 @@ manage_local_region_policy() {
     LOCAL_REGION_COUNTRIES="$current_countries"
     while true; do
         clear_screen
-        printf '%s\n' "Block countries"
+        menu_heading "Block countries"
         printf '%s\n' "Selected countries are blocked when the client cannot bypass them directly."
         printf '%s\n' "Current selection: $(local_region_selected_summary)"
         echo
@@ -4085,6 +4143,8 @@ secure_state() {
         [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return
     done
 }
+
+migrate_legacy_vault_backups
 
 while true; do
     clear_screen

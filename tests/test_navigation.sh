@@ -25,12 +25,12 @@ run_tui() {
 
 run_tui $'3\nb\nx\n'
 
-mkdir -p "$TEST_STATE_HOME/xray/backups"
+mkdir -p "$TEST_STATE_HOME/xray/backups/user"
 printf '%s\n' '{"nodes":{}}' >"$TEST_HOME/vault.json"
 tar -C "$TEST_HOME" -czf \
-    "$TEST_STATE_HOME/xray/backups/vault-20260729T050736Z.tar.gz" \
+    "$TEST_STATE_HOME/xray/backups/user/vault-20260729T050736Z.tar.gz" \
     vault.json
 
 run_tui $'3\n2\nb\nx\n'
-[[ "$TEST_OUTPUT" == *"Manual backup | 2026-07-29 05:07:36 UTC"* ]]
-[[ "$TEST_OUTPUT" == *"Path: $TEST_STATE_HOME/xray/backups/vault-20260729T050736Z.tar.gz"* ]]
+[[ "$TEST_OUTPUT" == *"User backup | 2026-07-29 05:07:36 UTC"* ]]
+[[ "$TEST_OUTPUT" == *"Path: $TEST_STATE_HOME/xray/backups/user/vault-20260729T050736Z.tar.gz"* ]]

@@ -11,6 +11,7 @@ services:
     tty: true
     entrypoint: ["/bin/bash", "/workspace/xray-tui.sh"]
     environment:
+      TERM: ${TERM:-xterm-256color}
       XDG_STATE_HOME: /state
       XRAY_TUI_HOST_STATE_DIR: ${XDG_STATE_HOME:-${HOME}/.local/state}/xray
     read_only: true
