@@ -14,11 +14,6 @@
         path: /var/lib/xray-tui/backup/sshd_config
       register: xray_tui_ssh_config_backup_current
 
-    - name: Check whether the legacy SSH configuration backup exists
-      ansible.builtin.stat:
-        path: /etc/ssh/sshd_config.xray-tui.bak
-      register: xray_tui_ssh_config_backup_legacy
-
     - name: Check whether Xray TUI SSH hardening is still installed
       ansible.builtin.stat:
         path: /etc/ssh/sshd_config.d/90-xray-tui-hardening.conf
@@ -33,21 +28,18 @@
       ansible.builtin.set_fact:
         xray_tui_partial_cleanup: >-
           {{ not xray_tui_ssh_config_backup_current.stat.exists
-             and not xray_tui_ssh_config_backup_legacy.stat.exists
              and not xray_tui_ssh_dropin.stat.exists
              and not xray_tui_compose.stat.exists }}
 
     - name: Select the original SSH configuration backup
       ansible.builtin.set_fact:
         xray_tui_ssh_config_backup_path: >-
-          {{ '/var/lib/xray-tui/backup/sshd_config'
-             if xray_tui_ssh_config_backup_current.stat.exists
-             else '/etc/ssh/sshd_config.xray-tui.bak' }}
+          /var/lib/xray-tui/backup/sshd_config
 
     - name: Require an original SSH configuration backup
       ansible.builtin.assert:
         that:
-          - xray_tui_ssh_config_backup_current.stat.exists or xray_tui_ssh_config_backup_legacy.stat.exists or xray_tui_partial_cleanup
+          - xray_tui_ssh_config_backup_current.stat.exists or xray_tui_partial_cleanup
         fail_msg: >-
           The original SSH configuration backup is missing. Remote cleanup was stopped
           to avoid leaving the VPS locked to Xray TUI SSH settings.
@@ -203,7 +195,7 @@
         owner: root
         group: root
         mode: "0644"
-      when: xray_tui_ssh_config_backup_current.stat.exists or xray_tui_ssh_config_backup_legacy.stat.exists
+      when: xray_tui_ssh_config_backup_current.stat.exists
 
     - name: Validate the restored SSH configuration
       ansible.builtin.command:
@@ -244,17 +236,9 @@
         path: /var/lib/xray-tui/backup/sources.list
       register: xray_tui_sources_list_backup_current
 
-    - name: Check whether the legacy sources.list backup exists
-      ansible.builtin.stat:
-        path: /etc/apt/sources.list.xray-tui.bak
-      register: xray_tui_sources_list_backup_legacy
-
     - name: Select the original sources.list backup
       ansible.builtin.set_fact:
-        xray_tui_sources_list_backup_path: >-
-          {{ '/var/lib/xray-tui/backup/sources.list'
-             if xray_tui_sources_list_backup_current.stat.exists
-             else '/etc/apt/sources.list.xray-tui.bak' }}
+        xray_tui_sources_list_backup_path: /var/lib/xray-tui/backup/sources.list
 
     - name: Restore the original sources.list when it was backed up
       ansible.builtin.copy:
@@ -266,7 +250,7 @@
         mode: "0644"
       when:
         - ansible_facts.os_family == "Debian"
-        - xray_tui_sources_list_backup_current.stat.exists or xray_tui_sources_list_backup_legacy.stat.exists
+        - xray_tui_sources_list_backup_current.stat.exists
 
     - name: Remove Xray TUI APT source files
       ansible.builtin.file:
@@ -318,9 +302,7 @@
         path: "{{ item }}"
         state: absent
       loop:
-        - /etc/ssh/sshd_config.xray-tui.bak
         - /etc/ssh/.xray-tui-ed25519-host-key
-        - /etc/apt/sources.list.xray-tui.bak
         - /var/lib/xray-tui/.ssh-host-keys-backed-up
         - /var/lib/xray-tui/.deploy-user-created
         - /var/lib/xray-tui/ssh-host-keys

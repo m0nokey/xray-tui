@@ -18,8 +18,6 @@ system_base_docker_updater_prune_builder_until: 24h
 system_base_ssh_rollback_unit: xray-tui-ssh-rollback
 system_base_ssh_rollback_delay: 2min
 system_base_ssh_config_backup: /var/lib/xray-tui/backup/sshd_config
-system_base_legacy_ssh_config_backup: /etc/ssh/sshd_config.xray-tui.bak
-system_base_legacy_sources_list_backup: /etc/apt/sources.list.xray-tui.bak
 system_base_ssh_host_key_marker: /etc/ssh/.xray-tui-ed25519-host-key
 system_base_ssh_host_keys_backup_dir: /var/lib/xray-tui/ssh-host-keys
 system_base_ssh_host_keys_backup_marker: /var/lib/xray-tui/.ssh-host-keys-backed-up

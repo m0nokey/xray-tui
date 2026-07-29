@@ -441,7 +441,6 @@ delete_vault() {
         esac
     done
     rm -f "$VAULT_FILE" "$STATE_DIR/vault.json.backup" "$VAULT_PASSWORD_FILE"
-    rm -f "$VAULT_FILE".bak.*
     rm -rf "$BACKUPS_DIR"
     rm -f "$STATE_DIR"/vault.json.restore.*
     VAULT_PASSWORD_FILE=""
@@ -482,44 +481,6 @@ vault_backup_paths() {
 ensure_backup_directories() {
     mkdir -p "$USER_BACKUP_DIR" "$SYSTEM_BACKUP_DIR"
     chmod 700 "$USER_BACKUP_DIR" "$SYSTEM_BACKUP_DIR"
-}
-
-migrate_legacy_vault_backups() {
-    local backup_path target base suffix
-    local -a legacy_backups=()
-
-    ensure_backup_directories
-
-    shopt -s nullglob
-    legacy_backups=( "$VAULT_FILE".bak.* )
-    shopt -u nullglob
-    for backup_path in "${legacy_backups[@]}"; do
-        [[ -f "$backup_path" ]] || continue
-        base="${backup_path##*/}"
-        target="$SYSTEM_BACKUP_DIR/$base"
-        suffix=0
-        while [[ -e "$target" ]]; do
-            suffix=$((suffix + 1))
-            target="$SYSTEM_BACKUP_DIR/${base}.${suffix}"
-        done
-        mv -- "$backup_path" "$target"
-    done
-
-    legacy_backups=()
-    shopt -s nullglob
-    legacy_backups=( "$BACKUPS_DIR"/vault-*.tar.gz )
-    shopt -u nullglob
-    for backup_path in "${legacy_backups[@]}"; do
-        [[ -f "$backup_path" ]] || continue
-        base="${backup_path##*/}"
-        target="$USER_BACKUP_DIR/$base"
-        suffix=0
-        while [[ -e "$target" ]]; do
-            suffix=$((suffix + 1))
-            target="$USER_BACKUP_DIR/${base%.tar.gz}.${suffix}.tar.gz"
-        done
-        mv -- "$backup_path" "$target"
-    done
 }
 
 has_vault_backups() {
@@ -1322,7 +1283,7 @@ show_info() {
             info_desc "Before each successful Vault replacement, the previous encrypted file is saved as a recovery copy."
             info_desc "The newest 20 automatic recovery copies are kept; older copies are deleted automatically."
             info_desc "Automatic recovery copies are internal and are not shown in the backup browser."
-            info_desc "Backup encrypted state creates a manual tar.gz archive for user recovery and migration."
+            info_desc "Backup encrypted state creates a manual tar.gz archive for recovery and transfer."
             echo
             printf '%b  Vault menu:%b\n' "$blue" "$reset"
             printf '%s\n' "    1. Change encryption password"
@@ -1758,38 +1719,16 @@ invalid_choice() {
 show_nodes() {
     local state
     state="$(mktemp "$RUNTIME_TMP_DIR/.nodes.XXXXXX")"
-    if materialize_vault_state "$state"; then
+    if read_vault_state "$state"; then
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check <"$state"
     fi
     rm -f "$state"
 }
 
-materialize_vault_state() {
-    local state="$1" normalized
-    normalized="$(mktemp "$RUNTIME_TMP_DIR/.normalized.XXXXXX")"
-    if ! read_vault_state "$state"; then
-        rm -f "$normalized"
-        return 1
-    fi
-    if ! python3 "$ROOT_DIR/scripts/state_cli.py" normalize <"$state" >"$normalized"; then
-        rm -f "$normalized"
-        printf '%s\n' "Unable to normalize the encrypted Vault state." >&2
-        return 1
-    fi
-    if ! cmp -s "$state" "$normalized"; then
-        if ! vault_save "$normalized"; then
-            rm -f "$normalized"
-            printf '%s\n' "The encrypted Vault could not be updated." >&2
-            return 1
-        fi
-    fi
-    mv -f "$normalized" "$state"
-}
-
 show_node_status() {
     local node="$1" state
     state="$(mktemp "$RUNTIME_TMP_DIR/.node.XXXXXX")"
-    if materialize_vault_state "$state"; then
+    if read_vault_state "$state"; then
         python3 "$ROOT_DIR/scripts/render_nodes.py" --check --node "$node" <"$state"
     fi
     rm -f "$state"
@@ -1803,9 +1742,9 @@ open_node_ssh_session() {
         return 1
     fi
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$state")"
-    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$state")"
-    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$state")"
-    private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$state")"
+    user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_user"])' "$node" <"$state")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$state")"
+    private_key="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_private_key"], end="")' "$node" <"$state")"
     known_hosts_file="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
     if ! write_node_known_hosts "$state" "$node" "$known_hosts_file"; then
         rm -f "$state" "$known_hosts_file"
@@ -2545,7 +2484,7 @@ run_ansible_playbook() {
 write_node_known_hosts() {
     local state_file="$1" node="$2" output="$3" port_override="${4:-}" host port public_key
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$state_file")"
-    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", ""))))' "$node" <"$state_file")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$state_file")"
     if [[ -n "$port_override" ]]; then
         port="$port_override"
     fi
@@ -2566,7 +2505,7 @@ host, port = sys.argv[2:]
 for name, node in state.get("nodes", {}).items():
     saved_host = str(node.get("host", ""))
     saved_ports = {
-        str(node.get("management_port", "")),
+        str(node["management_port"]),
         str(node.get("ssh_port", "")),
         str(node.get("bootstrap_ssh_port", "")),
     }
@@ -2618,15 +2557,15 @@ retry_existing_node_with_bootstrap() {
 retry_existing_node_with_saved_key() {
     local node="$1" state_file="$2" connect_port="$3" recovery_state key_file known_hosts_file probe_known_hosts host user target_port management_port bootstrap_port probe_port recovery_rc
     recovery_state="$(mktemp "$RUNTIME_TMP_DIR/.recovery.XXXXXX")"
-    if ! python3 "$ROOT_DIR/scripts/state_cli.py" ensure-ssh-port "$node" "$connect_port" <"$state_file" >"$recovery_state"; then
+    if ! cp "$state_file" "$recovery_state"; then
         rm -f "$recovery_state"
         return 1
     fi
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$recovery_state")"
-    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$recovery_state")"
+    user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_user"])' "$node" <"$recovery_state")"
     target_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_port"])' "$node" <"$recovery_state")"
-    management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("management_port", ""))' "$node" <"$recovery_state")"
-    bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", ""))' "$node" <"$recovery_state")"
+    management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$recovery_state")"
+    bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["bootstrap_ssh_port"])' "$node" <"$recovery_state")"
     key_file="$(mktemp "$RUNTIME_TMP_DIR/.probe.XXXXXX")"
     known_hosts_file="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
     probe_known_hosts="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
@@ -2640,7 +2579,7 @@ retry_existing_node_with_saved_key() {
         cat "$probe_known_hosts" >>"$known_hosts_file"
     done
     rm -f "$probe_known_hosts"
-    python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$recovery_state" >"$key_file"
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_private_key"], end="")' "$node" <"$recovery_state" >"$key_file"
     chmod 600 "$key_file"
 
     if [[ ! -s "$key_file" ]]; then
@@ -2886,7 +2825,7 @@ PY
 }
 
 deploy_node() {
-    local node="$1" state_file="${2:-}" connect_port="${3:-}" bootstrap_mode="${4:-0}" before extra inventory inventory_dir key_file known_hosts_file host_key_file user host port target_port management_port legacy_port bootstrap_port bootstrap bootstrap_password bootstrap_user host_public_key ssh_common_args rc marked migrated_state hardened_state ssh_host_public_key ssh_host_fingerprint actual_fingerprint
+    local node="$1" state_file="${2:-}" connect_port="${3:-}" bootstrap_mode="${4:-0}" before extra inventory inventory_dir key_file known_hosts_file host_key_file user host port target_port management_port bootstrap bootstrap_password bootstrap_user host_public_key ssh_common_args rc marked hardened_state ssh_host_public_key ssh_host_fingerprint actual_fingerprint
     before="$(mktemp)"
     extra="$(mktemp)"
     inventory_dir="$(mktemp -d /tmp/xray-inventory.XXXXXX)"
@@ -2898,21 +2837,10 @@ deploy_node() {
     else
         read_vault_state "$before" || { rm -f "$before" "$extra"; rm -rf "$inventory_dir"; return 1; }
     fi
-    legacy_port="$(python3 -c 'import json,sys; value=json.load(sys.stdin)["nodes"][sys.argv[1]].get("ssh_port"); print(value if value is not None else "")' "$node" <"$before")"
-    bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", 22))' "$node" <"$before")"
-    if [[ -z "$legacy_port" || "$legacy_port" == "22" || "$legacy_port" == "$bootstrap_port" ]]; then
-        migrated_state="$(mktemp "$RUNTIME_TMP_DIR/.migrated.XXXXXX")"
-        if ! python3 "$ROOT_DIR/scripts/state_cli.py" ensure-ssh-port "$node" "$bootstrap_port" <"$before" >"$migrated_state"; then
-            rm -f "$before" "$extra" "$migrated_state"; rm -rf "$inventory_dir"
-            return 1
-        fi
-        mv -f "$migrated_state" "$before"
-        connect_port="${connect_port:-$bootstrap_port}"
-    fi
     python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
     target_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_port"])' "$node" <"$before")"
-    management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("management_port", ""))' "$node" <"$before")"
+    management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$before")"
     port="${connect_port:-${management_port:-$target_port}}"
     key_file="$(mktemp)"
     bootstrap="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_private_key", ""), end="")' "$node" <"$before")"
@@ -2920,8 +2848,8 @@ deploy_node() {
     if [[ "$bootstrap_mode" != 1 ]]; then
         bootstrap_password=""
     fi
-    bootstrap_user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_user", "root"), end="")' "$node" <"$before")"
-    host_public_key="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("ssh_host_public_key", ""), end="")' "$node" <"$before")"
+    bootstrap_user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["bootstrap_user"], end="")' "$node" <"$before")"
+    host_public_key="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["ssh_host_public_key"], end="")' "$node" <"$before")"
     if [[ -n "$bootstrap_password" ]]; then
         user="$bootstrap_user"
         port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_ssh_port", 22))' "$node" <"$before")"
@@ -2942,7 +2870,7 @@ deploy_node() {
         printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: $user" "          ansible_port: $port" "          ansible_ssh_private_key_file: $key_file" "          ansible_ssh_common_args: '$ssh_common_args'" >"$inventory"
     else
         user=deploy
-        python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
+        python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_private_key"], end="")' "$node" <"$before" >"$key_file"
         if [[ -n "$host_public_key" ]]; then
             if ! write_node_known_hosts "$before" "$node" "$known_hosts_file" "$port"; then
                 rm -f "$before" "$extra" "$key_file"; rm -rf "$inventory_dir"
@@ -2973,7 +2901,7 @@ deploy_node() {
         fi
     fi
     if [[ -n "$bootstrap_password" || -n "$bootstrap" ]]; then
-        python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
+        python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_private_key"], end="")' "$node" <"$before" >"$key_file"
         chmod 600 "$key_file"
     fi
 
@@ -3104,8 +3032,8 @@ run_node_playbook() {
         return 1
     fi
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
-    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node["ssh_port"])))' "$node" <"$before")"
-    python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$key_file"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$before")"
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_private_key"], end="")' "$node" <"$before" >"$key_file"
     printf '%s\n' "---" "all:" "  children:" "    xray_nodes:" "      hosts:" "        $node:" "          ansible_host: $host" "          ansible_user: deploy" "          ansible_port: $port" "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file -o ConnectTimeout=8 -o ConnectionAttempts=1 -o IdentitiesOnly=yes'" >"$inventory"
     chmod 600 "$key_file"
     if ((DEBUG_MODE == 0 && PIPELINE_ACTIVE == 0)); then
@@ -3138,9 +3066,9 @@ run_remove_with_management_key() {
         return 1
     fi
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
-    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$before")"
-    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", ""))))' "$node" <"$before")"
-    private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before")"
+    user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_user"])' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$before")"
+    private_key="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_private_key"], end="")' "$node" <"$before")"
     if [[ -z "$host" || -z "$port" || -z "$private_key" ]]; then
         rm -f "$before" "$extra" "$key_file"
         rm -rf "$inventory_dir"
@@ -3194,7 +3122,7 @@ run_remove_with_bootstrap() {
     fi
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
     user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_user", "root"))' "$node" <"$before")"
-    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_ssh_port", node.get("initial_port", 22)))' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["bootstrap_ssh_port"])' "$node" <"$before")"
     password="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]].get("bootstrap_password", ""), end="")' "$node" <"$before")"
     python3 "$ROOT_DIR/scripts/state_cli.py" extract "$node" <"$before" >"$extra"
 
@@ -3503,15 +3431,15 @@ rotate_ssh_key() {
     rotated_state="$(mktemp "$RUNTIME_TMP_DIR/.rotated-state.XXXXXX")"
     read_vault_state "$before" || { rm -f "$before" "$extra" "$rotated_state"; rm -rf "$inventory_dir" "$key_dir"; return 1; }
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
-    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node["ssh_port"])))' "$node" <"$before")"
-    old_pub="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_authorized_key", node.get("deploy_authorized_key", "")), end="")' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$before")"
+    old_pub="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_authorized_key"], end="")' "$node" <"$before")"
     if ! write_node_known_hosts "$before" "$node" "$known_hosts_file" "$port"; then
         printf '%s\n' "The SSH host key is not pinned for this VPN server. Redeploy it before rotating the SSH key."
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
-    python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before" >"$old_key"
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_private_key"], end="")' "$node" <"$before" >"$old_key"
     chmod 600 "$old_key"
     ssh-keygen -q -t ed25519 -N "" -f "$new_key"
 
@@ -3525,7 +3453,7 @@ data = {
     "xray_state": node["xray"],
     "xray_public_host": node["host"],
     "deploy_user": "deploy",
-    "deploy_authorized_key": node.get("management_authorized_key", node.get("deploy_authorized_key", "")),
+    "deploy_authorized_key": node["management_authorized_key"],
     "old_deploy_authorized_key": sys.argv[4],
     "new_deploy_authorized_key": open(sys.argv[3], encoding="utf-8").read().strip(),
 }
@@ -3550,7 +3478,7 @@ PY
         rm -rf "$inventory_dir" "$key_dir"
         return 1
     fi
-    if ! python3 "$ROOT_DIR/scripts/state_cli.py" set-deploy-key "$node" "$new_key" "$new_pub" <"$before" >"$rotated_state"; then
+    if ! python3 "$ROOT_DIR/scripts/state_cli.py" set-management-key "$node" "$new_key" "$new_pub" <"$before" >"$rotated_state"; then
         pipeline_abort
         rm -f "$before" "$extra" "$rotated_state"
         rm -rf "$inventory_dir" "$key_dir"
@@ -3593,9 +3521,9 @@ manage_dns_protection() {
         return 1
     fi
     host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$before")"
-    user="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_user", node.get("deploy_user", "deploy")))' "$node" <"$before")"
-    port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", 22))))' "$node" <"$before")"
-    private_key="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_private_key", node.get("deploy_private_key", "")), end="")' "$node" <"$before")"
+    user="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_user"])' "$node" <"$before")"
+    port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$before")"
+    private_key="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_private_key"], end="")' "$node" <"$before")"
     known_hosts_file="$(mktemp /tmp/xray-known-hosts.XXXXXX)"
     if ! write_node_known_hosts "$before" "$node" "$known_hosts_file"; then
         rm -f "$before" "$known_hosts_file"
@@ -3900,8 +3828,8 @@ remove_node() {
     state="$(mktemp)"
     if read_vault_state "$state"; then
         host="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["host"])' "$node" <"$state")"
-        management_port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("management_port", node.get("sshd_port", node.get("ssh_port", ""))))' "$node" <"$state")"
-        bootstrap_port="$(python3 -c 'import json,sys; node=json.load(sys.stdin)["nodes"][sys.argv[1]]; print(node.get("bootstrap_ssh_port", node.get("initial_port", 22)))' "$node" <"$state")"
+        management_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["management_port"])' "$node" <"$state")"
+        bootstrap_port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nodes"][sys.argv[1]]["bootstrap_ssh_port"])' "$node" <"$state")"
     fi
     rm -f "$state"
 
@@ -3979,7 +3907,7 @@ vpn_servers() {
     while true; do
         clear_screen
         state="$(mktemp "$RUNTIME_TMP_DIR/.servers.XXXXXX")"
-        if ! materialize_vault_state "$state"; then
+        if ! read_vault_state "$state"; then
             rm -f "$state"
             return 1
         fi
@@ -4143,8 +4071,6 @@ secure_state() {
         [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return
     done
 }
-
-migrate_legacy_vault_backups
 
 while true; do
     clear_screen

@@ -129,15 +129,8 @@ def generated_port(used):
         return port
 
 
-def port_number(value):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 parser = argparse.ArgumentParser()
-parser.add_argument("action", choices=("count", "names", "normalize", "extract", "mark-deployed", "set-deploy-key", "set-ssh-host-key", "ensure-ssh-port", "set-bootstrap", "set-dns-profile", "set-local-region", "remove-node", "add-node", "add-key", "add-keys", "remove-key", "remove-all-keys"))
+parser.add_argument("action", choices=("count", "names", "extract", "mark-deployed", "set-management-key", "set-ssh-host-key", "set-bootstrap", "set-dns-profile", "set-local-region", "remove-node", "add-node", "add-key", "add-keys", "remove-key", "remove-all-keys"))
 parser.add_argument("args", nargs="*")
 parser.add_argument("--bootstrap-key")
 parser.add_argument("--server-name", default="github.com")
@@ -166,52 +159,10 @@ if opts.action == "count":
 elif opts.action == "names":
     print("\n".join(nodes))
     raise SystemExit(0)
-elif opts.action == "normalize":
-    for node in nodes.values():
-        node.setdefault("xray", {}).setdefault("server_name", "github.com")
-        node.setdefault("xray", {}).setdefault("dns_filter_profile", "disabled")
-        node.setdefault("xray", {}).setdefault("dns_filter_lists", [])
-        node.setdefault("xray", {}).setdefault("local_region_countries", [])
-        bootstrap_port = int(node.get("bootstrap_ssh_port", node.get("initial_port", 22)))
-        target_port = int(
-            node.get(
-                "sshd_port",
-                node.get("harden_ssh_port", node.get("target_ssh_port", node.get("ssh_port", bootstrap_port))),
-            )
-        )
-        node.setdefault("bootstrap_ssh_port", bootstrap_port)
-        node.setdefault("initial_port", bootstrap_port)
-        node.setdefault("ssh_port", target_port)
-        node.setdefault("sshd_port", target_port)
-        if "management_port" not in node:
-            if node.get("bootstrap_private_key") or node.get("bootstrap_password"):
-                node["management_port"] = bootstrap_port
-            else:
-                node["management_port"] = target_port
-        management_user = node.get("management_user", node.get("deploy_user", "deploy"))
-        management_private_key = node.get(
-            "management_private_key", node.get("deploy_private_key", "")
-        )
-        management_authorized_key = node.get(
-            "management_authorized_key", node.get("deploy_authorized_key", "")
-        )
-        node.setdefault("management_user", management_user)
-        node.setdefault("management_private_key", management_private_key)
-        node.setdefault("management_authorized_key", management_authorized_key)
-        node.setdefault("deploy_user", management_user)
-        node.setdefault("deploy_private_key", management_private_key)
-        node.setdefault("deploy_authorized_key", management_authorized_key)
-        node.setdefault("ssh_host_public_key", "")
-        node.setdefault("ssh_host_fingerprint", "")
 elif opts.action == "extract":
     if len(opts.args) != 1 or opts.args[0] not in nodes:
         raise SystemExit("extract requires NODE")
     node = nodes[opts.args[0]]
-    target_port = node.get(
-        "sshd_port",
-        node.get("harden_ssh_port", node.get("target_ssh_port", node.get("ssh_port", node.get("bootstrap_ssh_port", 22)))),
-    )
-    initial_port = node.get("initial_port", node.get("bootstrap_ssh_port", 22))
     output = {
         "xray_state": node["xray"],
         "xray_server_name": node["xray"].get("server_name", "github.com"),
@@ -219,22 +170,14 @@ elif opts.action == "extract":
         "xray_dns_lists": node["xray"].get("dns_filter_lists", []),
         "xray_local_region_countries": node["xray"].get("local_region_countries", []),
         "xray_public_host": node["host"],
-        "management_user": node.get("management_user", node.get("deploy_user", "deploy")),
-        "management_authorized_key": node.get(
-            "management_authorized_key", node.get("deploy_authorized_key", "")
-        ),
-        "system_base_deploy_user": node.get("deploy_user", node.get("management_user", "deploy")),
-        "system_base_deploy_authorized_key": node.get(
-            "deploy_authorized_key", node.get("management_authorized_key", "")
-        ),
-        "management_private_key": node.get(
-            "management_private_key", node.get("deploy_private_key", "")
-        ),
+        "management_user": node["management_user"],
+        "management_authorized_key": node["management_authorized_key"],
+        "system_base_deploy_user": node["management_user"],
+        "system_base_deploy_authorized_key": node["management_authorized_key"],
+        "management_private_key": node["management_private_key"],
         "system_base_harden_ssh_initial_user": node.get("bootstrap_user", "root"),
-        "initial_port": initial_port,
-        "ssh_port": target_port,
-        "sshd_port": target_port,
-        "management_port": node.get("management_port", initial_port),
+        "ssh_port": node["ssh_port"],
+        "management_port": node["management_port"],
         "system_base_ssh_host_public_key": node.get("ssh_host_public_key", ""),
         "system_base_ssh_host_fingerprint": node.get("ssh_host_fingerprint", ""),
     }
@@ -246,21 +189,13 @@ elif opts.action == "mark-deployed":
         raise SystemExit("mark-deployed requires NODE")
     node = nodes[opts.args[0]]
     node["bootstrap_private_key"] = ""
-    target_port = int(
-        node.get("sshd_port", node.get("harden_ssh_port", node.get("target_ssh_port", node.get("ssh_port", node.get("bootstrap_ssh_port", 22)))))
-    )
-    node["ssh_port"] = target_port
-    node["sshd_port"] = target_port
-    node["initial_port"] = int(node.get("initial_port", node.get("bootstrap_ssh_port", 22)))
-    node["management_port"] = target_port
-elif opts.action == "set-deploy-key":
+    node["management_port"] = node["ssh_port"]
+elif opts.action == "set-management-key":
     if len(opts.args) != 3 or opts.args[0] not in nodes:
-        raise SystemExit("set-deploy-key requires NODE PRIVATE_KEY PUBLIC_KEY")
+        raise SystemExit("set-management-key requires NODE PRIVATE_KEY PUBLIC_KEY")
     node = nodes[opts.args[0]]
-    node["deploy_private_key"] = Path(opts.args[1]).read_text(encoding="utf-8")
-    node["deploy_authorized_key"] = Path(opts.args[2]).read_text(encoding="utf-8").strip()
-    node["management_private_key"] = node["deploy_private_key"]
-    node["management_authorized_key"] = node["deploy_authorized_key"]
+    node["management_private_key"] = Path(opts.args[1]).read_text(encoding="utf-8")
+    node["management_authorized_key"] = Path(opts.args[2]).read_text(encoding="utf-8").strip()
 elif opts.action == "set-ssh-host-key":
     if len(opts.args) != 3 or opts.args[0] not in nodes:
         raise SystemExit("set-ssh-host-key requires NODE PUBLIC_KEY_FILE FINGERPRINT")
@@ -273,22 +208,6 @@ elif opts.action == "set-ssh-host-key":
     node = nodes[opts.args[0]]
     node["ssh_host_public_key"] = public_key
     node["ssh_host_fingerprint"] = fingerprint
-elif opts.action == "ensure-ssh-port":
-    if len(opts.args) != 2 or opts.args[0] not in nodes:
-        raise SystemExit("ensure-ssh-port requires NODE BOOTSTRAP_PORT")
-    node = nodes[opts.args[0]]
-    bootstrap_port = int(opts.args[1])
-    node["bootstrap_ssh_port"] = bootstrap_port
-    node.setdefault("initial_port", bootstrap_port)
-    node.setdefault("management_port", bootstrap_port)
-    current_ssh_port = port_number(node.get("sshd_port", node.get("harden_ssh_port", node.get("target_ssh_port", node.get("ssh_port")))))
-    if current_ssh_port in (None, 22, bootstrap_port):
-        used_ports = {
-            int(node["xray"].get("vision_port")),
-            int(node["xray"].get("xhttp_port")),
-        }
-        node["sshd_port"] = generated_port(used_ports)
-        node["ssh_port"] = node["sshd_port"]
 elif opts.action == "set-bootstrap":
     if len(opts.args) != 3 or opts.args[0] not in nodes:
         raise SystemExit("set-bootstrap requires NODE USER PORT")
@@ -299,16 +218,7 @@ elif opts.action == "set-bootstrap":
     node["bootstrap_user"] = opts.args[1]
     node["bootstrap_ssh_port"] = int(opts.args[2])
     node["bootstrap_password"] = password
-    node["initial_port"] = node.get("initial_port", node["bootstrap_ssh_port"])
-    node["management_port"] = node.get("management_port", node["bootstrap_ssh_port"])
-    current_ssh_port = port_number(node.get("sshd_port", node.get("harden_ssh_port", node.get("target_ssh_port", node.get("ssh_port")))))
-    if current_ssh_port in (None, 22, node["bootstrap_ssh_port"]):
-        used_ports = {
-            int(node["xray"].get("vision_port")),
-            int(node["xray"].get("xhttp_port")),
-        }
-        node["sshd_port"] = generated_port(used_ports)
-        node["ssh_port"] = node["sshd_port"]
+    node["management_port"] = node["bootstrap_ssh_port"]
 elif opts.action == "set-dns-profile":
     if len(opts.args) != 2 or opts.args[0] not in nodes:
         raise SystemExit("set-dns-profile requires NODE PROFILE")
@@ -384,9 +294,6 @@ elif opts.action == "add-node":
         "country": country,
         "provider": provider,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "deploy_user": "deploy",
-        "deploy_private_key": private,
-        "deploy_authorized_key": public,
         "management_user": "deploy",
         "management_private_key": private,
         "management_authorized_key": public,
@@ -394,9 +301,7 @@ elif opts.action == "add-node":
         "bootstrap_password": bootstrap_password,
         "bootstrap_user": bootstrap_user,
         "bootstrap_ssh_port": bootstrap_port,
-        "initial_port": bootstrap_port,
         "ssh_port": ssh_port,
-        "sshd_port": ssh_port,
         "management_port": bootstrap_port,
         "ssh_host_public_key": "",
         "ssh_host_fingerprint": "",

@@ -31,7 +31,7 @@ if not keys:
     raise SystemExit(0)
 
 for index, key in enumerate(keys, 1):
-    print(f"{index}.")
+    print(color(f"{index}.", BLUE))
     print(
         f"vless://{key['vision_uuid']}@{node['host']}:{xray['vision_port']}"
         f"?type=tcp&encryption=none&flow=xtls-rprx-vision&security=reality"

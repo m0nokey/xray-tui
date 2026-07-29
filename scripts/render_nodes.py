@@ -40,17 +40,12 @@ def port_open(host, port, timeout=1.0):
 
 
 def management_ports(node):
-    """Return known SSH ports, preserving compatibility with older Vaults."""
+    """Return the SSH ports used during bootstrap and normal management."""
     ports = []
     for value in (
         node.get("management_port"),
-        node.get("sshd_port"),
-        node.get("harden_ssh_port"),
-        node.get("target_ssh_port"),
         node.get("ssh_port"),
         node.get("bootstrap_ssh_port"),
-        node.get("initial_port"),
-        22,
     ):
         try:
             port = int(value)
@@ -64,15 +59,13 @@ def management_ports(node):
 def management_state(node, timeout=5.0):
     """Probe management access and return details without exposing credentials."""
     host = node.get("host", "")
-    user = node.get("management_user") or node.get("deploy_user", "deploy")
-    private_key = node.get("management_private_key") or node.get("deploy_private_key", "")
+    user = node["management_user"]
+    private_key = node["management_private_key"]
     host_public_key = node.get("ssh_host_public_key", "")
     ports = management_ports(node)
     details = {
         "ports": ports,
-        "initial_port": node.get("initial_port", node.get("bootstrap_ssh_port", 22)),
-        "management_port": node.get("management_port"),
-        "sshd_port": node.get("sshd_port", node.get("ssh_port")),
+        "management_port": node["management_port"],
         "tcp_ports": [],
         "ssh_port": None,
         "ssh": "not checked",
