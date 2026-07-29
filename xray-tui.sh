@@ -1424,13 +1424,13 @@ pipeline_stage() {
 }
 
 pipeline_complete() {
-    local label="${1:-Complete}"
     ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
     if [[ -t 1 ]]; then
-        printf '\r\033[K  [100%%] %-44s done\n' "$label"
+        printf '\r\033[K  [100%%] Done\n'
     else
-        printf '  [100%%] %s\n' "$label"
+        printf '  [100%%] Done\n'
     fi
+    sleep 1.5
     pipeline_restore_terminal
     PIPELINE_ACTIVE=0
     PIPELINE_TITLE=''

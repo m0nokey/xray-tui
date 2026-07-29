@@ -116,7 +116,7 @@ Installing VPN server
   [ 50%] Hardening SSH access                      done
   [ 70%] Verifying hardened SSH access             done
   [ 85%] Installing Xray and Docker                done
-  [100%] Installation complete                     done
+  [100%] Done
 ```
 
 The percentages represent deployment stages, not individual Ansible tasks.
