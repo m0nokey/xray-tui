@@ -296,6 +296,26 @@ need to be initialized before restoring a backup. With the Docker launcher,
 directory to use for copying files. The password is not included in the
 backup and must be remembered separately.
 
+The `.local` directory is hidden in most file managers. Use the terminal to
+copy the backup to a visible folder before transferring it:
+
+```bash
+ls -lh "$HOME/.local/state/xray/backups/"
+cp "$HOME/.local/state/xray/backups"/vault-*.tar.gz "$HOME/Downloads/"
+```
+
+After copying the file to the new computer, place it into the Vault backup
+directory:
+
+```bash
+mkdir -p "$HOME/.local/state/xray/backups"
+cp "$HOME/Downloads"/vault-*.tar.gz "$HOME/.local/state/xray/backups/"
+chmod 600 "$HOME/.local/state/xray/backups"/vault-*.tar.gz
+```
+
+Then start xray-tui, open `Vault`, choose `Restore encrypted state`, and select
+the manual backup by number.
+
 Automatic `.bak.*` files are intended for internal local recovery. They are
 not part of the user backup browser; use a manual `tar.gz` backup for recovery
 and migration.
