@@ -1356,8 +1356,17 @@ pipeline_start() {
     PIPELINE_ACTIVE=1
     PIPELINE_TITLE="$1"
     PIPELINE_OPERATION="${2:-}"
-    PIPELINE_PERCENT=0
-    PIPELINE_LABEL="Preparing..."
+    case "$PIPELINE_OPERATION" in
+        preflight) PIPELINE_PERCENT=10; PIPELINE_LABEL='Checking the VPS connection' ;;
+        install) PIPELINE_PERCENT=10; PIPELINE_LABEL='Checking the VPS connection' ;;
+        access_keys) PIPELINE_PERCENT=10; PIPELINE_LABEL='Checking SSH access' ;;
+        dns) PIPELINE_PERCENT=10; PIPELINE_LABEL='Checking SSH access' ;;
+        countries) PIPELINE_PERCENT=10; PIPELINE_LABEL='Checking SSH access' ;;
+        restart) PIPELINE_PERCENT=10; PIPELINE_LABEL='Checking SSH access' ;;
+        rotate) PIPELINE_PERCENT=10; PIPELINE_LABEL='Checking SSH access' ;;
+        remove) PIPELINE_PERCENT=10; PIPELINE_LABEL='Checking SSH access' ;;
+        *) PIPELINE_PERCENT=10; PIPELINE_LABEL='Preparing the operation' ;;
+    esac
     PIPELINE_FRAME=0
     if [[ -t 0 && -t 1 ]]; then
         PIPELINE_TTY_STATE="$(stty -g 2>/dev/null || true)"
@@ -1412,6 +1421,12 @@ pipeline_stage() {
     if ((PIPELINE_ACTIVE == 0)); then
         pipeline_start "Working on VPN server"
     fi
+    if [[ "$PIPELINE_PERCENT" == "$1" && "$PIPELINE_LABEL" == "$2" ]]; then
+        return 0
+    fi
+    if (( $1 < PIPELINE_PERCENT )); then
+        return 0
+    fi
     if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' && -t 1 ]]; then
         printf '\r\033[K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
@@ -1420,11 +1435,99 @@ pipeline_stage() {
     PIPELINE_FRAME=0
 }
 
+pipeline_stage_from_ansible_log() {
+    local log="$1" task task_name
+    [[ -s "$log" ]] || return 0
+    task="$(grep '^TASK \[' "$log" | tail -n 1 | sed -E 's/^TASK \[(.*)\] .*/\1/' || true)"
+    [[ -n "$task" ]] || return 0
+    task_name="$task"
+    [[ "$task_name" == *': '* ]] && task_name="${task_name#*: }"
+
+    case "$PIPELINE_OPERATION:$task_name" in
+        preflight:Wait\ for\ VPS\ SSH\ access|preflight:Gather\ VPS\ facts\ after\ SSH\ is\ available)
+            pipeline_stage 20 'Checking VPS access' ;;
+        preflight:Require\ Debian|preflight:Report\ VPS\ resources)
+            pipeline_stage 80 'Checking VPS resources' ;;
+        install:Wait\ for\ initial\ SSH\ access)
+            pipeline_stage 10 'Checking the VPS connection' ;;
+        install:Gather\ VPS\ facts\ after\ SSH\ is\ available)
+            pipeline_stage 20 'Checking VPS system' ;;
+        install:Bootstrap\ deploy\ access|install:Create\ deploy\ group|install:Create\ deploy\ user|install:Install\ deploy\ authorized\ key|install:Install\ passwordless\ deploy\ sudoers\ file)
+            pipeline_stage 30 'Preparing VPS access' ;;
+        install:Wait\ for\ deploy\ SSH\ access\ after\ bootstrap)
+            pipeline_stage 35 'Reconnecting after bootstrap' ;;
+        install:Check\ whether\ Xray\ TUI\ host\ key\ was\ initialized|install:Install\ complete\ hardened\ sshd_config|install:Reload\ SSH\ daemon\ after\ hardening)
+            pipeline_stage 40 'Hardening SSH access' ;;
+        install:Verify\ effective\ hardened\ SSH\ port|install:Report\ generated\ SSH\ host\ key)
+            pipeline_stage 50 'Verifying hardened SSH access' ;;
+        install:Install\ base\ packages|install:Install\ Docker\ and\ Compose\ plugin|install:Enable\ Docker|install:Install\ Xray\ TUI\ OS\ updater*|install:Install\ Xray\ TUI\ Docker\ updater*)
+            pipeline_stage 60 'Installing Docker and system packages' ;;
+        install:Render\ Unbound\ configuration|install:Render\ Unbound\ Dockerfile|install:Render\ Docker\ Compose\ file|install:Render\ Xray\ configuration)
+            pipeline_stage 70 'Rendering VPN configuration' ;;
+        install:Validate\ Unbound*|install:Validate\ Xray\ configuration*|install:Validate\ REALITY\ target)
+            pipeline_stage 80 'Validating Xray and DNS configuration' ;;
+        install:Ensure\ Xray\ stack\ is\ running)
+            pipeline_stage 90 'Starting and checking VPN stack' ;;
+        access_keys:*|dns:*|countries:*)
+            pipeline_stage_from_xray_task "$task_name" ;;
+        restart:Wait\ for\ SSH\ access)
+            pipeline_stage 10 'Checking SSH access' ;;
+        restart:Restart\ Xray\ Compose\ service)
+            pipeline_stage 80 'Restarting the Xray container' ;;
+        rotate:Wait\ for\ SSH\ access)
+            pipeline_stage 10 'Checking SSH access' ;;
+        rotate:Ensure\ deploy\ SSH\ directory\ permissions|rotate:Install\ the\ new\ deploy\ key)
+            pipeline_stage 30 'Installing the new SSH key' ;;
+        rotate:Remove\ the\ old\ deploy\ key)
+            pipeline_stage 70 'Deleting the old SSH key' ;;
+        remove:Wait\ for\ SSH\ access)
+            pipeline_stage 10 'Checking SSH access' ;;
+        remove:Check\ whether\ *|remove:Detect\ a\ previously\ interrupted\ cleanup|remove:Select\ the\ original\ SSH\ configuration\ backup)
+            pipeline_stage 20 'Checking installed VPN components' ;;
+        remove:Remove\ the\ Xray\ Compose\ project|remove:Remove\ Xray\ files)
+            pipeline_stage 35 'Stopping the VPN stack' ;;
+        remove:Stop\ Xray\ TUI\ updater\ services|remove:Remove\ Xray\ TUI\ updater\ files|remove:Remove\ updater\ configuration*)
+            pipeline_stage 50 'Deleting Xray and updater files' ;;
+        remove:Restore\ the\ original\ sshd_config|remove:Restore\ original\ SSH\ host\ keys|remove:Reload\ SSH\ after\ restoring*)
+            pipeline_stage 70 'Restoring SSH configuration' ;;
+        remove:Remove\ Docker\ packages*|remove:Remove\ Docker\ runtime*|remove:Remove\ deploy\ user*)
+            pipeline_stage 80 'Deleting Docker and deploy access' ;;
+        remove:Remove\ Xray\ TUI\ state\ directory*)
+            pipeline_stage 90 'Verifying VPS cleanup' ;;
+    esac
+}
+
+pipeline_stage_from_xray_task() {
+    local task="$1"
+    case "$task" in
+        Wait\ for\ initial\ SSH\ access|Gather\ VPS\ facts\ after\ SSH\ is\ available)
+            pipeline_stage 10 'Checking SSH access' ;;
+        Gather\ package\ facts|Set\ Debian\ codename)
+            pipeline_stage 15 'Checking VPS system' ;;
+        Validate\ local\ encrypted\ runtime\ state|Select\ DNS\ protection\ profile|Select\ local-region\ traffic\ policy|Validate\ DNS\ protection\ profile|Validate\ local-region\ traffic\ policy|Validate\ custom\ DNS\ protection\ sources|Calculate\ selected\ DNS\ protection\ entries|Calculate\ DNS\ runtime\ memory|Validate\ VPS\ resources\ for\ DNS\ protection)
+            pipeline_stage 20 'Preparing selected settings' ;;
+        Render\ Unbound\ configuration|Render\ Unbound\ Dockerfile|Render\ Docker\ Compose\ file|Render\ Xray\ configuration)
+            pipeline_stage 40 'Rendering VPN configuration' ;;
+        Build\ Unbound\ image*|Inspect\ Unbound\ container|Select\ Unbound\ container\ state|Validate\ running\ Unbound\ configuration|Validate\ Unbound\ configuration*)
+            pipeline_stage 55 'Validating DNS configuration' ;;
+        Validate\ Xray\ configuration*|Validate\ REALITY\ target)
+            pipeline_stage 65 'Validating Xray configuration' ;;
+        Restart\ Unbound\ after\ configuration\ validation|Ensure\ Xray\ stack\ is\ running)
+            pipeline_stage 90 'Starting and checking VPN stack' ;;
+    esac
+}
+
 pipeline_complete() {
     ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
     if [[ -t 1 ]]; then
+        if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' ]]; then
+            printf '\r\033[K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+        fi
         printf '\r\033[K  [100%%] Done\n'
     else
+        if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' ]]; then
+            printf '  [%3d%%] %s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+        fi
         printf '  [100%%] Done\n'
     fi
     sleep 1.5
@@ -1459,21 +1562,19 @@ pipeline_stage_for_playbook() {
         esac
     done
     case "$playbook" in
-        bootstrap.yml) pipeline_stage 25 'Preparing the VPS' ;;
-        harden_ssh.yml) pipeline_stage 50 'Hardening SSH access' ;;
+        bootstrap.yml) pipeline_stage 30 'Preparing VPS access' ;;
+        harden_ssh.yml) pipeline_stage 40 'Hardening SSH access' ;;
         site.yml)
             case "$PIPELINE_OPERATION" in
-                access_keys) pipeline_stage 80 'Applying access key changes' ;;
-                dns) pipeline_stage 80 'Applying DNS protection' ;;
-                countries) pipeline_stage 80 'Applying country blocking' ;;
-                *) pipeline_stage 85 'Installing Xray and Docker' ;;
+                access_keys|dns|countries) pipeline_stage 10 'Checking SSH access' ;;
+                *) pipeline_stage 60 'Installing Docker and system packages' ;;
             esac
             ;;
-        restart.yml) pipeline_stage 80 'Restarting the VPN service' ;;
+        restart.yml) pipeline_stage 20 'Checking SSH access' ;;
         rotate-ssh.yml)
             [[ "$PIPELINE_OPERATION" == rotate ]] || pipeline_stage 70 'Rotating the SSH key'
             ;;
-        remove.yml) pipeline_stage 80 'Deleting the VPN service' ;;
+        remove.yml) pipeline_stage 20 'Checking installed VPN components' ;;
     esac
 }
 
@@ -1698,7 +1799,7 @@ probe_vps_resources() {
     unset password password_yaml
 
     if ((PIPELINE_ACTIVE)); then
-        pipeline_stage 15 'Checking VPS access and resources'
+        pipeline_stage 20 'Checking VPS resources'
     else
         clear_screen
         printf '%s\n' "Checking VPS resources..."
@@ -1706,6 +1807,7 @@ probe_vps_resources() {
     ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1 &
     preflight_pid=$!
     while kill -0 "$preflight_pid" 2>/dev/null; do
+        pipeline_stage_from_ansible_log "$log"
         pipeline_render
         sleep 0.1
     done
@@ -1771,10 +1873,11 @@ probe_vps_resources_with_key() {
     else
         pipeline_start "Checking VPN server resources" preflight
         pipeline_owned=1
-        pipeline_stage 15 'Checking VPN access and resources'
+        pipeline_stage 20 'Checking VPS resources'
         ansible-playbook -i "$inventory" "$ROOT_DIR/ansible/preflight.yml" >"$log" 2>&1 &
         preflight_pid=$!
         while kill -0 "$preflight_pid" 2>/dev/null; do
+            pipeline_stage_from_ansible_log "$log"
             pipeline_render
             sleep 0.1
         done
@@ -2284,6 +2387,7 @@ run_ansible_playbook() {
         ansible-playbook "$@" >"$log" 2>&1 &
         ansible_pid=$!
         while kill -0 "$ansible_pid" 2>/dev/null; do
+            pipeline_stage_from_ansible_log "$log"
             pipeline_render
             sleep 0.1
         done
@@ -2555,7 +2659,7 @@ add_node() {
                 *) rm -f "$before" "$after"; return 0 ;;
             esac
 
-            pipeline_start "Checking VPS resources"
+            pipeline_start "Checking VPS resources" preflight
             if probe_vps_resources "$host" "$bootstrap_user" "$bootstrap_port" "$bootstrap_password"; then
                 pipeline_complete "VPS resources available"
                 break 2
@@ -2640,7 +2744,7 @@ print(next(name for name in after["nodes"] if name not in before.get("nodes", {}
 PY
 )"
     rm -f "$before"
-    pipeline_start "Installing VPN server"
+    pipeline_start "Installing VPN server" install
     if ! deploy_node "$name" "$after" "" 1; then
         pipeline_abort
         rm -f "$after"
@@ -3411,7 +3515,7 @@ manage_dns_protection() {
     fi
     clear_screen
     printf '%s\n' "Applying DNS protection profile: ${selected_profile}"
-    if ! run_node_playbook "$node" site.yml "$after" "Applying DNS protection" dns; then
+    if ! run_node_playbook "$node" site.yml "$after" "Updating DNS protection" dns; then
         rm -f "$before" "$after" "$known_hosts_file"
         show_result_screen "DNS protection change failed. The existing Vault was not changed."
         return 1
@@ -3480,7 +3584,7 @@ manage_local_region_policy() {
         else
             printf '%s\n' "Disabling country blocking."
         fi
-        if ! run_node_playbook "$node" site.yml "$after" "Applying country blocking" countries; then
+        if ! run_node_playbook "$node" site.yml "$after" "Updating country blocking" countries; then
             rm -f "$before" "$after"
             unset LOCAL_REGION_COUNTRIES
             show_result_screen "Country blocking change failed. The existing Vault was not changed."
