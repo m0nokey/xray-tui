@@ -327,7 +327,7 @@ vault_state_command() {
 }
 
 vault_save() {
-    local input="$1" encrypted checked
+    local input="$1" encrypted checked vault_output
     if ! ensure_vault_password_file; then
         return 1
     fi
@@ -337,11 +337,14 @@ vault_save() {
     fi
     encrypted="$(mktemp "$STATE_DIR/.vault.XXXXXX")"
     checked="$(mktemp "$RUNTIME_TMP_DIR/.decrypted.XXXXXX")"
+    vault_output="$(mktemp "$RUNTIME_TMP_DIR/.vault-output.XXXXXX")"
     chmod 600 "$encrypted" "$checked"
-    if ! ansible-vault encrypt "$input" --output "$encrypted" --vault-password-file "$VAULT_PASSWORD_FILE"; then
-        rm -f "$encrypted" "$checked"
+    if ! ansible-vault encrypt "$input" --output "$encrypted" --vault-password-file "$VAULT_PASSWORD_FILE" >"$vault_output" 2>&1; then
+        cat "$vault_output" >&2
+        rm -f "$encrypted" "$checked" "$vault_output"
         return 1
     fi
+    rm -f "$vault_output"
     if ! ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$encrypted" >"$checked" || ! json_file_valid "$checked"; then
         rm -f "$encrypted" "$checked"
         printf '%s\n' "Refusing to install an invalid encrypted Vault." >&2
@@ -1540,18 +1543,38 @@ pipeline_stage_from_xray_task() {
     esac
 }
 
+pipeline_default_success_message() {
+    case "$PIPELINE_OPERATION" in
+        preflight) printf '%s' 'VPS resources are available.' ;;
+        install) printf '%s' 'VPN server deployment step completed.' ;;
+        access_keys) printf '%s' 'Access keys updated successfully.' ;;
+        dns) printf '%s' 'DNS protection updated successfully.' ;;
+        countries) printf '%s' 'Country blocking updated successfully.' ;;
+        restart) printf '%s' 'VPN server restarted successfully.' ;;
+        rotate) printf '%s' 'Management SSH key rotated successfully.' ;;
+        remove) printf '%s' 'VPN server deleted successfully.' ;;
+        *) printf '%s' 'Operation completed successfully.' ;;
+    esac
+}
+
 pipeline_complete() {
-    ((DEBUG_MODE || !PIPELINE_ACTIVE)) && return 0
+    local final_message="${1:-$(pipeline_default_success_message)}" pause="${2:-0}"
+    if ((DEBUG_MODE)); then
+        printf '\n%s\n' "$final_message"
+        ((pause)) && wait_action_return
+        return 0
+    fi
+    ((PIPELINE_ACTIVE)) || return 0
     if [[ -t 1 ]]; then
         if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' ]]; then
             printf '\r\033[K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
         fi
-        printf '\r\033[K  [100%%] Done\n'
+        printf '\r\033[K  [100%%] %s\n' "$final_message"
     else
         if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' ]]; then
             printf '  [%3d%%] %s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
         fi
-        printf '  [100%%] Done\n'
+        printf '  [100%%] %s\n' "$final_message"
     fi
     sleep 1.5
     pipeline_restore_terminal
@@ -1560,6 +1583,7 @@ pipeline_complete() {
     PIPELINE_OPERATION=''
     PIPELINE_LABEL=''
     PIPELINE_FRAME=0
+    ((pause)) && wait_action_return
 }
 
 pipeline_abort() {
@@ -1659,12 +1683,18 @@ exit_tui() {
 }
 
 invalid_choice() {
+    local message
     if [[ -n "$CURRENT_INPUT_HINT" ]]; then
-        printf '%s\n' "Invalid input. $CURRENT_INPUT_HINT"
+        message="Invalid input. $CURRENT_INPUT_HINT"
     else
-        printf '%s\n' "Invalid input. Enter a valid menu option."
+        message='Invalid input. Enter a valid menu option.'
     fi
-    sleep 1
+    if [[ -t 1 ]]; then
+        printf '\033[1A\r\033[2K?:    %s\n' "$message"
+    else
+        printf '%s\n' "?:    $message"
+    fi
+    sleep 2
 }
 
 show_nodes() {
@@ -2794,8 +2824,7 @@ PY
         return 1
     fi
     rm -f "$after"
-    pipeline_complete "Installation complete"
-    show_result_screen "VPN server installed and added to the encrypted Vault."
+    pipeline_complete "VPN server added successfully to the encrypted Vault." 1
 }
 
 deploy_node() {
@@ -3033,11 +3062,7 @@ run_node_playbook() {
     rm -f "$before" "$extra" "$key_file"
     rm -rf "$inventory_dir"
     if ((pipeline_owned)); then
-        if ((rc == 0)); then
-            pipeline_complete "Operation complete"
-        else
-            pipeline_abort
-        fi
+        ((rc != 0)) && pipeline_abort
     fi
     return "$rc"
 }
@@ -3093,7 +3118,7 @@ run_remove_with_management_key() {
     rm -f "$before" "$extra" "$key_file"
     rm -rf "$inventory_dir"
     if ((pipeline_owned)); then
-        if ((rc == 0)); then pipeline_complete "VPN server deleted"; else pipeline_abort; fi
+        if ((rc != 0)); then pipeline_abort; fi
     fi
     return "$rc"
 }
@@ -3162,13 +3187,13 @@ run_remove_with_bootstrap() {
     rm -f "$before" "$extra"
     rm -rf "$inventory_dir"
     if ((pipeline_owned)); then
-        if ((rc == 0)); then pipeline_complete "VPN server deleted"; else pipeline_abort; fi
+        if ((rc != 0)); then pipeline_abort; fi
     fi
     return "$rc"
 }
 
 mutate_access_keys_and_deploy() {
-    local node="$1" action="$2" key_id="${3:-}" before after
+    local node="$1" action="$2" key_id="${3:-}" before after success_message
     before="$(mktemp)"
     after="$(mktemp)"
     if ! read_vault_state "$before"; then
@@ -3193,11 +3218,24 @@ mutate_access_keys_and_deploy() {
     fi
     if ! vault_save "$after"; then
         rm -f "$before" "$after"
+        pipeline_abort
         printf '%s\n' "The VPN was updated, but the encrypted Vault could not be saved."
         printf '%s\n' "The existing Vault was not changed."
         return 1
     fi
     rm -f "$before" "$after"
+    case "$action" in
+        add-keys)
+            if ((10#$key_id == 1)); then
+                success_message='Access key added successfully.'
+            else
+                success_message="${key_id} access keys added successfully."
+            fi
+            ;;
+        remove-all-keys) success_message='All access keys deleted successfully.' ;;
+        remove-key) success_message='Access key deleted successfully.' ;;
+    esac
+    pipeline_complete "$success_message" 1
     return 0
 }
 
@@ -3236,7 +3274,7 @@ add_access_keys_menu() {
                 fi
                 clear_screen
                 if mutate_access_keys_and_deploy "$node" add-keys "$count"; then
-                    show_result_screen "Access keys added: $count."
+                    :
                 else
                     show_result_screen "Access key change failed. The existing Vault was not changed."
                 fi
@@ -3312,7 +3350,7 @@ PY
                         [Yy])
                             clear_screen
                             if mutate_access_keys_and_deploy "$node" remove-all-keys; then
-                                show_result_screen "All access keys deleted."
+                                :
                             else
                                 show_result_screen "Access key change failed. The existing Vault was not changed."
                             fi
@@ -3374,7 +3412,7 @@ PY
                         [Yy])
                             clear_screen
                             if mutate_access_keys_and_deploy "$node" remove-key "$key_id"; then
-                                show_result_screen "Access key deleted."
+                                :
                             else
                                 show_result_screen "Access key change failed. The existing Vault was not changed."
                             fi
@@ -3486,8 +3524,7 @@ PY
     fi
     rm -f "$before" "$extra" "$rotated_state"
     rm -rf "$inventory_dir" "$key_dir"
-    pipeline_complete "SSH key rotation complete"
-    printf '%s\n' "SSH key rotated."
+    pipeline_complete "Management SSH key rotated successfully." 1
 }
 
 manage_dns_protection() {
@@ -3556,13 +3593,14 @@ manage_dns_protection() {
     fi
     if ! vault_save "$after"; then
         rm -f "$before" "$after"
+        pipeline_abort
         show_result_screen \
             "The VPN was updated, but the encrypted Vault could not be saved." \
             "The existing DNS profile remains recorded in the Vault."
         return 1
     fi
     rm -f "$before" "$after" "$known_hosts_file"
-    show_result_screen "DNS protection profile updated: ${selected_profile}."
+    pipeline_complete "DNS protection profile updated successfully: ${selected_profile}." 1
 }
 
 manage_local_region_policy() {
@@ -3627,6 +3665,7 @@ manage_local_region_policy() {
         if ! vault_save "$after"; then
             rm -f "$before" "$after"
             unset LOCAL_REGION_COUNTRIES
+            pipeline_abort
             show_result_screen \
                 "The VPN was updated, but the encrypted Vault could not be saved." \
                 "The previous country blocking settings remain recorded in the Vault."
@@ -3634,7 +3673,7 @@ manage_local_region_policy() {
         fi
         rm -f "$before" "$after"
         unset LOCAL_REGION_COUNTRIES
-        show_result_screen "Country blocking settings updated."
+        pipeline_complete "Country blocking settings updated successfully." 1
         return 0
     done
 }
@@ -3717,10 +3756,17 @@ manage_server() {
         case "$REPLY" in
             1) clear_screen; show_node_status "$node" || true; pause_result_screen ;;
             2) open_node_ssh_session "$node" || true ;;
-            3) clear_screen; run_node_playbook "$node" restart.yml "" "Restarting VPN service" restart || true; pause_result_screen ;;
+            3)
+                clear_screen
+                if run_node_playbook "$node" restart.yml "" "Restarting VPN service" restart; then
+                    pipeline_complete "VPN server restarted successfully." 1
+                else
+                    pause_result_screen
+                fi
+                ;;
             4) manage_dns_protection "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
             5) manage_local_region_policy "$node" || true; [[ "$MAIN_MENU_REQUESTED" == 1 ]] && return ;;
-            6) clear_screen; rotate_ssh_key "$node" || true; pause_result_screen ;;
+            6) clear_screen; rotate_ssh_key "$node" || true ;;
             7)
                 clear_screen
                 if remove_node "$node"; then
@@ -3797,9 +3843,10 @@ remove_node() {
     echo
     if remove_remote_node "$node"; then
         if state_mutate remove-node "$node"; then
-            show_result_screen "VPN server deleted from the VPS and Vault."
+            pipeline_complete "VPN server deleted successfully from the VPS and Vault." 1
             return "$NODE_REMOVED_STATUS"
         fi
+        pipeline_abort
         show_result_screen "The VPS was cleaned, but the local Vault could not be updated."
         return 0
     fi
@@ -3836,8 +3883,10 @@ remove_node() {
             1)
                 if remove_remote_node "$node"; then
                     if state_mutate remove-node "$node"; then
-                        show_result_screen "VPN server deleted from the VPS and Vault."
+                        pipeline_complete "VPN server deleted successfully from the VPS and Vault." 1
                         removed=1
+                    else
+                        pipeline_abort
                     fi
                     break
                 fi
