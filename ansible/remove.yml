@@ -108,6 +108,21 @@
         enabled: false
       failed_when: false
 
+    - name: Remove Docker bridge interfaces
+      ansible.builtin.shell: |
+        set -euo pipefail
+        bridges="$(ip -o link show | awk -F': ' '$2 == "docker0" || $2 ~ /^br-[0-9a-f]{12}$/ {print $2}')"
+        if [[ -n "$bridges" ]]; then
+          while IFS= read -r bridge; do
+            [[ -n "$bridge" ]] || continue
+            ip link delete "$bridge" type bridge
+          done <<< "$bridges"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: ansible_facts.os_family == "Debian"
+
     - name: Remove Docker packages installed for the VPN stack
       ansible.builtin.apt:
         name:

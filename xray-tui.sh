@@ -1414,7 +1414,7 @@ pipeline_render() {
     if [[ -t 1 ]]; then
         printf '\r\033[K  [%3d%%] %-44s %s' "$PIPELINE_PERCENT" "$PIPELINE_LABEL" "$frame"
     else
-        printf '  [%3d%%] %s\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+        printf '  [%3d%%] %-44s\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
     PIPELINE_FRAME=$((PIPELINE_FRAME + 1))
 }
@@ -1447,7 +1447,7 @@ pipeline_stage() {
     if ((PIPELINE_ACTIVE == 0)); then
         pipeline_start "Working on VPN server"
     fi
-    if [[ "$PIPELINE_PERCENT" == "$1" && "$PIPELINE_LABEL" == "$2" ]]; then
+    if [[ "$PIPELINE_LABEL" == "$2" ]]; then
         return 0
     fi
     if (( $1 < PIPELINE_PERCENT )); then
@@ -1546,7 +1546,7 @@ pipeline_stage_from_xray_task() {
 pipeline_default_success_message() {
     case "$PIPELINE_OPERATION" in
         preflight) printf '%s' 'VPS resources are available.' ;;
-        install) printf '%s' 'VPN server deployment step completed.' ;;
+        install) printf '%s' 'VPN server added successfully.' ;;
         access_keys) printf '%s' 'Access keys updated successfully.' ;;
         dns) printf '%s' 'DNS protection updated successfully.' ;;
         countries) printf '%s' 'Country blocking updated successfully.' ;;
@@ -1569,12 +1569,12 @@ pipeline_complete() {
         if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' ]]; then
             printf '\r\033[K  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
         fi
-        printf '\r\033[K  [100%%] %s\n' "$final_message"
+        printf '\r\033[K  [100%%] %-44s done\n' "$final_message"
     else
         if [[ -n "$PIPELINE_LABEL" && "$PIPELINE_LABEL" != 'Preparing...' ]]; then
-            printf '  [%3d%%] %s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+            printf '  [%3d%%] %-44s done\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
         fi
-        printf '  [100%%] %s\n' "$final_message"
+        printf '  [100%%] %-44s done\n' "$final_message"
     fi
     sleep 1.5
     pipeline_restore_terminal
@@ -1591,7 +1591,7 @@ pipeline_abort() {
     if [[ -t 1 ]]; then
         printf '\r\033[K  [%3d%%] %-44s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     else
-        printf '  [%3d%%] %s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
+        printf '  [%3d%%] %-44s failed\n' "$PIPELINE_PERCENT" "$PIPELINE_LABEL"
     fi
     pipeline_restore_terminal
     PIPELINE_ACTIVE=0
@@ -2824,7 +2824,7 @@ PY
         return 1
     fi
     rm -f "$after"
-    pipeline_complete "VPN server added successfully to the encrypted Vault." 1
+    pipeline_complete "VPN server added successfully." 1
 }
 
 deploy_node() {
@@ -3585,7 +3585,11 @@ manage_dns_protection() {
         return 1
     fi
     clear_screen
-    printf '%s\n' "Applying DNS protection profile: ${selected_profile}"
+    if [[ "$selected_profile" == 'disabled' ]]; then
+        printf '%s\n' "Disabling DNS protection."
+    else
+        printf '%s\n' "Enabling ${selected_profile^} DNS protection."
+    fi
     if ! run_node_playbook "$node" site.yml "$after" "Updating DNS protection" dns; then
         rm -f "$before" "$after" "$known_hosts_file"
         show_result_screen "DNS protection change failed. The existing Vault was not changed."
@@ -3600,7 +3604,11 @@ manage_dns_protection() {
         return 1
     fi
     rm -f "$before" "$after" "$known_hosts_file"
-    pipeline_complete "DNS protection profile updated successfully: ${selected_profile}." 1
+    if [[ "$selected_profile" == 'disabled' ]]; then
+        pipeline_complete "DNS protection is now disabled." 1
+    else
+        pipeline_complete "${selected_profile^} DNS protection is now enabled." 1
+    fi
 }
 
 manage_local_region_policy() {
@@ -3652,7 +3660,7 @@ manage_local_region_policy() {
         fi
         clear_screen
         if [[ -n "$selected_countries" ]]; then
-            printf '%s\n' "Applying country blocking: $(local_region_selected_summary)"
+            printf '%s\n' "Applying country blocking."
         else
             printf '%s\n' "Disabling country blocking."
         fi
@@ -3673,7 +3681,11 @@ manage_local_region_policy() {
         fi
         rm -f "$before" "$after"
         unset LOCAL_REGION_COUNTRIES
-        pipeline_complete "Country blocking settings updated successfully." 1
+        if [[ -n "$selected_countries" ]]; then
+            pipeline_complete "Country blocking is now enabled." 1
+        else
+            pipeline_complete "Country blocking is now disabled." 1
+        fi
         return 0
     done
 }
@@ -3843,7 +3855,7 @@ remove_node() {
     echo
     if remove_remote_node "$node"; then
         if state_mutate remove-node "$node"; then
-            pipeline_complete "VPN server deleted successfully from the VPS and Vault." 1
+            pipeline_complete "VPN server deleted from VPS and Vault." 1
             return "$NODE_REMOVED_STATUS"
         fi
         pipeline_abort
@@ -3883,7 +3895,7 @@ remove_node() {
             1)
                 if remove_remote_node "$node"; then
                     if state_mutate remove-node "$node"; then
-                        pipeline_complete "VPN server deleted successfully from the VPS and Vault." 1
+                        pipeline_complete "VPN server deleted from VPS and Vault." 1
                         removed=1
                     else
                         pipeline_abort
