@@ -7,6 +7,11 @@ IMAGE="local/xray-tui:latest"
 BASE_IMAGE="alpine:3.23"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 
+# Match the container process to the host user so the 0700 Vault directory
+# remains writable without granting the controller root privileges.
+export XRAY_TUI_UID="${XRAY_TUI_UID:-$(id -u)}"
+export XRAY_TUI_GID="${XRAY_TUI_GID:-$(id -g)}"
+
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 

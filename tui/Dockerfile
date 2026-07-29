@@ -21,5 +21,10 @@ RUN apk add --no-cache \
 
 RUN ansible-galaxy collection install community.docker
 
+RUN addgroup -S user \
+    && adduser -S -D -H -G user -s /sbin/nologin user
+
 WORKDIR /workspace
+ENV HOME=/tmp
+USER user
 ENTRYPOINT ["/bin/bash", "/workspace/xray-tui.sh"]
