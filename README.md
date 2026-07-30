@@ -64,18 +64,17 @@ Release archives include a SHA-256 checksum and are the recommended way to run
 `xray-tui`.
 
 ```sh
-VERSION=v0.2.7
-curl -fLO "https://github.com/m0nokey/xray-tui/releases/download/${VERSION}/xray-tui-${VERSION}.tar.gz"
-curl -fLO "https://github.com/m0nokey/xray-tui/releases/download/${VERSION}/SHA256SUMS"
-grep -F -- "xray-tui-${VERSION}.tar.gz" SHA256SUMS | sha256sum -c -
-tar -xzf "xray-tui-${VERSION}.tar.gz"
-cd "xray-tui-${VERSION}"
+curl -fLO "https://github.com/m0nokey/xray-tui/releases/latest/download/xray-tui-latest.tar.gz"
+curl -fLO "https://github.com/m0nokey/xray-tui/releases/latest/download/SHA256SUMS"
+grep -F -- "xray-tui-latest.tar.gz" SHA256SUMS | sha256sum -c -
+tar -xzf xray-tui-latest.tar.gz
+release_dir="$(tar -tzf xray-tui-latest.tar.gz | awk -F/ 'NR == 1 {print $1; exit}')"
+cd "$release_dir"
 bash run.sh
 ```
 
-Replace `v0.2.7` with the version shown on the Releases page. The permanent
-`releases/latest` link always points to the newest stable release; the README
-does not need to be changed for every patch release.
+The `releases/latest` link always points to the newest stable release. The
+README does not need to be changed for every patch release.
 
 For development and testing, use the `main` branch instead:
 
@@ -553,10 +552,10 @@ latest stable release archive and run it again. You do not need to keep the
 repository or the local controller image between runs.
 
 ```sh
-VERSION=v0.2.7
-curl -fLO "https://github.com/m0nokey/xray-tui/releases/download/${VERSION}/xray-tui-${VERSION}.tar.gz"
-tar -xzf "xray-tui-${VERSION}.tar.gz"
-cd "xray-tui-${VERSION}"
+curl -fLO "https://github.com/m0nokey/xray-tui/releases/latest/download/xray-tui-latest.tar.gz"
+tar -xzf xray-tui-latest.tar.gz
+release_dir="$(tar -tzf xray-tui-latest.tar.gz | awk -F/ 'NR == 1 {print $1; exit}')"
+cd "$release_dir"
 bash run.sh
 ```
 

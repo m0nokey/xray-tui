@@ -38,6 +38,7 @@ jobs:
 
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           archive="xray-tui-${RELEASE_TAG}.tar.gz"
+          latest_archive="xray-tui-latest.tar.gz"
           root="xray-tui-${RELEASE_TAG}"
           staging="$(mktemp -d)"
           trap 'rm -rf "$staging"' EXIT
@@ -54,9 +55,12 @@ jobs:
           )
 
           tar -C "$staging" -czf "$archive" "$root"
-          sha256sum "$archive" > SHA256SUMS
+          cp -- "$archive" "$latest_archive"
+          sha256sum "$archive" "$latest_archive" > SHA256SUMS
 
           printf 'RELEASE_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
+          printf 'RELEASE_LATEST_ARCHIVE=%s\n' \
+            "$latest_archive" >> "$GITHUB_ENV"
 
       - name: Create GitHub release and upload assets
         env:
@@ -88,7 +92,10 @@ jobs:
             "https://api.github.com/repos/$GITHUB_REPOSITORY/releases")"
           upload_url="$(jq -er '.upload_url | sub("\\{.*$"; "")' <<<"$release")"
 
-          for asset in "$RELEASE_ARCHIVE" SHA256SUMS; do
+          for asset in \
+            "$RELEASE_ARCHIVE" \
+            "$RELEASE_LATEST_ARCHIVE" \
+            SHA256SUMS; do
             curl --fail-with-body --silent --show-error \
               --request POST \
               --header "Accept: application/vnd.github+json" \
