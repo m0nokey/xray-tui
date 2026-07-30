@@ -166,6 +166,7 @@ jobs:
         with:
           scan-type: config
           scan-ref: .
+          trivy-config: trivy.yaml
           format: table
           exit-code: '1'
           severity: CRITICAL,HIGH

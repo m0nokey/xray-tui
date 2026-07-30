@@ -1,0 +1,6 @@
+misconfiguration:
+  # This repository contains Dockerfile and Ansible configuration.
+  # Do not load unrelated cloud policy families such as AWS/RDS.
+  scanners:
+    - dockerfile
+    - ansible
