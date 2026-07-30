@@ -180,17 +180,19 @@ jobs:
           image-ref: ghcr.io/xtls/xray-core:latest
           version: v0.72.0
           format: table
+          # Keep the complete HIGH/CRITICAL report without blocking the job.
           exit-code: '0'
           ignore-unfixed: true
           severity: CRITICAL,HIGH
 
-      - name: Block critical server Xray findings
+      - name: Fail only on critical server Xray findings
         # yamllint disable-line rule:line-length
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ghcr.io/xtls/xray-core:latest
           version: v0.72.0
           format: table
+          # HIGH findings are reported above; only CRITICAL may fail CI.
           exit-code: '1'
           ignore-unfixed: true
           severity: CRITICAL
