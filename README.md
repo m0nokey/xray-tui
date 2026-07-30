@@ -1,8 +1,26 @@
 # xray-tui
 
-`xray-tui` is a console manager for Xray VPN servers.
+`xray-tui` is a simple terminal-based (TUI) manager for your own Xray VPN
+infrastructure.
 
-It runs on your computer and helps you:
+It provides centralized management of deployed VPN servers and their access
+from one interface. You can add VPS nodes, configure them, check their status,
+and issue or revoke VPN access keys without manually editing configuration
+files.
+
+`xray-tui` is not a VPN client. It manages the servers that user devices
+connect to.
+
+The program runs on your macOS or Linux computer inside a Docker container.
+Server data, SSH access, and VPN keys are stored only on your computer in a
+local encrypted Vault. They are not sent to a cloud service and are not stored
+in the project repository.
+
+After the initial deployment, each VPS works autonomously. It runs Xray,
+performs scheduled updates, checks the VPN stack, and recovers from a failed
+Xray update.
+
+It helps you:
 
 ```text
 - install an Xray VPN on a VPS
@@ -12,8 +30,6 @@ It runs on your computer and helps you:
 - open an SSH session without remembering the port or password
 - update or delete the VPN server
 ```
-
-The connection data is stored in an encrypted local Vault.
 
 > ⚠️ **Security Notice:**<br>
 > Always review any script from the internet before running it on your system!
@@ -88,35 +104,61 @@ Choose `1. Continue`. The manager then checks:
 - VPS resources
 ```
 
-If the check succeeds, choose a camouflage domain and protection profile:
+If the check succeeds, the manager asks for a camouflage domain:
 
 ```text
+Add VPN server
+
 This domain helps the VPN connection look like normal HTTPS traffic.
 Use a real HTTPS website that supports TLS 1.3.
+Press Enter to use the default value shown in [brackets].
 
 Enter domain [github.com]:
-Block ads and threats (optional):
-Blocks malware, phishing, scams, ads, trackers, and telemetry.
+```
 
-Select a profile:
+After the domain screen, choose an optional DNS protection profile:
+
+```text
+Block ads and threats
+
+Optional. Blocks malware, phishing, scams, ads, trackers, and telemetry.
+Current: disabled
+
+1. Disabled  No blocking
+2. Minimal   Malware protection
+3. Optimal   Malware, phishing and scams
+4. Full      Malware, ads and tracking
+5. Maximum   Broad protection and DNS bypass
+6. Custom    Choose protection categories
+
+Not sure what to choose? Press Enter to keep it disabled.
+You can enable it later from the VPN management menu.
+
+?:
 ```
 
 The default domain is `github.com`. You can change it according to your
-country and camouflage strategy.
+country and camouflage strategy. The availability of DNS profiles depends on
+the detected VPS CPU and memory resources.
 
-Choose a profile or press Enter for `Disabled`. You can enable blocking later
-from `Manage VPN server`. Wait for the deployment to finish.
+After selecting a profile, wait for the deployment to finish.
 
 During deployment, normal mode shows a short stage-based progress screen:
 
 ```text
 Installing VPN server
 
-  [ 25%] Preparing the VPS                         done
-  [ 50%] Hardening SSH access                      done
-  [ 70%] Verifying hardened SSH access             done
-  [ 85%] Installing Xray and Docker                done
-  [100%] Done
+  [ 10%] Checking the VPS connection                    done
+  [ 20%] Checking VPS system                             done
+  [ 30%] Preparing VPS access                            done
+  [ 35%] Reconnecting after bootstrap                    done
+  [ 40%] Hardening SSH access                            done
+  [ 50%] Verifying hardened SSH access                   done
+  [ 60%] Installing Docker and system packages            done
+  [ 70%] Rendering VPN configuration                      done
+  [ 80%] Validating Xray and DNS configuration            done
+  [ 90%] Starting and checking VPN stack                  done
+  [100%] VPN server added successfully.                   done
 ```
 
 The percentages represent deployment stages, not individual Ansible tasks.
@@ -138,6 +180,67 @@ Debug mode shows the raw Ansible output in the terminal and keeps it visible
 until you press Enter. This makes it possible to copy the failure details into
 an issue. It does not create a permanent log file on the host. The normal mode
 shows only the user-facing progress and result messages.
+
+## Managing Multiple Nodes
+
+One instance of `xray-tui` running in Docker can manage multiple VPS nodes.
+
+Each node has its own connection settings, SSH access, VPN ports, access keys,
+DNS protection settings, and server status.
+
+When the server list is checked, up to 16 nodes are checked concurrently. If
+there are more nodes, the remaining checks wait for an available slot and run
+automatically in the same refresh cycle.
+
+Deployment, configuration changes, and removal are currently performed for one
+selected node at a time. Autonomous updates run independently on every VPS.
+
+The server list and status display are shown in the Server Menu below.
+
+## How It Works
+
+`xray-tui` runs in Docker on the user's computer and connects to VPS nodes over
+SSH. Ansible performs the initial server configuration. After deployment, each
+node continues to operate independently.
+
+```text
+                              CONTROL PLANE
+
+  +-------------------------+       SSH / Ansible       +-------------------------+
+  | User's computer         | ------------------------> | VPS node                |
+  |                         |                           |                         |
+  | xray-tui in Docker      |                           | Debian + Docker Compose |
+  | encrypted local Vault   |                           |                         |
+  +-------------------------+                           |  +-------------------+  |
+                                                        |  | Xray              |  |
+  +-------------------------+       VPN connection      |  | Vision + REALITY  |  |
+  | VPN client devices      | ------------------------> |  | XHTTP + REALITY   |  |
+  | phone / laptop / tablet |                           |  | packet-up         |  |
+  +-------------------------+                           |  +---------+---------+  |
+                                                        |            |            |
+                                                        |            | DNS        |
+                                                        |            v            |
+                                                        |  +-------------------+  |
+                                                        |  | Unbound           |  |
+                                                        |  | RPZ blocklists    |  |
+                                                        |  | NXDOMAIN          |  |
+                                                        |  +---------+---------+  |
+                                                        +------------|------------+
+                                                                     |
+                                                                 DNS-over-TLS
+                                                          Cloudflare / AdGuard DNS
+                                                                     |
+                                                                     v
+                                                                  Internet
+```
+
+Xray and Unbound run as separate services in the same Docker Compose stack.
+Xray handles VPN connections. When DNS protection is enabled, Xray sends DNS
+queries to the private Unbound service. Unbound applies RPZ blocklists and
+forwards allowed queries over DNS-over-TLS.
+
+The user's computer does not need to stay powered on. After deployment, the VPS
+continues to run and maintain itself.
 
 ## Main Menu
 
@@ -161,13 +264,22 @@ The VPS list shows the important information at a glance:
 ```text
   Node Management:
 
+  Fleet status: 4 Active, 1 Partial
+
      IP              STATUS   COUNTRY   CREATED      PROVIDER
 
-  1. 203.0.113.42   Active   DE        2026-07-27   Example VPS
+  1. 203.0.113.42   Active   DE        2026-07-27   Hetzner Online GmbH
+  2. 198.51.100.17  Active   US        2026-07-26   Amazon Technologies Inc.
+  3. 192.0.2.24     Active   NL        2026-07-25   DigitalOcean, LLC
+  4. 203.0.113.88   Active   GB        2026-07-24   Google LLC
+  5. 198.51.100.64  Partial  SG        2026-07-23   Vultr Holdings LLC
 ```
 
 The terminal uses color for quick scanning: `Active` is green, `Partial` is
-yellow, and unavailable states are red.
+yellow, and unavailable states are red. In this example, four nodes are fully
+operational and the Singapore node has a degraded VPN status: Xray is running,
+but only one of its VPN ports is reachable. The IP addresses above use
+documentation-only ranges and are examples rather than real servers.
 
 After selecting a VPS:
 
@@ -204,6 +316,23 @@ Partial          Xray is running and only one VPN port is reachable.
 VPN unavailable  The VPS responded, but Xray is not confirmed running.
 Unreachable      No VPN or management port responded.
 ```
+
+## Autonomous Operation And Updates
+
+After deployment, independent system services are installed on the VPS. They:
+
+- update Debian and the Docker/Xray stack every night;
+- reboot the VPS when a kernel update requires it;
+- check the stack after an update;
+- restore the previous working Xray version if an update fails.
+
+Both the server and client parts of Xray should be kept up to date. New versions
+fix vulnerabilities, improve compatibility, and reduce the chance that outdated
+protocol characteristics will be recognized and blocked by DPI.
+
+For this reason, client applications on user devices should also be updated
+after a server update. This does not guarantee that a connection will never be
+blocked, but it is the safest and most reliable way to operate Xray.
 
 ## Optional Protection
 
@@ -278,6 +407,26 @@ Deleting a key deletes both links together. Other keys are not changed.
 
 The Vault is a local encrypted file containing VPS access data, SSH keys, VPN
 ports, REALITY keys, and access-key pairs.
+
+The Vault is encrypted using the standard Ansible Vault format:
+
+```text
+$ANSIBLE_VAULT;1.1;AES256
+```
+
+The format uses:
+
+- AES-256 in CTR mode;
+- PBKDF2-HMAC-SHA256 for password-based key derivation;
+- 10,000 PBKDF2 iterations;
+- HMAC-SHA256 for ciphertext integrity;
+- a salt stored in the encrypted Vault.
+
+The Vault password is not stored on the user's computer or on any VPS. If the
+password is lost, the Vault cannot be recovered.
+
+Ansible Vault protects data at rest. SSH protects the connection while the
+controller communicates with a VPS.
 
 ```text
 1. Change encryption password
@@ -359,6 +508,33 @@ Automatic files in `backups/system/` are intended for internal local recovery.
 They are not part of the user backup browser; use a user `tar.gz` backup for
 recovery and migration.
 
+### Repeatable Use Without Keeping The Repository
+
+After a VPS has been deployed, it does not depend on the local project directory
+or the local `xray-tui` Docker image. You may remove the cloned repository and
+the local image without interrupting the VPN on the VPS.
+
+Do not delete the local state directory:
+
+```text
+$HOME/.local/state/xray/
+```
+
+This directory contains the encrypted Vault with the infrastructure state.
+
+When you need to issue new keys, change settings, or remove a VPS, clone the
+latest project version and run it again:
+
+```sh
+git clone https://github.com/m0nokey/xray-tui.git
+cd xray-tui
+bash run.sh
+```
+
+`xray-tui` finds the existing Vault on the computer and asks for its password.
+After unlocking it, your VPS nodes, SSH access, VPN keys, and infrastructure
+settings become available again.
+
 ## Delete A VPN Server
 
 `Delete VPN server` cleans the VPS before deleting its Vault record.
@@ -374,26 +550,28 @@ recovery and migration.
 If remote deletion fails, the Vault entry is kept so the operation can be
 retried.
 
-## Technical Overview
+## Software Sources And Supply Chain
 
-```text
-Your computer
-    |
-    | xray-tui
-    | encrypted Vault
-    | SSH / Ansible
-    v
-VPS
-    |
-    +-- Docker
-    |     |
-    |     +-- Xray VPN
-    |     |
-    |     +-- optional Unbound DNS protection
-    |
-    +-- hardened SSH management
-    +-- automatic OS and Docker updates
-```
+The project uses official repositories and upstream project sources instead of
+arbitrary binaries or unverified installation scripts.
+
+- The local controller runs from the official `alpine:3.23` image.
+- Ansible, OpenSSH, Python, and supporting tools are installed from Alpine
+  repositories.
+- VPS system packages are installed from the official Debian and Debian
+  Security repositories.
+- Docker Engine, Docker CLI, and the Compose plugin are installed from Docker's
+  official Debian APT repository and verified with Docker's GPG key.
+- Xray runs from the upstream image `ghcr.io/xtls/xray-core:latest`.
+- Unbound is built on the VPS from the official `alpine:3.23` base image, with
+  the Unbound package installed from Alpine repositories.
+- DNS protection lists are downloaded from their upstream projects, including
+  HaGeZi, AdGuard, URLhaus, and ThreatFox.
+
+Repository sources and signatures are configured by Ansible during deployment
+and are used again during automatic updates.
+
+## Technical Overview
 
 The VPS runs:
 
