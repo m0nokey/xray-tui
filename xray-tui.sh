@@ -247,12 +247,16 @@ add_node_port_mode_prompt() {
     while true; do
         clear_screen
         menu_heading "Add VPN server"
-        printf '%s\n' "Choose how the two VPN ports should be assigned."
+        printf '%s\n' "Configure Xray VPN ports."
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "[!] Not sure what to choose? Press Enter to use the default." "$COLOR_RESET"
         [[ -n "$error" ]] && printf '%s\n' "$error"
         echo
-        menu_option 1 "Vision 443 + XHTTP random"
-        menu_option 2 "Both ports random (default)"
-        menu_option 3 "Enter both ports manually"
+        menu_option 1 "Vision + REALITY — TCP 443"
+        printf '%s\n' "   XHTTP + REALITY — random port"
+        menu_option 2 "Both transports — random ports (default)"
+        menu_option 3 "XHTTP + REALITY — TCP 443"
+        printf '%s\n' "   Vision + REALITY — random port"
+        menu_option 4 "Enter both Xray VPN ports manually"
         echo
         menu_control b back
         menu_control m main
@@ -283,11 +287,16 @@ add_node_port_mode_prompt() {
                 return 0
                 ;;
             3)
+                ADD_NODE_PORT_MODE=xhttp-443
+                ADD_NODE_VISION_PORT=''
+                ADD_NODE_XHTTP_PORT=''
+                return 0
+                ;;
+            4)
                 while true; do
                     clear_screen
                     menu_heading "Add VPN server"
-                    printf '%s\n' "Enter the VLESS TCP Vision port."
-                    printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Vision commonly uses TCP 443." "$COLOR_RESET"
+                    printf '%s\n' "Enter the TCP port for VLESS Vision + REALITY."
                     echo
                     menu_control b back
                     menu_control m main
@@ -314,7 +323,8 @@ add_node_port_mode_prompt() {
                 while true; do
                     clear_screen
                     menu_heading "Add VPN server"
-                    printf '%s\n' "Enter the VLESS XHTTP port."
+                    printf '%s\n' "Enter the TCP port for VLESS XHTTP + REALITY."
+                    printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "The port must be different from the Vision port." "$COLOR_RESET"
                     [[ -n "$error" ]] && printf '%s\n' "$error"
                     echo
                     menu_control b back
@@ -344,7 +354,7 @@ add_node_port_mode_prompt() {
                     error="Invalid port. Enter a number from 1 to 65535."
                 done
                 ;;
-            *) error="Invalid choice. Enter 1, 2, 3, b, m, i, or x." ;;
+            *) error="Invalid choice. Enter 1, 2, 3, 4, b, m, i, or x." ;;
         esac
     done
 }

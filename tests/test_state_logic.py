@@ -58,6 +58,16 @@ class PortGenerationTests(unittest.TestCase):
         self.assertLessEqual(xhttp_port, 60000)
         self.assertEqual(used, {xhttp_port})
 
+    def test_xhttp_443_mode_generates_vision_and_uses_https_port(self):
+        used = set()
+
+        vision_port, xhttp_port = generated_vpn_ports(used, "xhttp-443")
+
+        self.assertGreaterEqual(vision_port, 20000)
+        self.assertLessEqual(vision_port, 60000)
+        self.assertEqual(xhttp_port, 443)
+        self.assertEqual(used, {vision_port})
+
     def test_manual_mode_uses_the_requested_ports(self):
         used = {42137}
 

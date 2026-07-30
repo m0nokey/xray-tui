@@ -2,6 +2,7 @@ import secrets
 
 PORT_MODE_RANDOM = "random"
 PORT_MODE_VISION_443 = "vision-443"
+PORT_MODE_XHTTP_443 = "xhttp-443"
 PORT_MODE_MANUAL = "manual"
 VISION_PORT = 443
 
@@ -49,6 +50,8 @@ def generated_vpn_ports(used, mode=PORT_MODE_RANDOM, manual_ports=None):
         return generated_port(used), generated_port(used)
     if mode == PORT_MODE_VISION_443:
         return VISION_PORT, generated_port(used)
+    if mode == PORT_MODE_XHTTP_443:
+        return generated_port(used), VISION_PORT
     if mode == PORT_MODE_MANUAL:
         if manual_ports is None or len(manual_ports) != 2:
             raise ValueError("manual mode requires Vision and XHTTP ports")

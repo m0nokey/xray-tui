@@ -163,15 +163,18 @@ After the domain screen, choose how VPN ports should be assigned:
 ```text
 Configure VPN ports
 
-1. Vision 443 + XHTTP random
-2. Both ports random (default)
-3. Enter both ports manually
+1. Vision + REALITY — TCP 443
+   XHTTP + REALITY — random port
+2. Both transports — random ports (default)
+3. XHTTP + REALITY — TCP 443
+   Vision + REALITY — random port
+4. Enter both Xray VPN ports manually
 ```
 
-The default is option `2`, which preserves the original behavior. Option `1`
-uses TCP port `443` for VLESS TCP Vision with REALITY and generates a separate
-high port for VLESS XHTTP. Option `3` lets you enter both ports yourself. The
-two manual ports must be different and must not overlap the generated SSH port.
+The default is option `2`, which preserves the original behavior. Options `1`
+and `3` use TCP port `443` for one transport and generate a separate port for
+the other. Option `4` lets you enter both ports yourself. The two manual ports
+must be different and must not overlap the generated SSH port.
 
 Then choose an optional DNS protection profile:
 

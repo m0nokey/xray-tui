@@ -93,7 +93,7 @@ parser.add_argument("--bootstrap-key")
 parser.add_argument("--server-name", default="github.com")
 parser.add_argument(
     "--port-mode",
-    choices=("random", "vision-443", "manual"),
+    choices=("random", "vision-443", "xhttp-443", "manual"),
     default="random",
 )
 parser.add_argument("--vision-port", type=int)
