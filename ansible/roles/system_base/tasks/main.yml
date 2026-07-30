@@ -86,7 +86,9 @@
     update_cache: true
   when:
     - ansible_facts.os_family == "Debian"
-    - system_base_debian_sources.changed | default(false) or system_base_default_sources_removed.changed | default(false)
+    - >-
+      system_base_debian_sources.changed | default(false)
+      or system_base_default_sources_removed.changed | default(false)
 
 - name: Install base packages
   ansible.builtin.apt:
@@ -109,7 +111,10 @@
 - name: Install Docker APT key
   ansible.builtin.shell: |
     set -euo pipefail
-    curl -fsSL --proto '=https' --tlsv1.3 https://download.docker.com/linux/debian/gpg \
+    curl -fsSL \
+      --proto '=https' \
+      --tlsv1.3 \
+      https://download.docker.com/linux/debian/gpg \
       | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod 0644 /etc/apt/keyrings/docker.gpg
   args:
@@ -144,7 +149,9 @@
     update_cache: true
   when:
     - ansible_facts.os_family == "Debian"
-    - system_base_docker_sources.changed or (system_base_debian_sources.changed | default(false))
+    - >-
+      system_base_docker_sources.changed
+      or (system_base_debian_sources.changed | default(false))
 
 - name: Install Docker and Compose plugin
   ansible.builtin.apt:
@@ -283,7 +290,9 @@
     name: xray-tui-os-updater.timer
     enabled: true
     state: started
-    daemon_reload: "{{ system_base_os_updater_service.changed or system_base_os_updater_timer.changed }}"
+    daemon_reload: >-
+      {{ system_base_os_updater_service.changed or
+         system_base_os_updater_timer.changed }}
   when: system_base_enable_os_updater | bool
 
 - name: Install Xray TUI Docker updater
@@ -298,7 +307,9 @@
 - name: Install Xray TUI Docker updater service
   ansible.builtin.template:
     src: docker-project-updater.service.j2
-    dest: "/etc/systemd/system/{{ system_base_docker_updater_name }}-docker-updater.service"
+    dest: >-
+      {{ '/etc/systemd/system/' ~ system_base_docker_updater_name
+         ~ '-docker-updater.service' }}
     owner: root
     group: root
     mode: "0644"
@@ -308,7 +319,9 @@
 - name: Install Xray TUI Docker updater timer
   ansible.builtin.template:
     src: docker-project-updater.timer.j2
-    dest: "/etc/systemd/system/{{ system_base_docker_updater_name }}-docker-updater.timer"
+    dest: >-
+      {{ '/etc/systemd/system/' ~ system_base_docker_updater_name
+         ~ '-docker-updater.timer' }}
     owner: root
     group: root
     mode: "0644"
@@ -320,5 +333,7 @@
     name: "{{ system_base_docker_updater_name }}-docker-updater.timer"
     enabled: true
     state: started
-    daemon_reload: "{{ system_base_docker_updater_service.changed or system_base_docker_updater_timer.changed }}"
+    daemon_reload: >-
+      {{ system_base_docker_updater_service.changed or
+         system_base_docker_updater_timer.changed }}
   when: system_base_enable_docker_updater | bool

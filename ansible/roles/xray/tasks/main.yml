@@ -10,11 +10,13 @@
       - xray_state.reality_public_key | length > 0
       - xray_state.reality_short_id | length > 0
       - xray_state.access_keys is sequence
-    fail_msg: Pass the encrypted local Xray state and SSH port with -e @state.yml.
+    fail_msg: >-
+      Pass the encrypted local Xray state and SSH port with -e @state.yml.
 
 - name: Select DNS protection profile
   ansible.builtin.set_fact:
-    xray_dns_profile: "{{ xray_state.dns_filter_profile | default('disabled') }}"
+    xray_dns_profile: >-
+      {{ xray_state.dns_filter_profile | default('disabled') }}
 
 - name: Validate DNS protection profile
   ansible.builtin.assert:
@@ -25,7 +27,10 @@
 - name: Select local-region traffic policy
   ansible.builtin.set_fact:
     xray_local_region_countries: >-
-      {{ xray_state.local_region_countries | default([]) | map('lower') | list }}
+      {{
+        xray_state.local_region_countries
+        | default([]) | map('lower') | list
+      }}
 
 - name: Validate local-region traffic policy
   ansible.builtin.assert:
@@ -40,8 +45,11 @@
 - name: Select DNS protection sources
   ansible.builtin.set_fact:
     xray_dns_source_names: >-
-      {{ xray_state.dns_filter_lists | default([]) if xray_dns_profile == 'custom'
-         else xray_dns_profiles[xray_dns_profile].source_names }}
+      {{
+        xray_state.dns_filter_lists | default([])
+        if xray_dns_profile == 'custom'
+        else xray_dns_profiles[xray_dns_profile].source_names
+      }}
 
 - name: Validate custom DNS protection sources
   ansible.builtin.assert:
@@ -61,7 +69,8 @@
 
 - name: Build selected DNS protection sources
   ansible.builtin.set_fact:
-    xray_dns_selected_sources: "{{ xray_dns_source_names | map('extract', xray_dns_sources) | list }}"
+    xray_dns_selected_sources: >-
+      {{ xray_dns_source_names | map('extract', xray_dns_sources) | list }}
 
 - name: Calculate selected DNS protection entries
   ansible.builtin.set_fact:
@@ -76,21 +85,39 @@
 - name: Estimate DNS protection memory
   ansible.builtin.set_fact:
     xray_dns_estimated_rpz_memory_mb: >-
-      {{ ((xray_dns_selected_entries | int) * (xray_dns_reference_memory_mb | int)
-          / (xray_dns_reference_entries | int)) | round(0, 'ceil') | int }}
+      {{
+        (
+          (xray_dns_selected_entries | int)
+          * (xray_dns_reference_memory_mb | int)
+          / (xray_dns_reference_entries | int)
+        ) | round(0, 'ceil') | int
+      }}
 
 - name: Calculate DNS runtime memory
   ansible.builtin.set_fact:
     xray_dns_runtime_memory_mb: >-
-      {{ (xray_dns_estimated_rpz_memory_mb | int) + (xray_dns_memory_headroom_mb | int) }}
+      {{
+        (xray_dns_estimated_rpz_memory_mb | int)
+        + (xray_dns_memory_headroom_mb | int)
+      }}
 
 - name: Calculate DNS protection resource floor
   ansible.builtin.set_fact:
-    xray_dns_required_vcpus: "{{ xray_dns_profiles[xray_dns_profile].min_vcpus | int }}"
+    xray_dns_required_vcpus: >-
+      {{ xray_dns_profiles[xray_dns_profile].min_vcpus | int }}
     xray_dns_required_memory_mb: >-
-      {{ [xray_dns_profiles[xray_dns_profile].min_memory_mb | int,
-          (((xray_dns_runtime_memory_mb | int) + (xray_dns_memory_round_mb | int) - 1)
-           // (xray_dns_memory_round_mb | int)) * (xray_dns_memory_round_mb | int)] | max }}
+      {{
+        [
+          xray_dns_profiles[xray_dns_profile].min_memory_mb | int,
+          (
+            (
+              (xray_dns_runtime_memory_mb | int)
+              + (xray_dns_memory_round_mb | int)
+              - 1
+            ) // (xray_dns_memory_round_mb | int)
+          ) * (xray_dns_memory_round_mb | int)
+        ] | max
+      }}
 
 - name: Validate VPS resources for DNS protection
   ansible.builtin.assert:
@@ -101,7 +128,8 @@
       DNS profile '{{ xray_dns_profile }}' requires at least
       {{ xray_dns_required_vcpus }} vCPU and
       {{ xray_dns_required_memory_mb }} MB RAM.
-      The selected sources contain approximately {{ xray_dns_selected_entries }} entries
+      The selected sources contain approximately
+      {{ xray_dns_selected_entries }} entries
       and require about {{ xray_dns_estimated_rpz_memory_mb }} MB for RPZ data.
       Detected {{ ansible_facts.processor_vcpus }} vCPU and
       {{ ansible_facts.memtotal_mb }} MB RAM.
@@ -201,8 +229,13 @@
 - name: Select Unbound container state
   ansible.builtin.set_fact:
     xray_unbound_running: >-
-      {{ (xray_unbound_container_info.exists | default(false) | bool)
-         and (xray_unbound_container_info.container.State.Running | default(false) | bool) }}
+      {{
+        (xray_unbound_container_info.exists | default(false) | bool)
+        and (
+          xray_unbound_container_info.container.State.Running
+          | default(false) | bool
+        )
+      }}
   when: xray_dns_profile != 'disabled'
 
 - name: Validate running Unbound configuration

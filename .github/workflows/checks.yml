@@ -67,7 +67,9 @@ jobs:
         run: python -m compileall -q scripts
 
       - name: Run Python state tests
-        run: python -m unittest discover --start-directory tests --pattern 'test_*.py' --verbose
+        run: >-
+          python -m unittest discover --start-directory tests
+          --pattern 'test_*.py' --verbose
 
       - name: Run Ansible template tests
         run: bash tests/test_ansible_templates.sh
@@ -153,10 +155,15 @@ jobs:
           assert service["mem_limit"] in ("256m", "268435456", 268435456)
           assert float(service["cpus"]) == 0.5
           assert any(item.startswith("/tmp:") for item in service["tmpfs"])
-          assert all("docker.sock" not in volume.get("source", "") for volume in service["volumes"])
+          assert all(
+              "docker.sock" not in volume.get("source", "")
+              for volume in service["volumes"]
+          )
           PY
 
       - name: Scan controller image with Trivy
+        # Pinned action commit and version comment exceed 80 columns.
+        # yamllint disable-line rule:line-length
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: xray-tui:ci
@@ -167,6 +174,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Report server Xray HIGH and CRITICAL findings
+        # yamllint disable-line rule:line-length
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ghcr.io/xtls/xray-core:latest
@@ -177,6 +185,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Block critical server Xray findings
+        # yamllint disable-line rule:line-length
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ghcr.io/xtls/xray-core:latest
@@ -187,6 +196,7 @@ jobs:
           severity: CRITICAL
 
       - name: Scan server Unbound image with Trivy
+        # yamllint disable-line rule:line-length
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: xray-tui-unbound:ci
@@ -197,6 +207,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Scan repository with Trivy
+        # yamllint disable-line rule:line-length
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: fs
@@ -209,6 +220,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Scan repository configuration with Trivy
+        # yamllint disable-line rule:line-length
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: config

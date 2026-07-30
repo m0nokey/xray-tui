@@ -19,4 +19,7 @@
 
     - name: Report VPS resources
       ansible.builtin.debug:
-        msg: "XRAY_RESOURCE_FACTS vcpus={{ ansible_facts.processor_vcpus }} ram_mb={{ ansible_facts.memtotal_mb }}"
+        msg: >-
+          XRAY_RESOURCE_FACTS
+          vcpus={{ ansible_facts.processor_vcpus }}
+          ram_mb={{ ansible_facts.memtotal_mb }}

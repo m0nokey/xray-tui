@@ -39,10 +39,12 @@
     - name: Require an original SSH configuration backup
       ansible.builtin.assert:
         that:
-          - xray_tui_ssh_config_backup_current.stat.exists or xray_tui_partial_cleanup
+          - >-
+            xray_tui_ssh_config_backup_current.stat.exists
+            or xray_tui_partial_cleanup
         fail_msg: >-
-          The original SSH configuration backup is missing. Remote cleanup was stopped
-          to avoid leaving the VPS locked to Xray TUI SSH settings.
+          The original SSH configuration backup is missing. Remote cleanup was
+          stopped to avoid leaving the VPS locked to Xray TUI SSH settings.
   tasks:
     - name: Check whether the Xray Compose project exists
       ansible.builtin.stat:
@@ -68,10 +70,18 @@
     - name: Stop Xray TUI updater services
       ansible.builtin.shell: |
         set -euo pipefail
-        systemctl disable --now xray-docker-updater.timer xray-docker-updater.service 2>/dev/null || true
-        systemctl disable --now xray-tui-os-updater.timer xray-tui-os-updater.service 2>/dev/null || true
-        systemctl stop xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true
-        systemctl reset-failed xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true
+        systemctl disable --now \
+          xray-docker-updater.timer \
+          xray-docker-updater.service 2>/dev/null || true
+        systemctl disable --now \
+          xray-tui-os-updater.timer \
+          xray-tui-os-updater.service 2>/dev/null || true
+        systemctl stop \
+          xray-tui-ssh-rollback.timer \
+          xray-tui-ssh-rollback.service 2>/dev/null || true
+        systemctl reset-failed \
+          xray-tui-ssh-rollback.timer \
+          xray-tui-ssh-rollback.service 2>/dev/null || true
       args:
         executable: /bin/bash
       changed_when: false
@@ -103,7 +113,10 @@
     - name: Remove Docker bridge interfaces
       ansible.builtin.shell: |
         set -euo pipefail
-        bridges="$(ip -o link show | awk -F': ' '$2 == "docker0" || $2 ~ /^br-[0-9a-f]{12}$/ {print $2}')"
+        bridges="$(
+          ip -o link show |
+            awk -F': ' '$2 == "docker0" || $2 ~ /^br-[0-9a-f]{12}$/ {print $2}'
+        )"
         if [[ -n "$bridges" ]]; then
           while IFS= read -r bridge; do
             [[ -n "$bridge" ]] || continue
@@ -176,8 +189,12 @@
     - name: Stop SSH rollback units before restoring the original configuration
       ansible.builtin.shell: |
         set -euo pipefail
-        systemctl stop xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true
-        systemctl reset-failed xray-tui-ssh-rollback.timer xray-tui-ssh-rollback.service 2>/dev/null || true
+        systemctl stop \
+          xray-tui-ssh-rollback.timer \
+          xray-tui-ssh-rollback.service 2>/dev/null || true
+        systemctl reset-failed \
+          xray-tui-ssh-rollback.timer \
+          xray-tui-ssh-rollback.service 2>/dev/null || true
       args:
         executable: /bin/bash
       changed_when: false
