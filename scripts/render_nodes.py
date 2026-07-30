@@ -231,11 +231,11 @@ def connectivity_lines(node, diagnostics):
     ssh_port = management.get("ssh_port") or management.get("management_port")
     ssh_state = "reachable" if management.get("ssh") == "connected" else "unavailable"
     lines = [
-        f"    {'OpenSSH':<34}TCP {str(ssh_port):<10}{ssh_state}",
+        f"    {'OpenSSH':<34}TCP {ssh_port!s:<10}{ssh_state}",
     ]
     for port, reachable in diagnostics["vpn"]:
         state = "reachable" if reachable else "unavailable"
-        lines.append(f"    {endpoint_label(node, port):<34}TCP {str(port):<10}{state}")
+        lines.append(f"    {endpoint_label(node, port):<34}TCP {port!s:<10}{state}")
     return lines
 
 
