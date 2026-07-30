@@ -46,6 +46,29 @@ It helps you:
 - git
 ```
 
+### Linux Docker access
+
+`xray-tui` does not need to be started with `sudo`.
+
+On Linux, the current user must have permission to access the Docker daemon.
+If Docker reports a permission error for `/var/run/docker.sock`, configure
+Docker access once:
+
+```sh
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker info
+```
+
+If the Docker service is not running:
+
+```sh
+sudo systemctl enable --now docker
+```
+
+Do not run `sudo bash run.sh`, because this can make the local Vault and
+controller files owned by `root`.
+
 ### VPS
 
 ```text
@@ -64,13 +87,13 @@ Release archives include a SHA-256 checksum and are the recommended way to run
 `xray-tui`.
 
 ```sh
-curl -fLO "https://github.com/m0nokey/xray-tui/releases/latest/download/xray-tui-latest.tar.gz"
-curl -fLO "https://github.com/m0nokey/xray-tui/releases/latest/download/SHA256SUMS"
-grep -F -- "xray-tui-latest.tar.gz" SHA256SUMS | sha256sum -c -
-tar -xzf xray-tui-latest.tar.gz
-release_dir="$(tar -tzf xray-tui-latest.tar.gz | awk -F/ 'NR == 1 {print $1; exit}')"
-cd "$release_dir"
-bash run.sh
+curl -fsSL --proto '=https' -O "https://github.com/m0nokey/xray-tui/releases/latest/download/xray-tui-latest.tar.gz" \
+&& curl -fsSL --proto '=https' -O "https://github.com/m0nokey/xray-tui/releases/latest/download/SHA256SUMS" \
+&& grep -F "xray-tui-latest.tar.gz" SHA256SUMS | sha256sum -c - \
+&& tar -xzf xray-tui-latest.tar.gz \
+&& cd "$(tar -tzf xray-tui-latest.tar.gz | sed -n '1s#/.*##p')" \
+&& bash run.sh \
+|| { printf '%s\n' 'Installation failed.' >&2; false; }
 ```
 
 The `releases/latest` link always points to the newest stable release. The
@@ -551,13 +574,7 @@ When you need to issue new keys, change settings, or remove a VPS, download the
 latest stable release archive and run it again. You do not need to keep the
 repository or the local controller image between runs.
 
-```sh
-curl -fLO "https://github.com/m0nokey/xray-tui/releases/latest/download/xray-tui-latest.tar.gz"
-tar -xzf xray-tui-latest.tar.gz
-release_dir="$(tar -tzf xray-tui-latest.tar.gz | awk -F/ 'NR == 1 {print $1; exit}')"
-cd "$release_dir"
-bash run.sh
-```
+Use the same verified Release installation commands from `Quick Start` above.
 
 `xray-tui` finds the existing Vault on the computer and asks for its password.
 After unlocking it, your VPS nodes, SSH access, VPN keys, and infrastructure
