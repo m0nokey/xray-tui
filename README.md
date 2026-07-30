@@ -92,8 +92,7 @@ curl -fsSL --proto '=https' -O "https://github.com/m0nokey/xray-tui/releases/lat
 && grep -F "xray-tui-latest.tar.gz" SHA256SUMS | sha256sum -c - \
 && tar -xzf xray-tui-latest.tar.gz \
 && cd "$(tar -tzf xray-tui-latest.tar.gz | sed -n '1s#/.*##p')" \
-&& bash run.sh \
-|| { printf '%s\n' 'Installation failed.' >&2; false; }
+&& bash run.sh
 ```
 
 The `releases/latest` link always points to the newest stable release. The
