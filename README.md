@@ -158,7 +158,22 @@ Press Enter to use the default value shown in [brackets].
 Enter domain [github.com]:
 ```
 
-After the domain screen, choose an optional DNS protection profile:
+After the domain screen, choose how VPN ports should be assigned:
+
+```text
+Configure VPN ports
+
+1. Vision 443 + XHTTP random
+2. Both ports random (default)
+3. Enter both ports manually
+```
+
+The default is option `2`, which preserves the original behavior. Option `1`
+uses TCP port `443` for VLESS TCP Vision with REALITY and generates a separate
+high port for VLESS XHTTP. Option `3` lets you enter both ports yourself. The
+two manual ports must be different and must not overlap the generated SSH port.
+
+Then choose an optional DNS protection profile:
 
 ```text
 Block ads and threats
@@ -210,9 +225,9 @@ is running.
 After a successful deployment, the manager saves the VPN ports, keys, and
 connection data in the encrypted Vault.
 
-By default, VLESS TCP Vision with REALITY uses TCP port `443`. VLESS XHTTP with
-REALITY uses a generated high TCP port. This follows the documented REALITY
-deployment pattern while preserving a separate alternative transport.
+New nodes use randomly generated high TCP ports by default. You can instead use
+TCP port `443` for VLESS TCP Vision and a generated high port for VLESS XHTTP, or
+enter both ports manually during setup.
 
 Existing nodes keep their current ports and are not changed automatically.
 
@@ -445,9 +460,13 @@ data can cause false positives.
 Each access key contains two paired client links:
 
 ```text
-- VLESS TCP Vision — TCP port 443
-- VLESS XHTTP — generated high TCP port
+- VLESS TCP Vision — configured port
+- VLESS XHTTP — configured port
 ```
+
+Both ports are generated randomly by default. The port mode can be changed when
+adding a node: use TCP `443` for Vision with a generated XHTTP port, or enter
+both ports manually.
 
 Deleting a key deletes both links together. Other keys are not changed.
 

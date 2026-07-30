@@ -1,5 +1,8 @@
 import secrets
 
+PORT_MODE_RANDOM = "random"
+PORT_MODE_VISION_443 = "vision-443"
+PORT_MODE_MANUAL = "manual"
 VISION_PORT = 443
 
 
@@ -41,5 +44,22 @@ def generated_port(used):
         return port
 
 
-def generated_vpn_ports(used):
-    return VISION_PORT, generated_port(used)
+def generated_vpn_ports(used, mode=PORT_MODE_RANDOM, manual_ports=None):
+    if mode == PORT_MODE_RANDOM:
+        return generated_port(used), generated_port(used)
+    if mode == PORT_MODE_VISION_443:
+        return VISION_PORT, generated_port(used)
+    if mode == PORT_MODE_MANUAL:
+        if manual_ports is None or len(manual_ports) != 2:
+            raise ValueError("manual mode requires Vision and XHTTP ports")
+        vision_port, xhttp_port = manual_ports
+        ports = (vision_port, xhttp_port)
+        if any(not isinstance(port, int) or not 1 <= port <= 65535 for port in ports):
+            raise ValueError("manual VPN ports must be between 1 and 65535")
+        if vision_port == xhttp_port:
+            raise ValueError("manual VPN ports must be different")
+        if any(port in used for port in ports):
+            raise ValueError("manual VPN ports must not overlap existing ports")
+        used.update(ports)
+        return ports
+    raise ValueError(f"unsupported VPN port mode: {mode}")

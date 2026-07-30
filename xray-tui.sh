@@ -242,6 +242,113 @@ add_node_domain_prompt() {
     done
 }
 
+add_node_port_mode_prompt() {
+    local choice vision_value xhttp_value error=''
+    while true; do
+        clear_screen
+        menu_heading "Add VPN server"
+        printf '%s\n' "Choose how the two VPN ports should be assigned."
+        [[ -n "$error" ]] && printf '%s\n' "$error"
+        echo
+        menu_option 1 "Vision 443 + XHTTP random"
+        menu_option 2 "Both ports random (default)"
+        menu_option 3 "Enter both ports manually"
+        echo
+        menu_control b back
+        menu_control m main
+        menu_control i info
+        menu_control x exit
+        echo
+        if ! read -r -e -p '?: ' choice; then
+            return 1
+        fi
+        case "$choice" in
+            '') choice=2 ;;
+            b|B) return 1 ;;
+            m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+            i|I) show_info general; continue ;;
+            x|X) exit_tui ;;
+        esac
+        case "$choice" in
+            1)
+                ADD_NODE_PORT_MODE=vision-443
+                ADD_NODE_VISION_PORT=''
+                ADD_NODE_XHTTP_PORT=''
+                return 0
+                ;;
+            2)
+                ADD_NODE_PORT_MODE=random
+                ADD_NODE_VISION_PORT=''
+                ADD_NODE_XHTTP_PORT=''
+                return 0
+                ;;
+            3)
+                while true; do
+                    clear_screen
+                    menu_heading "Add VPN server"
+                    printf '%s\n' "Enter the VLESS TCP Vision port."
+                    printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Vision commonly uses TCP 443." "$COLOR_RESET"
+                    echo
+                    menu_control b back
+                    menu_control m main
+                    menu_control i info
+                    menu_control x exit
+                    echo
+                    if ! read -r -e -p 'Vision port: ' vision_value; then
+                        return 1
+                    fi
+                    case "$vision_value" in
+                        b|B) break ;;
+                        m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+                        i|I) show_info general; continue ;;
+                        x|X) exit_tui ;;
+                    esac
+                    if [[ "$vision_value" =~ ^[0-9]+$ ]] && ((10#$vision_value >= 1 && 10#$vision_value <= 65535)); then
+                        error=''
+                        break
+                    fi
+                    error="Invalid port. Enter a number from 1 to 65535."
+                    continue
+                done
+                [[ "$vision_value" == b || "$vision_value" == B ]] && continue
+                while true; do
+                    clear_screen
+                    menu_heading "Add VPN server"
+                    printf '%s\n' "Enter the VLESS XHTTP port."
+                    [[ -n "$error" ]] && printf '%s\n' "$error"
+                    echo
+                    menu_control b back
+                    menu_control m main
+                    menu_control i info
+                    menu_control x exit
+                    echo
+                    if ! read -r -e -p 'XHTTP port: ' xhttp_value; then
+                        return 1
+                    fi
+                    case "$xhttp_value" in
+                        b|B) continue 2 ;;
+                        m|M) MAIN_MENU_REQUESTED=1; return 1 ;;
+                        i|I) show_info general; continue ;;
+                        x|X) exit_tui ;;
+                    esac
+                    if [[ "$xhttp_value" =~ ^[0-9]+$ ]] && ((10#$xhttp_value >= 1 && 10#$xhttp_value <= 65535)); then
+                        if [[ "$xhttp_value" == "$vision_value" ]]; then
+                            error="Vision and XHTTP ports must be different."
+                            continue
+                        fi
+                        ADD_NODE_PORT_MODE=manual
+                        ADD_NODE_VISION_PORT=$((10#$vision_value))
+                        ADD_NODE_XHTTP_PORT=$((10#$xhttp_value))
+                        return 0
+                    fi
+                    error="Invalid port. Enter a number from 1 to 65535."
+                done
+                ;;
+            *) error="Invalid choice. Enter 1, 2, 3, b, m, i, or x." ;;
+        esac
+    done
+}
+
 review_node_connection() {
     local choice
     while true; do

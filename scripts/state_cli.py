@@ -92,6 +92,13 @@ parser.add_argument("args", nargs="*")
 parser.add_argument("--bootstrap-key")
 parser.add_argument("--server-name", default="github.com")
 parser.add_argument(
+    "--port-mode",
+    choices=("random", "vision-443", "manual"),
+    default="random",
+)
+parser.add_argument("--vision-port", type=int)
+parser.add_argument("--xhttp-port", type=int)
+parser.add_argument(
     "--dns-profile",
     choices=("disabled", "minimal", "optimal", "full", "maximum", "custom"),
     default="disabled",
@@ -243,7 +250,13 @@ elif opts.action == "add-node":
         raise SystemExit("server name must be a valid ASCII hostname")
     used_ports = set()
     ssh_port = generated_port(used_ports)
-    vision_port, xhttp_port = generated_vpn_ports(used_ports)
+    manual_ports = None
+    if opts.port_mode == "manual":
+        manual_ports = (opts.vision_port, opts.xhttp_port)
+    try:
+        vision_port, xhttp_port = generated_vpn_ports(used_ports, opts.port_mode, manual_ports)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     vision_uuid = str(uuid.uuid4())
     nodes[name] = {
         "name": name,
@@ -264,6 +277,7 @@ elif opts.action == "add-node":
         "ssh_host_fingerprint": "",
         "xray": {
             "vision_port": vision_port, "xhttp_port": xhttp_port,
+            "port_mode": opts.port_mode,
             "reality_private_key": reality_private,
             "reality_public_key": reality_public,
             "reality_short_id": secrets.token_hex(8),

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 add_node() {
-    local name host server_name dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port review_status probe_rc auth_action internet_action
+    local name host server_name port_mode vision_port xhttp_port dns_profile dns_lists bootstrap_user bootstrap_password bootstrap_port before after existing_node recovery_rc saved_bootstrap_user saved_bootstrap_port review_status probe_rc auth_action internet_action
+    local -a port_args=()
     while true; do
         clear_screen
         printf '%s\n' "Checking local Internet connection..."
@@ -162,6 +163,18 @@ add_node() {
     fi
     server_name="$ADD_NODE_SERVER_NAME"
     unset ADD_NODE_SERVER_NAME
+    if ! add_node_port_mode_prompt; then
+        unset bootstrap_password
+        rm -f "$before" "$after"
+        return 0
+    fi
+    port_mode="$ADD_NODE_PORT_MODE"
+    vision_port="${ADD_NODE_VISION_PORT:-}"
+    xhttp_port="${ADD_NODE_XHTTP_PORT:-}"
+    unset ADD_NODE_PORT_MODE ADD_NODE_VISION_PORT ADD_NODE_XHTTP_PORT
+    if [[ "$port_mode" == manual ]]; then
+        port_args=(--vision-port "$vision_port" --xhttp-port "$xhttp_port")
+    fi
     unset DNS_FILTER_CURRENT_PROFILE
     unset DNS_FILTER_LISTS
     if ! select_dns_profile initial; then
@@ -173,7 +186,7 @@ add_node() {
     dns_lists="${DNS_FILTER_LISTS:-}"
 
     name="auto"
-    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" --dns-profile "$dns_profile" --dns-lists "$dns_lists" add-node "$name" "$host" <"$before" >"$after"; then
+    if ! XRAY_BOOTSTRAP_USER="$bootstrap_user" XRAY_BOOTSTRAP_PASSWORD="$bootstrap_password" XRAY_BOOTSTRAP_PORT="$bootstrap_port" python3 "$ROOT_DIR/scripts/state_cli.py" --server-name "$server_name" --port-mode "$port_mode" "${port_args[@]}" --dns-profile "$dns_profile" --dns-lists "$dns_lists" add-node "$name" "$host" <"$before" >"$after"; then
         rm -f "$before" "$after"
         return 1
     fi

@@ -37,15 +37,40 @@ class PortGenerationTests(unittest.TestCase):
                 for left, right in zip(digits, digits[1:])
             ))
 
-    def test_vision_uses_https_port_and_xhttp_uses_generated_port(self):
+    def test_default_mode_generates_both_ports(self):
         used = set()
 
         vision_port, xhttp_port = generated_vpn_ports(used)
+
+        self.assertGreaterEqual(vision_port, 20000)
+        self.assertLessEqual(vision_port, 60000)
+        self.assertGreaterEqual(xhttp_port, 20000)
+        self.assertLessEqual(xhttp_port, 60000)
+        self.assertEqual(used, {vision_port, xhttp_port})
+
+    def test_vision_443_mode_uses_https_port_and_generates_xhttp(self):
+        used = set()
+
+        vision_port, xhttp_port = generated_vpn_ports(used, "vision-443")
 
         self.assertEqual(vision_port, 443)
         self.assertGreaterEqual(xhttp_port, 20000)
         self.assertLessEqual(xhttp_port, 60000)
         self.assertEqual(used, {xhttp_port})
+
+    def test_manual_mode_uses_the_requested_ports(self):
+        used = {42137}
+
+        ports = generated_vpn_ports(used, "manual", (443, 8443))
+
+        self.assertEqual(ports, (443, 8443))
+        self.assertEqual(used, {42137, 443, 8443})
+
+    def test_manual_mode_rejects_invalid_port_pairs(self):
+        for ports in ((443, 443), (0, 8443), (443, 65536), (42137, 8443)):
+            with self.subTest(ports=ports):
+                with self.assertRaises(ValueError):
+                    generated_vpn_ports({42137}, "manual", ports)
 
 
 class StateCliTests(unittest.TestCase):
