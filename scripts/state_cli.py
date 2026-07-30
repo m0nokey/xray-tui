@@ -107,11 +107,7 @@ def _bot_port_pattern(port):
         for index in range(len(value) - 3)
     ):
         return True
-    return len(value) >= 4 and any(
-        value[index] == value[index + 2]
-        and value[index + 1] == value[index + 3]
-        for index in range(len(value) - 3)
-    )
+    return False
 
 
 def generated_port(used):

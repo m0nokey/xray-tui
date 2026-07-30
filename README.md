@@ -454,6 +454,11 @@ with their UTC timestamp and full path. Automatic recovery copies are internal
 and are not shown. `Restore encrypted state` lets you select a user archive
 by number, so you do not need to enter a path manually.
 
+If the Vault file is damaged or decrypts to invalid state, xray-tui does not
+delete it or create an empty replacement. It moves the original to a timestamped
+`.corrupt.*` file, keeps it protected with owner-only permissions, and stops
+until a valid backup is restored.
+
 The complete local structure is:
 
 ```text

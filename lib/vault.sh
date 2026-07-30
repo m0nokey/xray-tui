@@ -70,15 +70,17 @@ ensure_vault_password_file() {
     fi
 
     if ! vault_ciphertext_valid; then
-        rm -f "$VAULT_FILE" "$VAULT_PASSWORD_FILE"
+        quarantine_vault_file || return 1
+        if [[ -n "$VAULT_PASSWORD_FILE" ]]; then
+            rm -f -- "$VAULT_PASSWORD_FILE"
+        fi
         VAULT_PASSWORD_FILE=""
         clear_screen
-        printf '%s\n' "The existing Vault is damaged and was deleted." >&2
-        printf '%s\n' "A new encrypted Vault will be created now." >&2
+        printf '%s\n' "The existing Vault appears to be damaged." >&2
+        printf '%s\n' "The original file was preserved and moved aside." >&2
+        printf '%s\n' "Restore an encrypted backup before continuing." >&2
         sleep 2.5
-        create_vault_password_file || return 1
-        clear_screen
-        return 0
+        return 1
     fi
 
     attempt=0
@@ -92,7 +94,7 @@ ensure_vault_password_file() {
         VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
         chmod 600 "$VAULT_PASSWORD_FILE"
         if ! read_secret "Vault password (attempt ${attempt}/3): "; then
-            rm -f "$VAULT_PASSWORD_FILE"
+            rm -f -- "$VAULT_PASSWORD_FILE"
             VAULT_PASSWORD_FILE=""
             continue
         fi
@@ -111,14 +113,13 @@ ensure_vault_password_file() {
             rm -f "$checked_state"
             rm -f "$VAULT_PASSWORD_FILE"
             VAULT_PASSWORD_FILE=""
-            rm -f "$VAULT_FILE"
+            quarantine_vault_file || return 1
             clear_screen
-            printf '%s\n' "The existing Vault state is damaged and was deleted." >&2
-            printf '%s\n' "A new encrypted Vault will be created now." >&2
+            printf '%s\n' "The decrypted Vault state is invalid." >&2
+            printf '%s\n' "The original file was preserved and moved aside." >&2
+            printf '%s\n' "Restore an encrypted backup before continuing." >&2
             sleep 2.5
-            create_vault_password_file || return 1
-            clear_screen
-            return 0
+            return 1
         fi
         rm -f "$checked_state"
         rm -f "$VAULT_PASSWORD_FILE"
@@ -173,14 +174,35 @@ if not isinstance(state, dict) or not isinstance(state.get("nodes"), dict):
 PY
 }
 
+quarantine_vault_file() {
+    local timestamp quarantine_path suffix=0
+    [[ -f "$VAULT_FILE" ]] || return 1
+
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)" || return 1
+    quarantine_path="${VAULT_FILE}.corrupt.${timestamp}"
+    while [[ -e "$quarantine_path" ]]; do
+        suffix=$((suffix + 1))
+        quarantine_path="${VAULT_FILE}.corrupt.${timestamp}.${suffix}"
+    done
+
+    if ! mv -- "$VAULT_FILE" "$quarantine_path"; then
+        printf '%s\n' "Unable to preserve the damaged Vault file." >&2
+        return 1
+    fi
+    chmod 600 "$quarantine_path" || return 1
+    QUARANTINED_VAULT_FILE="$quarantine_path"
+    return 0
+}
+
 vault_ciphertext_valid() {
     [[ -s "$VAULT_FILE" ]] || return 1
     awk '
         NR == 1 {
             fields = split($0, header, ";")
-            if (fields != 3 || header[1] != "$ANSIBLE_VAULT" ||
+            if (fields < 3 || fields > 4 || header[1] != "$ANSIBLE_VAULT" ||
                 header[2] !~ /^[0-9]+[.][0-9]+$/ ||
-                header[3] !~ /^[A-Za-z0-9_-]+$/) bad = 1
+                header[3] !~ /^[A-Za-z0-9_-]+$/ ||
+                (fields == 4 && header[4] !~ /^[A-Za-z0-9_-]+$/)) bad = 1
             next
         }
         {
@@ -224,7 +246,7 @@ read_vault_state() {
         rm -f "$output"
         show_result_screen \
             "Unable to read the encrypted Vault state." \
-            "Restore a valid backup or delete the invalid Vault before continuing." \
+            "Restore a valid backup or inspect the quarantined Vault before continuing." \
             "The Vault was not changed."
         return 1
     fi
