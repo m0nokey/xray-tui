@@ -1,7 +1,6 @@
 import secrets
 
-
-XHTTP_PORT = 443
+VISION_PORT = 443
 
 
 def bot_port_pattern(port):
@@ -43,4 +42,4 @@ def generated_port(used):
 
 
 def generated_vpn_ports(used):
-    return generated_port(used), XHTTP_PORT
+    return VISION_PORT, generated_port(used)

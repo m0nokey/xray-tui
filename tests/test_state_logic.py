@@ -37,15 +37,15 @@ class PortGenerationTests(unittest.TestCase):
                 for left, right in zip(digits, digits[1:])
             ))
 
-    def test_xhttp_uses_https_port_and_vision_uses_generated_port(self):
+    def test_vision_uses_https_port_and_xhttp_uses_generated_port(self):
         used = set()
 
         vision_port, xhttp_port = generated_vpn_ports(used)
 
-        self.assertGreaterEqual(vision_port, 20000)
-        self.assertLessEqual(vision_port, 60000)
-        self.assertEqual(xhttp_port, 443)
-        self.assertEqual(used, {vision_port})
+        self.assertEqual(vision_port, 443)
+        self.assertGreaterEqual(xhttp_port, 20000)
+        self.assertLessEqual(xhttp_port, 60000)
+        self.assertEqual(used, {xhttp_port})
 
 
 class StateCliTests(unittest.TestCase):
