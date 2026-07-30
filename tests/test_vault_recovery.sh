@@ -4,6 +4,9 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_HOME="$(mktemp -d)"
 trap 'rm -rf "$TEST_HOME"' EXIT
+TMPDIR="$TEST_HOME/runtime"
+mkdir -m 700 "$TMPDIR"
+export TMPDIR
 
 clear_screen() { :; }
 sleep() { :; }
@@ -42,6 +45,8 @@ read_secret() {
 ensure_vault_password_file
 [[ -f "$VAULT_FILE" ]]
 [[ -f "$VAULT_PASSWORD_FILE" ]]
+[[ "$VAULT_PASSWORD_FILE" == "$TMPDIR"/* ]]
+[[ "$(stat -c '%a' "$VAULT_PASSWORD_FILE")" == 600 ]]
 rm -f "$VAULT_PASSWORD_FILE"
 VAULT_PASSWORD_FILE=""
 

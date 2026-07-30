@@ -48,7 +48,7 @@ create_vault_password_file() {
             sleep 1.5
             continue
         fi
-        VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
+        VAULT_PASSWORD_FILE="$(mktemp "${TMPDIR:-/tmp}/xray-vault-password.XXXXXX")"
         chmod 600 "$VAULT_PASSWORD_FILE"
         printf '%s\n' "$password" >"$VAULT_PASSWORD_FILE"
         unset password password_confirm
@@ -91,7 +91,7 @@ ensure_vault_password_file() {
         printf '%s\n' "It contains saved VPS access data and VPN keys." >&2
         printf '%s\n' "Enter the Vault password to unlock it." >&2
         printf '\n' >&2
-        VAULT_PASSWORD_FILE="$(mktemp /tmp/xray-vault-password.XXXXXX)"
+        VAULT_PASSWORD_FILE="$(mktemp "${TMPDIR:-/tmp}/xray-vault-password.XXXXXX")"
         chmod 600 "$VAULT_PASSWORD_FILE"
         if ! read_secret "Vault password (attempt ${attempt}/3): "; then
             rm -f -- "$VAULT_PASSWORD_FILE"
@@ -101,7 +101,7 @@ ensure_vault_password_file() {
         password="$REPLY"
         printf '%s\n' "$password" >"$VAULT_PASSWORD_FILE"
         unset password
-        checked_state="$(mktemp /tmp/xray-vault-check.XXXXXX)"
+        checked_state="$(mktemp "${TMPDIR:-/tmp}/xray-vault-check.XXXXXX")"
         vault_view_status=0
         ansible-vault view --vault-password-file "$VAULT_PASSWORD_FILE" "$VAULT_FILE" >"$checked_state" 2>/dev/null || vault_view_status=$?
         if [[ "$vault_view_status" == 0 ]]; then
