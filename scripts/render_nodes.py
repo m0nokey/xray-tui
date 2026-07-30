@@ -217,58 +217,112 @@ def node_status(node):
     return node_diagnostics(node)["status"]
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--check", action="store_true")
-parser.add_argument("--node")
-args = parser.parse_args()
-data = json.load(__import__("sys").stdin)
-nodes = data.get("nodes", {})
-if args.node:
-    nodes = {args.node: nodes[args.node]} if args.node in nodes else {}
+def endpoint_label(node, port):
+    xray = node.get("xray", {})
+    if port == xray.get("vision_port"):
+        return "VLESS TCP Vision + REALITY"
+    if port == xray.get("xhttp_port"):
+        return "VLESS XHTTP + REALITY packet-up"
+    return "VPN endpoint"
 
-print()
-print(color("  Node Management:", BLUE))
-print()
-if not nodes:
-    print("  No VPN nodes installed.")
-else:
-    rows = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, max(1, len(nodes)))) as pool:
-        statuses = {}
-        if args.check:
-            futures = {pool.submit(node_diagnostics, node): name for name, node in nodes.items()}
-            statuses = {
-                futures[future]: future.result()
-                for future in concurrent.futures.as_completed(futures)
-            }
-        for name, node in nodes.items():
-            created = node.get("created_at", "N/A")
-            try:
-                created = datetime.fromisoformat(created.replace("Z", "+00:00")).strftime("%Y-%m-%d")
-            except (AttributeError, ValueError):
-                pass
-            provider = node.get("provider", "N/A")
-            rows.append((node.get("host", "N/A"), node.get("country", "N/A"), created,
-                         statuses.get(name, {}).get("status", node.get("status", "Unknown")),
-                         provider, name))
 
-    headers = ("IP", "STATUS", "COUNTRY", "CREATED", "PROVIDER")
-    values = [(host, status, country, created, provider)
-              for host, country, created, status, provider, _ in rows]
-    widths = [max(len(headers[i]), *(len(row[i]) for row in values)) for i in range(5)]
-    number_width = len(str(len(rows)))
-    row_prefix = lambda number: f"  {number:>{number_width}}.   "
-    print(color(" " * len(row_prefix(1)) + "   ".join(headers[i].ljust(widths[i]) for i in range(5)).rstrip(), BLUE))
+def connectivity_lines(node, diagnostics):
+    management = diagnostics["management"]
+    ssh_port = management.get("ssh_port") or management.get("management_port")
+    ssh_state = "reachable" if management.get("ssh") == "connected" else "unavailable"
+    lines = [
+        f"    {'OpenSSH':<34}TCP {str(ssh_port):<10}{ssh_state}",
+    ]
+    for port, reachable in diagnostics["vpn"]:
+        state = "reachable" if reachable else "unavailable"
+        lines.append(f"    {endpoint_label(node, port):<34}TCP {str(port):<10}{state}")
+    return lines
+
+
+def firewall_hint(diagnostics):
+    management = diagnostics["management"]
+    vpn = diagnostics["vpn"]
+    return (
+        management.get("ssh") == "connected"
+        and management.get("xray") == "xray-running"
+        and len(vpn) == 2
+        and not any(reachable for _, reachable in vpn)
+    )
+
+
+def print_node_details(node, diagnostics):
     print()
-    for index, (host, country, created, status, provider, _) in enumerate(rows, 1):
-        values = (host, status, country, created, provider)
-        row = "   ".join(values[i].ljust(widths[i]) for i in range(5)).rstrip()
-        status_start = row.find(status)
-        status_end = status_start + len(status)
-        colored_row = (
-            row[:status_start]
-            + color(row[status_start:status_end], status_color(status))
-            + row[status_end:]
-        )
-        print(row_prefix(index) + colored_row)
-print()
+    print("  Connectivity:")
+    for line in connectivity_lines(node, diagnostics):
+        print(line)
+    if firewall_hint(diagnostics):
+        ports = ", ".join(str(port) for port, _ in diagnostics["vpn"])
+        print()
+        print("  SSH is reachable and Xray is running, but both VPN ports are blocked.")
+        print("  Check the VPS provider firewall/security group.")
+        print(f"  Allow inbound TCP ports: {ports}.")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--node")
+    args = parser.parse_args()
+    data = json.load(__import__("sys").stdin)
+    nodes = data.get("nodes", {})
+    if args.node:
+        nodes = {args.node: nodes[args.node]} if args.node in nodes else {}
+
+    print()
+    print(color("  Node Management:", BLUE))
+    print()
+    if not nodes:
+        print("  No VPN nodes installed.")
+    else:
+        rows = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, max(1, len(nodes)))) as pool:
+            statuses = {}
+            if args.check:
+                futures = {pool.submit(node_diagnostics, node): name for name, node in nodes.items()}
+                statuses = {
+                    futures[future]: future.result()
+                    for future in concurrent.futures.as_completed(futures)
+                }
+            for name, node in nodes.items():
+                created = node.get("created_at", "N/A")
+                try:
+                    created = datetime.fromisoformat(created.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+                except (AttributeError, ValueError):
+                    pass
+                provider = node.get("provider", "N/A")
+                rows.append((node.get("host", "N/A"), node.get("country", "N/A"), created,
+                             statuses.get(name, {}).get("status", node.get("status", "Unknown")),
+                             provider, name))
+
+        headers = ("IP", "STATUS", "COUNTRY", "CREATED", "PROVIDER")
+        values = [(host, status, country, created, provider)
+                  for host, country, created, status, provider, _ in rows]
+        widths = [max(len(headers[i]), *(len(row[i]) for row in values)) for i in range(5)]
+        number_width = len(str(len(rows)))
+        row_prefix = lambda number: f"  {number:>{number_width}}.   "
+        print(color(" " * len(row_prefix(1)) + "   ".join(headers[i].ljust(widths[i]) for i in range(5)).rstrip(), BLUE))
+        print()
+        for index, (host, country, created, status, provider, _) in enumerate(rows, 1):
+            values = (host, status, country, created, provider)
+            row = "   ".join(values[i].ljust(widths[i]) for i in range(5)).rstrip()
+            status_start = row.find(status)
+            status_end = status_start + len(status)
+            colored_row = (
+                row[:status_start]
+                + color(row[status_start:status_end], status_color(status))
+                + row[status_end:]
+            )
+            print(row_prefix(index) + colored_row)
+
+        if args.node and args.check:
+            print_node_details(nodes[args.node], statuses[args.node])
+    print()
+
+
+if __name__ == "__main__":
+    main()

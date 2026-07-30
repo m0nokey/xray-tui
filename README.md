@@ -615,6 +615,10 @@ arbitrary binaries or unverified installation scripts.
 Repository sources and signatures are configured by Ansible during deployment
 and are used again during automatic updates.
 
+Every release is published only after the full CI pipeline succeeds. Release
+assets include an SPDX SBOM, and GitHub artifact attestations record the build
+provenance of the archives and checksum manifest.
+
 ### Floating Runtime Dependencies
 
 Runtime dependencies intentionally track supported upstream versions instead

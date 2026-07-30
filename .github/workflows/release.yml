@@ -12,12 +12,25 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  checks:
+    name: Run CI before release
+    uses: ./.github/workflows/checks.yml
+    permissions:
+      contents: read
+
   release:
     name: Build and publish release
+    needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
 
     steps:
       - name: Check out release tag
@@ -61,6 +74,35 @@ jobs:
           printf 'RELEASE_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
           printf 'RELEASE_LATEST_ARCHIVE=%s\n' \
             "$latest_archive" >> "$GITHUB_ENV"
+          printf 'RELEASE_SBOM=%s\n' \
+            "xray-tui-${RELEASE_TAG}.sbom.spdx.json" >> "$GITHUB_ENV"
+
+      - name: Generate release SBOM
+        # Pinned release commit; current release is v0.24.0.
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          file: ${{ env.RELEASE_ARCHIVE }}
+          format: spdx-json
+          output-file: ${{ env.RELEASE_SBOM }}
+          artifact-name: ${{ env.RELEASE_SBOM }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest release artifacts
+        # Pinned release commit; current release is v4.1.0.
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: |
+            ${{ github.workspace }}/${{ env.RELEASE_ARCHIVE }}
+            ${{ github.workspace }}/${{ env.RELEASE_LATEST_ARCHIVE }}
+            ${{ github.workspace }}/SHA256SUMS
+
+      - name: Attest release SBOM
+        # Pinned release commit; current release is v4.1.0.
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: ${{ github.workspace }}/${{ env.RELEASE_ARCHIVE }}
+          sbom-path: ${{ github.workspace }}/${{ env.RELEASE_SBOM }}
 
       - name: Create GitHub release and upload assets
         env:
@@ -95,6 +137,7 @@ jobs:
           for asset in \
             "$RELEASE_ARCHIVE" \
             "$RELEASE_LATEST_ARCHIVE" \
+            "$RELEASE_SBOM" \
             SHA256SUMS; do
             curl --fail-with-body --silent --show-error \
               --request POST \
