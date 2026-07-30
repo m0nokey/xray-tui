@@ -1,6 +1,9 @@
 import secrets
 
 
+XHTTP_PORT = 443
+
+
 def bot_port_pattern(port):
     value = str(port)
     if any(value[index] == value[index + 1] for index in range(len(value) - 1)):
@@ -37,3 +40,7 @@ def generated_port(used):
             continue
         used.add(port)
         return port
+
+
+def generated_vpn_ports(used):
+    return generated_port(used), XHTTP_PORT

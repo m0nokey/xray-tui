@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from nacl.public import PrivateKey
-from state_logic import generated_port
+from state_logic import generated_port, generated_vpn_ports
 
 COUNTRIES_FILE = Path(__file__).resolve().parent.parent / "data" / "countries.tsv"
 
@@ -243,7 +243,7 @@ elif opts.action == "add-node":
         raise SystemExit("server name must be a valid ASCII hostname")
     used_ports = set()
     ssh_port = generated_port(used_ports)
-    ports = [generated_port(used_ports) for _ in range(2)]
+    vision_port, xhttp_port = generated_vpn_ports(used_ports)
     vision_uuid = str(uuid.uuid4())
     nodes[name] = {
         "name": name,
@@ -263,7 +263,7 @@ elif opts.action == "add-node":
         "ssh_host_public_key": "",
         "ssh_host_fingerprint": "",
         "xray": {
-            "vision_port": ports[0], "xhttp_port": ports[1],
+            "vision_port": vision_port, "xhttp_port": xhttp_port,
             "reality_private_key": reality_private,
             "reality_public_key": reality_public,
             "reality_short_id": secrets.token_hex(8),

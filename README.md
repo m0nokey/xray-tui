@@ -210,6 +210,12 @@ is running.
 After a successful deployment, the manager saves the VPN ports, keys, and
 connection data in the encrypted Vault.
 
+By default, VLESS XHTTP with REALITY uses TCP port `443`. VLESS TCP Vision with
+REALITY uses a generated high TCP port. This keeps the HTTP-like transport on
+the standard HTTPS port while preserving a separate alternative transport.
+
+Existing nodes keep their current ports and are not changed automatically.
+
 ### Debug mode
 
 If an operation fails and you need the technical output for an issue, run:
@@ -439,8 +445,8 @@ data can cause false positives.
 Each access key contains two paired client links:
 
 ```text
-- VLESS TCP Vision
-- VLESS XHTTP
+- VLESS TCP Vision — generated high TCP port
+- VLESS XHTTP — TCP port 443
 ```
 
 Deleting a key deletes both links together. Other keys are not changed.

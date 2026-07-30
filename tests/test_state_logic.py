@@ -4,7 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from scripts.state_logic import bot_port_pattern, generated_port
+from scripts.state_logic import bot_port_pattern, generated_port, generated_vpn_ports
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -36,6 +36,16 @@ class PortGenerationTests(unittest.TestCase):
                 abs(int(left) - int(right)) >= 2
                 for left, right in zip(digits, digits[1:])
             ))
+
+    def test_xhttp_uses_https_port_and_vision_uses_generated_port(self):
+        used = set()
+
+        vision_port, xhttp_port = generated_vpn_ports(used)
+
+        self.assertGreaterEqual(vision_port, 20000)
+        self.assertLessEqual(vision_port, 60000)
+        self.assertEqual(xhttp_port, 443)
+        self.assertEqual(used, {vision_port})
 
 
 class StateCliTests(unittest.TestCase):
