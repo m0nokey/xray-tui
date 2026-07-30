@@ -58,6 +58,27 @@ It helps you:
 
 ## Quick Start
 
+For normal use, download the latest stable release from the
+[GitHub Releases page](https://github.com/m0nokey/xray-tui/releases/latest).
+Release archives include a SHA-256 checksum and are the recommended way to run
+`xray-tui`.
+
+```sh
+VERSION=v0.2.7
+curl -fLO "https://github.com/m0nokey/xray-tui/releases/download/${VERSION}/xray-tui-${VERSION}.tar.gz"
+curl -fLO "https://github.com/m0nokey/xray-tui/releases/download/${VERSION}/SHA256SUMS"
+grep -F -- "xray-tui-${VERSION}.tar.gz" SHA256SUMS | sha256sum -c -
+tar -xzf "xray-tui-${VERSION}.tar.gz"
+cd "xray-tui-${VERSION}"
+bash run.sh
+```
+
+Replace `v0.2.7` with the version shown on the Releases page. The permanent
+`releases/latest` link always points to the newest stable release; the README
+does not need to be changed for every patch release.
+
+For development and testing, use the `main` branch instead:
+
 ```sh
 git clone https://github.com/m0nokey/xray-tui.git
 cd xray-tui
@@ -527,12 +548,15 @@ $HOME/.local/state/xray/
 
 This directory contains the encrypted Vault with the infrastructure state.
 
-When you need to issue new keys, change settings, or remove a VPS, clone the
-latest project version and run it again:
+When you need to issue new keys, change settings, or remove a VPS, download the
+latest stable release archive and run it again. You do not need to keep the
+repository or the local controller image between runs.
 
 ```sh
-git clone https://github.com/m0nokey/xray-tui.git
-cd xray-tui
+VERSION=v0.2.7
+curl -fLO "https://github.com/m0nokey/xray-tui/releases/download/${VERSION}/xray-tui-${VERSION}.tar.gz"
+tar -xzf "xray-tui-${VERSION}.tar.gz"
+cd "xray-tui-${VERSION}"
 bash run.sh
 ```
 
@@ -575,6 +599,23 @@ arbitrary binaries or unverified installation scripts.
 
 Repository sources and signatures are configured by Ansible during deployment
 and are used again during automatic updates.
+
+### Floating Runtime Dependencies
+
+Runtime dependencies intentionally track supported upstream versions instead
+of being permanently pinned. This allows installations to continue receiving
+compatibility and security updates if maintenance of `xray-tui` stops.
+
+The current runtime model includes the upstream Xray image tag, current Alpine
+packages, the `community.docker` Ansible collection, Debian packages, and
+upstream DNS protection lists. CI vulnerability scanning, image smoke tests,
+VPN health checks, and automatic rollback reduce the risks of upstream changes.
+
+This is a deliberate supply-chain trade-off: floating dependencies improve
+long-term compatibility and unattended security updates, but reduce
+reproducibility and depend on upstream release quality. See
+[`SECURITY.md`](SECURITY.md) and the [threat model](docs/THREAT_MODEL.md) for
+the detailed assumptions and accepted risks.
 
 ## Technical Overview
 
