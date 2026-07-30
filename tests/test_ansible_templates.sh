@@ -21,6 +21,7 @@ render_dir = pathlib.Path(sys.argv[1])
 config = json.loads((render_dir / "config.json").read_text(encoding="utf-8"))
 compose = yaml.safe_load((render_dir / "compose.yml").read_text(encoding="utf-8"))
 unbound = (render_dir / "unbound.conf").read_text(encoding="utf-8")
+unbound_dockerfile = (render_dir / "unbound.Dockerfile").read_text(encoding="utf-8")
 
 assert len(config["inbounds"]) == 2
 assert config["inbounds"][0]["streamSettings"]["network"] == "tcp"
@@ -39,6 +40,8 @@ assert "forward-tls-upstream: yes" in unbound
 assert "forward-addr: 1.1.1.1@853#cloudflare-dns.com" in unbound
 assert "forward-addr: 94.140.14.140@853#unfiltered.adguard-dns.com" in unbound
 assert unbound.count("rpz-action-override: nxdomain") == 2
+assert unbound_dockerfile.startswith("FROM alpine:3.23\n")
+assert "unbound" in unbound_dockerfile
 PY
 
 printf '%s\n' 'Ansible template tests passed.'

@@ -111,6 +111,11 @@ jobs:
       - name: Build controller image
         run: docker build --pull --tag xray-tui:ci --file tui/Dockerfile .
 
+      - name: Build server Unbound image
+        run: >-
+          docker build --pull --tag xray-tui-unbound:ci
+          --file ansible/roles/xray/templates/unbound.Dockerfile.j2 .
+
       - name: Smoke-test controller image
         run: |
           docker run --rm --entrypoint /bin/bash xray-tui:ci -lc '
@@ -120,6 +125,16 @@ jobs:
             command -v ssh-keygen
             python3 -c "import nacl"
             ansible-galaxy collection list | grep -F community.docker
+          '
+
+      - name: Smoke-test server Unbound image
+        run: |
+          docker run --rm --entrypoint /bin/sh xray-tui-unbound:ci -c '
+            set -e
+            id unbound
+            command -v unbound
+            command -v unbound-checkconf
+            test -x /usr/local/bin/healthcheck
           '
 
       - name: Validate Compose security settings
@@ -155,6 +170,16 @@ jobs:
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ghcr.io/xtls/xray-core:latest
+          version: v0.72.0
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: Scan server Unbound image with Trivy
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: xray-tui-unbound:ci
           version: v0.72.0
           format: table
           exit-code: '1'

@@ -42,3 +42,4 @@
         - config.json.j2
         - compose.yml.j2
         - unbound.conf.j2
+        - unbound.Dockerfile.j2
