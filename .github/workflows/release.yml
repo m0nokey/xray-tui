@@ -69,40 +69,76 @@ jobs:
 
           tar -C "$staging" -czf "$archive" "$root"
           cp -- "$archive" "$latest_archive"
-          sha256sum "$archive" "$latest_archive" > SHA256SUMS
 
           printf 'RELEASE_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
           printf 'RELEASE_LATEST_ARCHIVE=%s\n' \
             "$latest_archive" >> "$GITHUB_ENV"
-          printf 'RELEASE_SBOM=%s\n' \
-            "xray-tui-${RELEASE_TAG}.sbom.spdx.json" >> "$GITHUB_ENV"
+          printf 'RELEASE_CONTROLLER_SBOM=%s\n' \
+            "xray-tui-${RELEASE_TAG}-controller.sbom.spdx.json" >> "$GITHUB_ENV"
+          printf 'RELEASE_UNBOUND_SBOM=%s\n' \
+            "xray-tui-${RELEASE_TAG}-unbound.sbom.spdx.json" >> "$GITHUB_ENV"
+          printf 'RELEASE_XRAY_SBOM=%s\n' \
+            "xray-tui-${RELEASE_TAG}-xray.sbom.spdx.json" >> "$GITHUB_ENV"
 
-      - name: Generate release SBOM
+      - name: Build runtime images for SBOM generation
+        run: |
+          docker build --pull --tag xray-tui:release --file tui/Dockerfile .
+          docker build --pull --tag xray-tui-unbound:release \
+            --file ansible/roles/xray/templates/unbound.Dockerfile.j2 .
+
+      - name: Generate controller image SBOM
         # Pinned release commit; current release is v0.24.0.
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          file: ${{ env.RELEASE_ARCHIVE }}
+          image: xray-tui:release
           format: spdx-json
-          output-file: ${{ env.RELEASE_SBOM }}
-          artifact-name: ${{ env.RELEASE_SBOM }}
+          output-file: ${{ env.RELEASE_CONTROLLER_SBOM }}
+          artifact-name: ${{ env.RELEASE_CONTROLLER_SBOM }}
           upload-artifact: false
           upload-release-assets: false
 
-      - name: Attest release artifacts
+      - name: Generate Unbound image SBOM
+        # Pinned release commit; current release is v0.24.0.
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: xray-tui-unbound:release
+          format: spdx-json
+          output-file: ${{ env.RELEASE_UNBOUND_SBOM }}
+          artifact-name: ${{ env.RELEASE_UNBOUND_SBOM }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate Xray image SBOM
+        # Pinned release commit; current release is v0.24.0.
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ghcr.io/xtls/xray-core:latest
+          format: spdx-json
+          output-file: ${{ env.RELEASE_XRAY_SBOM }}
+          artifact-name: ${{ env.RELEASE_XRAY_SBOM }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Create release checksum manifest
+        run: |
+          sha256sum \
+            "$RELEASE_ARCHIVE" \
+            "$RELEASE_LATEST_ARCHIVE" \
+            "$RELEASE_CONTROLLER_SBOM" \
+            "$RELEASE_UNBOUND_SBOM" \
+            "$RELEASE_XRAY_SBOM" > SHA256SUMS
+
+      - name: Attest release assets
         # Pinned release commit; current release is v4.1.0.
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-path: |
             ${{ github.workspace }}/${{ env.RELEASE_ARCHIVE }}
             ${{ github.workspace }}/${{ env.RELEASE_LATEST_ARCHIVE }}
+            ${{ github.workspace }}/${{ env.RELEASE_CONTROLLER_SBOM }}
+            ${{ github.workspace }}/${{ env.RELEASE_UNBOUND_SBOM }}
+            ${{ github.workspace }}/${{ env.RELEASE_XRAY_SBOM }}
             ${{ github.workspace }}/SHA256SUMS
-
-      - name: Attest release SBOM
-        # Pinned release commit; current release is v4.1.0.
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
-        with:
-          subject-path: ${{ github.workspace }}/${{ env.RELEASE_ARCHIVE }}
-          sbom-path: ${{ github.workspace }}/${{ env.RELEASE_SBOM }}
 
       - name: Create GitHub release and upload assets
         env:
@@ -137,7 +173,9 @@ jobs:
           for asset in \
             "$RELEASE_ARCHIVE" \
             "$RELEASE_LATEST_ARCHIVE" \
-            "$RELEASE_SBOM" \
+            "$RELEASE_CONTROLLER_SBOM" \
+            "$RELEASE_UNBOUND_SBOM" \
+            "$RELEASE_XRAY_SBOM" \
             SHA256SUMS; do
             curl --fail-with-body --silent --show-error \
               --request POST \
