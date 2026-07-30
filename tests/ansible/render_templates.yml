@@ -1,0 +1,44 @@
+---
+- name: Render Xray stack templates for CI validation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../ansible/roles/xray/defaults/main.yml
+  vars:
+    render_dir: /tmp/xray-tui-template-test
+    xray_server_name: example.com
+    xray_public_host: 203.0.113.10
+    xray_xhttp_path: /xhttp
+    xray_dns_profile: optimal
+    xray_dns_source_names:
+      - urlhaus
+      - hagezi-tif-mini
+    xray_local_region_countries:
+      - de
+      - ru
+    xray_state:
+      vision_port: 24680
+      xhttp_port: 35791
+      reality_private_key: test-reality-private-key
+      reality_short_id: 0123456789abcdef
+      access_keys:
+        - key_id: key-test
+          vision_uuid: 11111111-1111-4111-8111-111111111111
+          xhttp_uuid: 22222222-2222-4222-8222-222222222222
+  tasks:
+    - name: Create render directory
+      ansible.builtin.file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Render Xray stack templates
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../ansible/roles/xray/templates/{{ item }}"
+        dest: "{{ render_dir }}/{{ item | regex_replace('\\.j2$', '') }}"
+        mode: "0600"
+      loop:
+        - config.json.j2
+        - compose.yml.j2
+        - unbound.conf.j2

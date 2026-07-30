@@ -39,7 +39,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y shellcheck
           python -m pip install --disable-pip-version-check \
-            ansible-core ansible-lint yamllint ruff
+            ansible-core ansible-lint yamllint ruff pynacl
           ansible-galaxy collection install -r ansible/requirements.yml
 
       - name: Check Bash syntax
@@ -49,11 +49,13 @@ jobs:
           bash -n run.sh
           bash -n tests/test_navigation.sh
           bash -n tests/test_vault_recovery.sh
+          bash -n tests/test_ansible_templates.sh
 
       - name: Run ShellCheck
         run: >-
           shellcheck --severity=error xray-tui.sh lib/*.sh run.sh
           tests/test_navigation.sh tests/test_vault_recovery.sh
+          tests/test_ansible_templates.sh
 
       - name: Run TUI navigation smoke test
         run: bash tests/test_navigation.sh
@@ -64,11 +66,17 @@ jobs:
       - name: Check Python syntax
         run: python -m compileall -q scripts
 
+      - name: Run Python state tests
+        run: python -m unittest discover --start-directory tests --pattern 'test_*.py' --verbose
+
+      - name: Run Ansible template tests
+        run: bash tests/test_ansible_templates.sh
+
       - name: Run Ruff
         run: ruff check scripts
 
       - name: Run YAML lint
-        run: yamllint -d relaxed ansible .github/workflows
+        run: yamllint -d relaxed ansible tests/ansible .github/workflows
 
       - name: Check Ansible syntax
         run: |
@@ -89,3 +97,66 @@ jobs:
 
       - name: Check changed whitespace
         run: git diff --check HEAD^ HEAD
+
+  container-security:
+    name: Container and configuration security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Build controller image
+        run: docker build --pull --tag xray-tui:ci --file tui/Dockerfile .
+
+      - name: Smoke-test controller image
+        run: |
+          docker run --rm --entrypoint /bin/bash xray-tui:ci -lc '
+            set -euo pipefail
+            test "$(id -u)" != 0
+            command -v ansible-vault
+            command -v ssh-keygen
+            python3 -c "import nacl"
+            ansible-galaxy collection list | grep -F community.docker
+          '
+
+      - name: Validate Compose security settings
+        run: |
+          docker compose -f tui/compose.yml config --format json > compose.json
+          python3 - compose.json <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              service = json.load(stream)["services"]["xray-tui"]
+          assert service["read_only"] is True
+          assert service["cap_drop"] == ["ALL"]
+          assert "no-new-privileges:true" in service["security_opt"]
+          assert int(service["pids_limit"]) == 128
+          assert service["mem_limit"] in ("256m", "268435456", 268435456)
+          assert float(service["cpus"]) == 0.5
+          assert any(item.startswith("/tmp:") for item in service["tmpfs"])
+          assert all("docker.sock" not in volume.get("source", "") for volume in service["volumes"])
+          PY
+
+      - name: Scan controller image with Trivy
+        uses: aquasecurity/trivy-action@1f0aa582c8c8f5f7639610d6d38baddfea4fdcee # v0.9.2
+        with:
+          image-ref: xray-tui:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: Scan repository with Trivy
+        uses: aquasecurity/trivy-action@1f0aa582c8c8f5f7639610d6d38baddfea4fdcee # v0.9.2
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
