@@ -148,17 +148,17 @@ During deployment, normal mode shows a short stage-based progress screen:
 ```text
 Installing VPN server
 
-  [ 10%] Checking the VPS connection                    done
-  [ 20%] Checking VPS system                             done
-  [ 30%] Preparing VPS access                            done
-  [ 35%] Reconnecting after bootstrap                    done
-  [ 40%] Hardening SSH access                            done
-  [ 50%] Verifying hardened SSH access                   done
-  [ 60%] Installing Docker and system packages            done
-  [ 70%] Rendering VPN configuration                      done
-  [ 80%] Validating Xray and DNS configuration            done
-  [ 90%] Starting and checking VPN stack                  done
-  [100%] VPN server added successfully.                   done
+  [ 10%] Checking the VPS connection                  done
+  [ 20%] Checking VPS system                          done
+  [ 30%] Preparing VPS access                         done
+  [ 35%] Reconnecting after bootstrap                 done
+  [ 40%] Hardening SSH access                         done
+  [ 50%] Verifying hardened SSH access                done
+  [ 60%] Installing Docker and system packages        done
+  [ 70%] Rendering VPN configuration                  done
+  [ 80%] Validating Xray and DNS configuration        done
+  [ 90%] Starting and checking VPN stack              done
+  [100%] VPN server added successfully.               done
 ```
 
 The percentages represent deployment stages, not individual Ansible tasks.
