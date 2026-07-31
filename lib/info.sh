@@ -58,6 +58,7 @@ show_dns_profile_matrix() {
 
 show_info() {
     local topic="${1:-general}"
+    local context="${2:-selected}"
     local reset="$COLOR_RESET" blue="$COLOR_LINE" gray="$COLOR_MUTED"
     local green=$'\033[92m' yellow=$'\033[93m' red=$'\033[91m'
 
@@ -77,18 +78,25 @@ show_info() {
     clear_screen
     echo
     case "$topic" in
+        add-node)
+            printf '%b  Add VPN server:%b\n' "$blue" "$reset"
+            info_desc "Choose 1. Add VPN server to start installing Xray VPN on a new VPS."
+            info_desc "Follow the steps shown in the installation pipeline."
+            ;;
         status)
             printf '%b  Status:%b\n' "$blue" "$reset"
             printf '    %bActive%b           %bXray is running and both VPN ports are reachable.%b\n' "$green" "$reset" "$gray" "$reset"
             printf '    %bPartial%b          %bXray is running and only one VPN port is reachable.%b\n' "$yellow" "$reset" "$gray" "$reset"
             printf '    %bVPN unavailable%b  %bThe VPS responded, but Xray is not confirmed running.%b\n' "$red" "$reset" "$gray" "$reset"
             printf '    %bUnreachable%b      %bNo VPN or management port responded; DPI or a provider firewall may be involved.%b\n' "$red" "$reset" "$gray" "$reset"
-            echo
-            printf '%b  Selected server menu:%b\n' "$blue" "$reset"
-            printf '%s\n' "    1. Manage VPN server"
-            info_desc "       Open server operations, ad and threat blocking, country blocking, or deletion."
-            printf '%s\n' "    2. Manage access keys"
-            info_desc "       Show, add, or delete the VPN client keys for this server."
+            if [[ "$context" == selected ]]; then
+                echo
+                printf '%b  Selected server menu:%b\n' "$blue" "$reset"
+                printf '%s\n' "    1. Manage VPN server"
+                info_desc "       Open server operations, ad and threat blocking, country blocking, or deletion."
+                printf '%s\n' "    2. Manage access keys"
+                info_desc "       Show, add, or delete the VPN client keys for this server."
+            fi
             ;;
         access_keys)
             printf '%b  Access keys:%b\n' "$blue" "$reset"

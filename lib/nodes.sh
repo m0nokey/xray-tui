@@ -314,7 +314,7 @@ vpn_servers() {
             if ! prompt_nav; then continue; fi
             case "$REPLY" in
                 1) rm -f "$state"; add_node || true; return ;;
-                i) show_info status; rm -f "$state"; continue ;;
+                i) show_info add-node; rm -f "$state"; continue ;;
                 b) rm -f "$state"; return ;;
                 m) rm -f "$state"; MAIN_MENU_REQUESTED=1; return ;;
                 x) rm -f "$state"; exit_tui ;;
