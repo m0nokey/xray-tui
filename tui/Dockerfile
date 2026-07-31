@@ -32,4 +32,4 @@ RUN addgroup -S user \
 WORKDIR /workspace
 ENV HOME=/tmp
 USER user
-ENTRYPOINT ["/bin/bash", "/workspace/xray-tui.sh"]
+ENTRYPOINT ["/bin/bash", "/workspace/tui/entrypoint.sh"]

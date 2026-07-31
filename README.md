@@ -692,10 +692,10 @@ separate key database is created on the VPS.
 ## Repository Layout
 
 ```text
-xray-tui.sh       interactive console manager
+run.sh            local launcher and only supported entrypoint
+tui/entrypoint.sh internal controller entrypoint
 lib/              focused Bash runtime modules
-run.sh            local launcher
-tui/              local controller container
+tui/              local controller container files
 ansible/          VPS playbooks and roles
 scripts/          encrypted state and output helpers
 ```

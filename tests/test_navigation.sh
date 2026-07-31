@@ -12,7 +12,7 @@ run_tui() {
     if output="$(printf '%s' "$input" | timeout 10 env \
         HOME="$TEST_HOME" \
         XDG_STATE_HOME="$TEST_STATE_HOME" \
-        bash "$ROOT_DIR/xray-tui.sh" 2>&1)"; then
+        bash "$ROOT_DIR/tui/entrypoint.sh" 2>&1)"; then
         :
     else
         status=$?

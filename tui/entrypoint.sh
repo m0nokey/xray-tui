@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 COUNTRIES_FILE="$ROOT_DIR/data/countries.tsv"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 VAULT_FILE="$STATE_DIR/vault.json"
