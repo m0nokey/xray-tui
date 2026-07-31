@@ -163,18 +163,18 @@ After the domain screen, choose how VPN ports should be assigned:
 ```text
 Configure VPN ports
 
-1. Vision + REALITY — TCP 443
-   XHTTP + REALITY — random port
-2. Both transports — random ports (default)
-3. XHTTP + REALITY — TCP 443
-   Vision + REALITY — random port
-4. Enter both Xray VPN ports manually
+Each VPN key gets two connection links: vision and xhttp.
+If one link is blocked, use the other.
+random ports are generated automatically.
+
+1. vision: 443       xhttp: random
+2. vision: random    xhttp: random [default]
+3. vision: random    xhttp: 443
+4. vision: manual    xhttp: manual
 ```
 
-The default is option `2`, which preserves the original behavior. Options `1`
-and `3` use TCP port `443` for one transport and generate a separate port for
-the other. Option `4` lets you enter both ports yourself. The two manual ports
-must be different and must not overlap the generated SSH port.
+Press Enter to use the option marked `[default]`. Manual ports must be
+different and must not overlap the generated SSH port.
 
 Then choose an optional DNS protection profile:
 

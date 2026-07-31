@@ -248,17 +248,16 @@ add_node_port_mode_prompt() {
         clear_screen
         menu_heading "Add VPN server"
         printf '%s\n' "Configure Xray VPN ports."
-        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "[!] Not sure what to choose? Press Enter to use the default." "$COLOR_RESET"
-        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Each VPN key includes two alternative connection profiles." "$COLOR_RESET"
-        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "They use separate ports so you can switch if one is blocked." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Each VPN key gets two connection links: vision and xhttp." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "If one link is blocked, use the other." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "random ports are generated automatically." "$COLOR_RESET"
         [[ -n "$error" ]] && printf '%s\n' "$error"
         echo
-        menu_option 1 "Vision + REALITY — TCP 443"
-        printf '%s\n' "   XHTTP + REALITY — random port"
-        menu_option 2 "Both transports — random ports (default)"
-        menu_option 3 "XHTTP + REALITY — TCP 443"
-        printf '%s\n' "   Vision + REALITY — random port"
-        menu_option 4 "Enter both Xray VPN ports manually"
+        menu_option 1 "vision: 443       xhttp: random"
+        menu_option 2 "vision: random    xhttp: random [default]"
+        menu_option 3 "vision: random    xhttp: 443"
+        menu_option 4 "vision: manual    xhttp: manual"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "[!] Not sure what to choose? Press Enter to use the default." "$COLOR_RESET"
         echo
         menu_control b back
         menu_control m main
