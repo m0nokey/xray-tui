@@ -47,7 +47,7 @@ jobs:
 
       - name: Check Bash syntax
         run: |
-          bash -n tui/entrypoint.sh
+          bash -n controller/entrypoint.sh
           bash -n lib/*.sh
           bash -n run.sh
           bash -n tests/test_navigation.sh
@@ -56,7 +56,7 @@ jobs:
 
       - name: Run ShellCheck
         run: >-
-          shellcheck --severity=error tui/entrypoint.sh lib/*.sh run.sh
+          shellcheck --severity=error controller/entrypoint.sh lib/*.sh run.sh
           tests/test_navigation.sh tests/test_vault_recovery.sh
           tests/test_ansible_templates.sh
 
@@ -114,7 +114,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Build controller image
-        run: docker build --pull --tag xray-tui:ci --file tui/Dockerfile .
+        run: docker build --pull --tag xray-tui:ci --file controller/Dockerfile .
 
       - name: Build server Unbound image
         run: >-
@@ -144,7 +144,7 @@ jobs:
 
       - name: Validate Compose security settings
         run: |
-          docker compose -f tui/compose.yml config --format json > compose.json
+          docker compose -f controller/compose.yml config --format json > compose.json
           python3 - compose.json <<'PY'
           import json
           import sys

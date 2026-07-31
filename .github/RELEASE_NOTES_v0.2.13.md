@@ -1,6 +1,6 @@
 ## Project structure and CI maintenance
 
-- Moved the internal controller entrypoint to `tui/entrypoint.sh`.
+- Moved the internal controller entrypoint to `controller/entrypoint.sh`.
 - Kept `run.sh` as the only supported user-facing launcher.
 - Added `.dockerignore` to keep unrelated repository files out of the Docker build context.
 - Moved the Trivy configuration to `.github/ci/trivy.yaml`.

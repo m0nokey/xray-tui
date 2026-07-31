@@ -82,7 +82,7 @@ jobs:
 
       - name: Build runtime images for SBOM generation
         run: |
-          docker build --pull --tag xray-tui:release --file tui/Dockerfile .
+          docker build --pull --tag xray-tui:release --file controller/Dockerfile .
           docker build --pull --tag xray-tui-unbound:release \
             --file ansible/roles/xray/templates/unbound.Dockerfile.j2 .
 

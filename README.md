@@ -698,7 +698,7 @@ separate key database is created on the VPS.
 │   Start the project from the repository root with:
 │   bash run.sh
 │
-├── tui/
+├── controller/
 │   ├── Dockerfile
 │   │   Docker image for the local controller.
 │   ├── compose.yml

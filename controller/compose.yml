@@ -2,7 +2,7 @@ services:
   xray-tui:
     build:
       context: ..
-      dockerfile: tui/Dockerfile
+      dockerfile: controller/Dockerfile
       args:
         XRAY_TUI_UID: ${XRAY_TUI_UID:-1000}
     image: local/xray-tui:latest
@@ -11,7 +11,7 @@ services:
     working_dir: /workspace
     stdin_open: true
     tty: true
-    entrypoint: ["/bin/bash", "/workspace/tui/entrypoint.sh"]
+    entrypoint: ["/bin/bash", "/workspace/controller/entrypoint.sh"]
     environment:
       TZ: UTC
       TERM: ${TERM:-xterm-256color}

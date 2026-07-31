@@ -1,5 +1,5 @@
 # The controller source is mounted read-only at runtime.
 # Keep the Docker build context limited to the Dockerfile itself.
 **
-!tui/
-!tui/Dockerfile
+!controller/
+!controller/Dockerfile

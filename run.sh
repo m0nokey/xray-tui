@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_FILE="$ROOT_DIR/tui/compose.yml"
+COMPOSE_FILE="$ROOT_DIR/controller/compose.yml"
 IMAGE="local/xray-tui:latest"
 BASE_IMAGE="alpine:3.23"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
@@ -56,7 +56,7 @@ image_label() {
 build_if_needed() {
     local digest dockerfile_hash current_digest current_hash current_uid
     digest="$(resolve_digest)"
-    dockerfile_hash="$(file_sha256 "$ROOT_DIR/tui/Dockerfile")"
+    dockerfile_hash="$(file_sha256 "$ROOT_DIR/controller/Dockerfile")"
     current_digest="$(image_label xray.tui.base-image)"
     current_hash="$(image_label xray.tui.dockerfile-sha256)"
     current_uid="$(image_label xray.tui.runtime-uid)"
