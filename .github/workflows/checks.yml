@@ -47,7 +47,7 @@ jobs:
 
       - name: Check Bash syntax
         run: |
-          bash -n xray-tui.sh
+          bash -n tui/entrypoint.sh
           bash -n lib/*.sh
           bash -n run.sh
           bash -n tests/test_navigation.sh
@@ -56,7 +56,7 @@ jobs:
 
       - name: Run ShellCheck
         run: >-
-          shellcheck --severity=error xray-tui.sh lib/*.sh run.sh
+          shellcheck --severity=error tui/entrypoint.sh lib/*.sh run.sh
           tests/test_navigation.sh tests/test_vault_recovery.sh
           tests/test_ansible_templates.sh
 
@@ -81,7 +81,7 @@ jobs:
         run: ruff check scripts
 
       - name: Run YAML lint
-        run: yamllint -d relaxed ansible tests/ansible .github/workflows
+        run: yamllint -d relaxed ansible tests/ansible .github/ci .github/workflows
 
       - name: Check Ansible syntax
         run: |
@@ -230,7 +230,7 @@ jobs:
         with:
           scan-type: config
           scan-ref: .
-          trivy-config: trivy.yaml
+          trivy-config: .github/ci/trivy.yaml
           version: v0.72.0
           format: table
           exit-code: '1'
