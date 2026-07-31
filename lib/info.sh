@@ -260,6 +260,8 @@ show_info() {
             info_desc " - Enter the VPS IP address, SSH user, SSH port, and password on separate screens."
             info_desc " - Review the connection details, then let the manager check SSH access and VPS resources."
             info_desc " - Enter a Reality camouflage domain, or use github.com by default."
+            info_desc " - Each VPN key includes two alternative connection profiles: Vision + REALITY and XHTTP + REALITY."
+            info_desc "   Both profiles use separate ports. If one is blocked or unstable, use the other."
             info_desc " - Configure Xray VPN ports: both random by default, one fixed at 443, or manual."
             info_desc "   Option 1: Vision + REALITY on 443; XHTTP on a random port."
             info_desc "   Option 2: both transports on random ports (default)."

@@ -228,6 +228,14 @@ is running.
 After a successful deployment, the manager saves the VPN ports, keys, and
 connection data in the encrypted Vault.
 
+Each VPN access key includes two alternative Xray connection profiles:
+
+- VLESS Vision with REALITY;
+- VLESS XHTTP with REALITY in `packet-up` mode.
+
+Both profiles are active and use separate ports. If one profile is blocked or
+unstable on a network, you can connect using the other.
+
 New nodes use randomly generated high TCP ports by default. You can instead use
 TCP port `443` for VLESS TCP Vision and a generated high port for VLESS XHTTP, or
 enter both ports manually during setup.

@@ -249,6 +249,8 @@ add_node_port_mode_prompt() {
         menu_heading "Add VPN server"
         printf '%s\n' "Configure Xray VPN ports."
         printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "[!] Not sure what to choose? Press Enter to use the default." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "Each VPN key includes two alternative connection profiles." "$COLOR_RESET"
+        printf '%b%s%b\n' "$COLOR_MUTED_ITALIC" "They use separate ports so you can switch if one is blocked." "$COLOR_RESET"
         [[ -n "$error" ]] && printf '%s\n' "$error"
         echo
         menu_option 1 "Vision + REALITY — TCP 443"
