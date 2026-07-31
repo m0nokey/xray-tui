@@ -80,7 +80,9 @@ show_info() {
     case "$topic" in
         add-node)
             printf '%b  Add VPN server:%b\n' "$blue" "$reset"
-            info_desc "Choose 1. Add VPN server to start installing Xray VPN on a new VPS."
+            info_desc "Choose 1. Add VPN server to install Xray VPN on a new VPS."
+            info_desc "The installation creates two VPN connection links:"
+            info_desc "Vision + REALITY and XHTTP + REALITY."
             info_desc "Follow the steps shown in the installation pipeline."
             ;;
         status)
