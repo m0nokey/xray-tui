@@ -2,7 +2,8 @@ ARG XRAY_TUI_BASE_IMAGE=alpine:3.23
 FROM ${XRAY_TUI_BASE_IMAGE}
 
 ENV LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+    LC_ALL=C.UTF-8 \
+    TZ=UTC
 
 ARG XRAY_TUI_BASE_IMAGE
 ARG XRAY_TUI_DOCKERFILE_SHA256
@@ -19,7 +20,11 @@ RUN apk add --no-cache \
     openssh-client \
     py3-pynacl \
     python3 \
-    sshpass
+    sshpass \
+    tzdata
+
+RUN cp /usr/share/zoneinfo/UTC /etc/localtime \
+    && echo "UTC" > /etc/timezone
 
 ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
 
