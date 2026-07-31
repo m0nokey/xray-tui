@@ -692,12 +692,55 @@ separate key database is created on the VPS.
 ## Repository Layout
 
 ```text
-run.sh            local launcher and only supported entrypoint
-tui/entrypoint.sh internal controller entrypoint
-lib/              focused Bash runtime modules
-tui/              local controller container files
-ansible/          VPS playbooks and roles
-scripts/          encrypted state and output helpers
+.
+├── run.sh
+│   User-facing launcher and the only supported entrypoint.
+│   Start the project from the repository root with:
+│   bash run.sh
+│
+├── tui/
+│   ├── Dockerfile
+│   │   Docker image for the local controller.
+│   ├── compose.yml
+│   │   Docker Compose definition for the controller container.
+│   └── entrypoint.sh
+│       Internal controller entrypoint executed inside Docker.
+│
+├── lib/
+│   Focused Bash runtime modules for UI navigation, Vault handling,
+│   node management, deployment, DNS, security, access keys, and pipelines.
+│
+├── ansible/
+│   VPS playbooks and roles for Debian setup, SSH hardening, Docker,
+│   Xray deployment, updates, rollback, restart, and server removal.
+│
+├── scripts/
+│   Python helpers for encrypted state validation, node rendering,
+│   access-key rendering, and local output generation.
+│
+├── tests/
+│   Navigation, state, Vault recovery, Ansible template, and rendering tests.
+│
+├── data/
+│   Static project data used by the controller.
+│
+├── .github/
+│   ├── ci/
+│   │   CI-only configuration, including Trivy.
+│   └── workflows/
+│       GitHub Actions for checks, tests, security scanning, and releases.
+│
+├── docs/
+│   Additional project documentation, including the threat model.
+│
+├── README.md
+│   User documentation and technical overview.
+│
+├── SECURITY.md
+│   Security policy and vulnerability reporting instructions.
+│
+└── .dockerignore
+    Files excluded from the controller image build.
 ```
 
 ## License
