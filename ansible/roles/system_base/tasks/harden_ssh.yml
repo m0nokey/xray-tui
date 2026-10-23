@@ -116,6 +116,7 @@
   ansible.builtin.command:
     cmd: ssh -Q kex
   delegate_to: localhost
+  become: false
   register: system_base_harden_ssh_controller_kex_cmd
   changed_when: false
 
