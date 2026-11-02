@@ -231,10 +231,15 @@ connection data in the encrypted Vault.
 Each VPN access key includes two alternative Xray connection profiles:
 
 - VLESS Vision with REALITY;
-- VLESS XHTTP with REALITY in `packet-up` mode.
+- VLESS XHTTP with REALITY and server mode `auto`.
 
 Both profiles are active and use separate ports. If one profile is blocked or
 unstable on a network, you can connect using the other.
+
+The XHTTP server accepts `packet-up`, `stream-up`, and `stream-one`. New XHTTP
+links use `mode=auto`; you can select a specific mode in a compatible client.
+Existing `packet-up` links still work. Existing servers need the updated Xray
+configuration deployed before they accept the additional modes.
 
 New nodes use randomly generated high TCP ports by default. You can instead use
 TCP port `443` for VLESS TCP Vision and a generated high port for VLESS XHTTP, or
@@ -289,7 +294,7 @@ node continues to operate independently.
                                                         |  | Xray              |  |
   +-------------------------+       VPN connection      |  | Vision + REALITY  |  |
   | VPN client devices      | ------------------------> |  | XHTTP + REALITY   |  |
-  | phone / laptop / tablet |                           |  | packet-up         |  |
+  | phone / laptop / tablet |                           |  | auto              |  |
   +-------------------------+                           |  +---------+---------+  |
                                                         |            |            |
                                                         |            | DNS        |
@@ -635,7 +640,7 @@ retried.
 The project uses official repositories and upstream project sources instead of
 arbitrary binaries or unverified installation scripts.
 
-- The local controller runs from the official `alpine:3.23` image.
+- The local controller runs from the official `alpine:3.24` image.
 - Ansible, OpenSSH, Python, and supporting tools are installed from Alpine
   repositories.
 - VPS system packages are installed from the official Debian and Debian
@@ -679,7 +684,7 @@ The VPS runs:
 
 ```text
 - VLESS TCP with Vision and REALITY
-- VLESS XHTTP with REALITY in packet-up mode
+- VLESS XHTTP with REALITY in server auto mode
 ```
 
 When protection is enabled, Xray sends DNS requests through the private

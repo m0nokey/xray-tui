@@ -10,6 +10,11 @@ on:
     paths-ignore:
       - 'README.md'
   workflow_call:
+    inputs:
+      ref:
+        description: Git ref to validate before release
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -30,6 +35,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 2
 
       - name: Set up Python
@@ -112,6 +118,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Build controller image
         run: docker build --pull --tag xray-tui:ci --file controller/Dockerfile .
@@ -123,13 +131,19 @@ jobs:
 
       - name: Smoke-test controller image
         run: |
-          docker run --rm --entrypoint /bin/bash xray-tui:ci -lc '
+          docker run --rm --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
+            --mount "type=bind,source=$PWD,target=/workspace,readonly" \
+            --entrypoint /bin/bash xray-tui:ci -lc '
             set -euo pipefail
             test "$(id -u)" != 0
             command -v ansible-vault
             command -v ssh-keygen
             python3 -c "import nacl"
             ansible-galaxy collection list | grep -F community.docker
+            python3 -m unittest discover --start-directory tests \
+              --pattern test_ansible_privileges.py --verbose
           '
 
       - name: Smoke-test server Unbound image

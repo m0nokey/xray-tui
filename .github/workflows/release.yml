@@ -18,6 +18,10 @@ jobs:
   checks:
     name: Run CI before release
     uses: ./.github/workflows/checks.yml
+    with:
+      ref: >-
+        ${{ github.event_name == 'workflow_dispatch'
+            && inputs.tag || github.ref_name }}
     permissions:
       contents: read
 

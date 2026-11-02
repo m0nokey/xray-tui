@@ -1,7 +1,8 @@
 ---
 - name: Bootstrap Xray VPN node
   hosts: xray_nodes
-  become: true
+  # Root can install sudo directly; other SSH users must already have sudo.
+  become: "{{ (ansible_user | default('root')) != 'root' }}"
   gather_facts: false
   pre_tasks:
     - name: Wait for initial SSH access

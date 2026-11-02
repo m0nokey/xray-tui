@@ -12,12 +12,26 @@ process, memory, CPU, and temporary-filesystem limits. REALITY keys are
 generated locally with PyNaCl, using the same method as the original
 `xray-tui` implementation.
 
+The controller runs as an unprivileged local user and does not require sudo.
+Its SSH algorithm query explicitly disables privilege escalation, even though
+the surrounding hardening play elevates privileges on the VPS. Delegated
+modules use the controller's local temporary directory rather than its home.
+Bootstrap accepts either root SSH access (sudo is installed directly) or a
+non-root SSH user with working sudo access. It then creates the `deploy` user
+with passwordless sudo for subsequent VPS administration.
+
 An access key is a management profile, not an operating-system user and not a
 separate Xray server account. Each profile contains two independent Xray
 clients:
 
 - `vision_uuid` for VLESS TCP Vision;
-- `xhttp_uuid` for VLESS XHTTP in `packet-up` mode.
+- `xhttp_uuid` for VLESS XHTTP with server mode `auto`.
+
+The XHTTP server accepts `packet-up`, `stream-up`, and `stream-one`. Exported
+XHTTP links use `mode=auto`; users can select a specific mode in a compatible
+client without changing the server configuration. Existing `packet-up` links
+remain compatible. Existing servers need their Xray configuration redeployed
+before they accept the additional modes.
 
 Both entries carry the same `key_id` in Xray's `email` field. That field pairs
 the two credentials so a revoke operation removes exactly one profile from

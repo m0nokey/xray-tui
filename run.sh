@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/controller/compose.yml"
 IMAGE="local/xray-tui:latest"
-BASE_IMAGE="alpine:3.23"
+BASE_IMAGE="alpine:3.24"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 
 # Match the container process to the host user so the 0700 Vault directory

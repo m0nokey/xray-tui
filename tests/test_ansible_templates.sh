@@ -26,7 +26,7 @@ unbound_dockerfile = (render_dir / "unbound.Dockerfile").read_text(encoding="utf
 assert len(config["inbounds"]) == 2
 assert config["inbounds"][0]["streamSettings"]["network"] == "tcp"
 assert config["inbounds"][1]["streamSettings"]["network"] == "xhttp"
-assert config["inbounds"][1]["streamSettings"]["xhttpSettings"]["mode"] == "packet-up"
+assert config["inbounds"][1]["streamSettings"]["xhttpSettings"]["mode"] == "auto"
 assert config["dns"]["servers"][0]["port"] == 5353
 assert any(rule.get("outboundTag") == "block" for rule in config["routing"]["rules"])
 

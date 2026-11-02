@@ -222,7 +222,7 @@ def endpoint_label(node, port):
     if port == xray.get("vision_port"):
         return "VLESS TCP Vision + REALITY"
     if port == xray.get("xhttp_port"):
-        return "VLESS XHTTP + REALITY packet-up"
+        return "VLESS XHTTP + REALITY"
     return "VPN endpoint"
 
 
@@ -291,8 +291,8 @@ def main():
             for name, node in nodes.items():
                 created = node.get("created_at", "N/A")
                 try:
-                    created = datetime.fromisoformat(created.replace("Z", "+00:00")).strftime("%Y-%m-%d")
-                except (AttributeError, ValueError):
+                    created = datetime.fromisoformat(created).strftime("%Y-%m-%d")
+                except (TypeError, ValueError):
                     pass
                 provider = node.get("provider", "N/A")
                 rows.append((node.get("host", "N/A"), node.get("country", "N/A"), created,

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from nacl.public import PrivateKey
@@ -263,7 +263,7 @@ elif opts.action == "add-node":
         "host": host,
         "country": country,
         "provider": provider,
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "management_user": "deploy",
         "management_private_key": private,
         "management_authorized_key": public,
