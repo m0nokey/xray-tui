@@ -5,10 +5,11 @@ services:
       dockerfile: controller/Dockerfile
       args:
         XRAY_TUI_UID: ${XRAY_TUI_UID:-1000}
-    image: local/xray-tui:latest
+    image: ${XRAY_TUI_IMAGE:-local/xray-tui:latest}
     pull_policy: never
     container_name: xray-tui
     working_dir: /workspace
+    user: "${XRAY_TUI_UID:-1000}:${XRAY_TUI_UID:-1000}"
     stdin_open: true
     tty: true
     entrypoint: ["/bin/bash", "/workspace/controller/entrypoint.sh"]
@@ -30,6 +31,10 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777
     volumes:
+      - type: bind
+        source: ${XRAY_TUI_PASSWD_FILE:-/etc/passwd}
+        target: /etc/passwd
+        read_only: true
       - type: bind
         source: ..
         target: /workspace
