@@ -64,6 +64,8 @@ jobs:
           git archive --format=tar "$RELEASE_TAG" \
             | tar -xf - -C "$staging/$root"
 
+          printf '%s\n' "$RELEASE_TAG" > "$staging/$root/VERSION"
+
           (
             cd "$staging/$root"
             find . -type f ! -name SHA256SUMS -print0 \
@@ -77,6 +79,9 @@ jobs:
           printf 'RELEASE_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
           printf 'RELEASE_LATEST_ARCHIVE=%s\n' \
             "$latest_archive" >> "$GITHUB_ENV"
+          printf 'RELEASE_TAG=%s\n' "$RELEASE_TAG" >> "$GITHUB_ENV"
+          printf 'RELEASE_CONTROLLER_IMAGE=%s\n' \
+            "xray-tui-${RELEASE_TAG}-controller-image.tar.gz" >> "$GITHUB_ENV"
           printf 'RELEASE_CONTROLLER_SBOM=%s\n' \
             "xray-tui-${RELEASE_TAG}-controller.sbom.spdx.json" >> "$GITHUB_ENV"
           printf 'RELEASE_UNBOUND_SBOM=%s\n' \
@@ -89,6 +94,13 @@ jobs:
           docker build --pull --tag xray-tui:release --file controller/Dockerfile .
           docker build --pull --tag xray-tui-unbound:release \
             --file ansible/roles/xray/templates/unbound.Dockerfile.j2 .
+
+      - name: Export controller image
+        run: |
+          set -euo pipefail
+          docker tag xray-tui:release "local/xray-tui-release:${RELEASE_TAG}"
+          docker save "local/xray-tui-release:${RELEASE_TAG}" \
+            | gzip -9 > "$RELEASE_CONTROLLER_IMAGE"
 
       - name: Generate controller image SBOM
         # Pinned release commit; current release is v0.24.0.
@@ -128,6 +140,7 @@ jobs:
           sha256sum \
             "$RELEASE_ARCHIVE" \
             "$RELEASE_LATEST_ARCHIVE" \
+            "$RELEASE_CONTROLLER_IMAGE" \
             "$RELEASE_CONTROLLER_SBOM" \
             "$RELEASE_UNBOUND_SBOM" \
             "$RELEASE_XRAY_SBOM" > SHA256SUMS
@@ -139,6 +152,7 @@ jobs:
           subject-path: |
             ${{ github.workspace }}/${{ env.RELEASE_ARCHIVE }}
             ${{ github.workspace }}/${{ env.RELEASE_LATEST_ARCHIVE }}
+            ${{ github.workspace }}/${{ env.RELEASE_CONTROLLER_IMAGE }}
             ${{ github.workspace }}/${{ env.RELEASE_CONTROLLER_SBOM }}
             ${{ github.workspace }}/${{ env.RELEASE_UNBOUND_SBOM }}
             ${{ github.workspace }}/${{ env.RELEASE_XRAY_SBOM }}
@@ -177,6 +191,7 @@ jobs:
           for asset in \
             "$RELEASE_ARCHIVE" \
             "$RELEASE_LATEST_ARCHIVE" \
+            "$RELEASE_CONTROLLER_IMAGE" \
             "$RELEASE_CONTROLLER_SBOM" \
             "$RELEASE_UNBOUND_SBOM" \
             "$RELEASE_XRAY_SBOM" \

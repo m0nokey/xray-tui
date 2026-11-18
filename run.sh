@@ -5,6 +5,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/controller/compose.yml"
 IMAGE="local/xray-tui:latest"
 BASE_IMAGE="alpine:3.24"
+RELEASE_REPO="m0nokey/xray-tui"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/xray"
 
 # Match the container process to the host user so the 0700 Vault directory
@@ -53,8 +54,70 @@ image_label() {
     docker image inspect "$IMAGE" --format "{{ index .Config.Labels \"$1\" }}" 2>/dev/null || true
 }
 
+# Use the prebuilt controller image attached to the GitHub release that
+# matches ./VERSION. VERSION exists only in release archives, so a git
+# checkout (no VERSION) keeps building the image locally.
+use_release_image() {
+    local tag asset base tmp expected actual rimage
+    [[ -f "$ROOT_DIR/VERSION" ]] || return 1
+    tag="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+
+    if [[ "$(image_label xray.tui.release)" == "$tag" \
+        && "$(image_label xray.tui.runtime-uid)" == "$XRAY_TUI_UID" ]]; then
+        return 0
+    fi
+
+    asset="xray-tui-${tag}-controller-image.tar.gz"
+    base="https://github.com/${RELEASE_REPO}/releases/download/${tag}"
+    rimage="local/xray-tui-release:${tag}"
+    tmp="$(mktemp -d)"
+
+    printf 'Downloading controller image %s...\n' "$tag" >&2
+    if ! curl -fSL --proto '=https' --connect-timeout 15 --retry 3 \
+            -o "$tmp/$asset" "$base/$asset" \
+        || ! curl -fsSL --proto '=https' --connect-timeout 15 --retry 3 \
+            -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"; then
+        rm -rf "$tmp"
+        printf 'Warning: could not download release image; building locally.\n' >&2
+        return 1
+    fi
+
+    expected="$(awk -v f="$asset" '$2 == f {print $1; exit}' "$tmp/SHA256SUMS")"
+    actual="$(file_sha256 "$tmp/$asset")"
+    if [[ -z "$expected" || "$expected" != "$actual" ]]; then
+        rm -rf "$tmp"
+        printf 'Warning: release image checksum mismatch; building locally.\n' >&2
+        return 1
+    fi
+
+    if ! gzip -dc "$tmp/$asset" | docker load >/dev/null; then
+        rm -rf "$tmp"
+        printf 'Warning: docker load failed; building locally.\n' >&2
+        return 1
+    fi
+    rm -rf "$tmp"
+
+    # Re-create the runtime user with the host UID (offline, takes ~1s).
+    if ! docker build --quiet --tag "$IMAGE" - >/dev/null <<DOCKERFILE_EOF
+FROM ${rimage}
+USER root
+RUN deluser user 2>/dev/null || true; delgroup user 2>/dev/null || true; \\
+    addgroup -S user && adduser -S -D -H -u "${XRAY_TUI_UID}" -G user -s /sbin/nologin user
+USER user
+LABEL xray.tui.release="${tag}" xray.tui.runtime-uid="${XRAY_TUI_UID}"
+DOCKERFILE_EOF
+    then
+        printf 'Warning: could not prepare release image; building locally.\n' >&2
+        return 1
+    fi
+}
+
 build_if_needed() {
     local digest dockerfile_hash current_digest current_hash current_uid
+    if use_release_image; then
+        return 0
+    fi
     digest="$(resolve_digest)"
     dockerfile_hash="$(file_sha256 "$ROOT_DIR/controller/Dockerfile")"
     current_digest="$(image_label xray.tui.base-image)"
