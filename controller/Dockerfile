@@ -28,7 +28,7 @@ RUN cp /usr/share/zoneinfo/UTC /etc/localtime \
 
 ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
 
-RUN ansible-galaxy collection install community.docker \
+RUN ansible-galaxy collection install community.docker --no-cache \
     --collections-path /usr/share/ansible/collections
 
 RUN addgroup -S user \
